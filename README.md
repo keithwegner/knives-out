@@ -131,6 +131,13 @@ knives-out report results.json --out report.md
 
 ## Development
 
+### Dev Container
+
+This repo includes a VS Code devcontainer for a ready-to-use Python 3.12 environment.
+
+Open the folder in VS Code and run `Dev Containers: Reopen in Container`.
+On first create, the container installs the project with dev dependencies via `pip install -e ".[dev]"`.
+
 Run tests:
 
 ```bash
