@@ -1,0 +1,85 @@
+openapi: 3.0.3
+info:
+  title: Petstore Example API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8000
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      summary: List pets
+      parameters:
+        - name: limit
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [available, pending, sold]
+      responses:
+        '200':
+          description: Pet list
+    post:
+      operationId: createPet
+      summary: Create a pet
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: X-Tenant
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PetCreate'
+      responses:
+        '201':
+          description: Pet created
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      summary: Get a pet by id
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: A pet
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    PetCreate:
+      type: object
+      required: [name, species]
+      properties:
+        name:
+          type: string
+        species:
+          type: string
+          enum: [dog, cat, bird]
+        age:
+          type: integer
+    Pet:
+      allOf:
+        - $ref: '#/components/schemas/PetCreate'
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: integer

@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from knives_out.generator import generate_attack_suite
+from knives_out.openapi_loader import load_operations
+from knives_out.reporting import load_attack_results, render_markdown_report
+from knives_out.runner import execute_attack_suite, load_attack_suite
+
+app = typer.Typer(no_args_is_help=True, help="Adversarial API testing from OpenAPI specs.")
+console = Console()
+
+
+def _parse_key_value(items: list[str] | None, *, separator: str) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for item in items or []:
+        if separator not in item:
+            raise typer.BadParameter(f"Expected '{separator}' in value: {item!r}")
+        key, value = item.split(separator, 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise typer.BadParameter(f"Missing key in value: {item!r}")
+        parsed[key] = value
+    return parsed
+
+
+@app.command()
+def inspect(spec: Path) -> None:
+    """Show the operations discovered in an OpenAPI spec."""
+    operations = load_operations(spec)
+
+    table = Table(title=f"knives-out inspect: {spec}")
+    table.add_column("Operation ID")
+    table.add_column("Method")
+    table.add_column("Path")
+    table.add_column("Params")
+    table.add_column("Body")
+    table.add_column("Auth")
+
+    for operation in operations:
+        table.add_row(
+            operation.operation_id,
+            operation.method,
+            operation.path,
+            str(len(operation.parameters)),
+            "yes" if operation.request_body_schema else "no",
+            "yes" if operation.auth_required else "no",
+        )
+
+    console.print(table)
+    console.print(f"\nFound {len(operations)} operations.")
+
+
+@app.command()
+def generate(
+    spec: Path,
+    out: Path = typer.Option(Path("attacks.json"), help="Where to write the generated attack suite."),
+) -> None:
+    """Generate a replayable attack suite from an OpenAPI spec."""
+    operations = load_operations(spec)
+    suite = generate_attack_suite(operations, source=str(spec))
+    out.write_text(suite.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
+    console.print(f"Wrote {len(suite.attacks)} attacks to [bold]{out}[/bold].")
+
+
+@app.command()
+def run(
+    attacks: Path,
+    base_url: str = typer.Option(..., help="Base URL of the target API."),
+    out: Path = typer.Option(Path("results.json"), help="Where to write execution results."),
+    header: list[str] | None = typer.Option(None, help="Default header in the form 'Name: value'."),
+    query: list[str] | None = typer.Option(None, help="Default query value in the form 'name=value'."),
+    timeout: float = typer.Option(10.0, help="HTTP timeout in seconds."),
+) -> None:
+    """Run a saved attack suite against a live API."""
+    suite = load_attack_suite(attacks)
+    default_headers = _parse_key_value(header, separator=":")
+    default_query = _parse_key_value(query, separator="=")
+    results = execute_attack_suite(
+        suite,
+        base_url=base_url,
+        default_headers=default_headers,
+        default_query=default_query,
+        timeout_seconds=timeout,
+    )
+    out.write_text(results.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
+
+    flagged = sum(1 for result in results.results if result.flagged)
+    console.print(
+        f"Executed {len(results.results)} attacks against [bold]{base_url}[/bold]. "
+        f"Flagged {flagged} result(s)."
+    )
+    console.print(f"Wrote results to [bold]{out}[/bold].")
+
+
+@app.command()
+def report(
+    results: Path,
+    out: Path | None = typer.Option(None, help="Optional Markdown output file."),
+) -> None:
+    """Render a Markdown report from a results file."""
+    attack_results = load_attack_results(results)
+    markdown = render_markdown_report(attack_results)
+
+    if out is None:
+        console.print(markdown)
+        return
+
+    out.write_text(markdown, encoding="utf-8")
+    console.print(f"Wrote report to [bold]{out}[/bold].")
+
+
+def main() -> None:
+    app()
+
+
+if __name__ == "__main__":
+    main()
