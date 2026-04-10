@@ -13,6 +13,11 @@ class ParameterSpec(BaseModel):
     schema_def: dict[str, Any] = Field(default_factory=dict)
 
 
+class ResponseSpec(BaseModel):
+    content_type: str | None = None
+    schema_def: dict[str, Any] | None = None
+
+
 class OperationSpec(BaseModel):
     operation_id: str
     method: str
@@ -25,6 +30,7 @@ class OperationSpec(BaseModel):
     auth_required: bool = False
     auth_header_names: list[str] = Field(default_factory=list)
     auth_query_names: list[str] = Field(default_factory=list)
+    response_schemas: dict[str, ResponseSpec] = Field(default_factory=dict)
 
 
 class AttackCase(BaseModel):
@@ -45,6 +51,7 @@ class AttackCase(BaseModel):
     omit_header_names: list[str] = Field(default_factory=list)
     omit_query_names: list[str] = Field(default_factory=list)
     expected_outcomes: list[str] = Field(default_factory=lambda: ["4xx"])
+    response_schemas: dict[str, ResponseSpec] = Field(default_factory=dict)
 
 
 class AttackSuite(BaseModel):
@@ -66,6 +73,9 @@ class AttackResult(BaseModel):
     flagged: bool = False
     issue: str | None = None
     response_excerpt: str | None = None
+    response_schema_status: str | None = None
+    response_schema_valid: bool | None = None
+    response_schema_error: str | None = None
 
 
 class AttackResults(BaseModel):

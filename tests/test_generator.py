@@ -18,6 +18,30 @@ def test_load_operations_extracts_core_operation_shapes() -> None:
     assert create_pet.request_body_required is True
     assert create_pet.auth_required is True
     assert create_pet.auth_header_names == ["Authorization"]
+    assert create_pet.response_schemas["201"].content_type == "application/json"
+    assert create_pet.response_schemas["201"].schema_def == {
+        "allOf": [
+            {
+                "type": "object",
+                "required": ["name", "species"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "species": {
+                        "type": "string",
+                        "enum": ["dog", "cat", "bird"],
+                    },
+                    "age": {"type": "integer"},
+                },
+            },
+            {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id": {"type": "integer"},
+                },
+            },
+        ]
+    }
 
 
 def test_generate_attack_suite_contains_expected_attack_types() -> None:
@@ -31,6 +55,13 @@ def test_generate_attack_suite_contains_expected_attack_types() -> None:
     assert "malformed_json_body" in create_pet_kinds
     assert "missing_auth" in create_pet_kinds
     assert "missing_required_param" in create_pet_kinds
+
+    create_pet_attacks = [attack for attack in suite.attacks if attack.operation_id == "createPet"]
+    assert create_pet_attacks
+    assert all(
+        attack.response_schemas["201"].content_type == "application/json"
+        for attack in create_pet_attacks
+    )
 
 
 def test_sample_value_preserves_nested_required_fields() -> None:

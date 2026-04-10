@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from knives_out.models import OperationSpec, ParameterSpec
+from knives_out.models import OperationSpec, ParameterSpec, ResponseSpec
 
 HTTP_METHODS = ["get", "post", "put", "patch", "delete", "head", "options"]
 PARAMETER_LOCATION_ORDER = {"path": 0, "query": 1, "header": 2, "cookie": 3}
@@ -82,10 +82,25 @@ def _extract_request_body(
     if not isinstance(content, dict) or not content:
         return bool(resolved.get("required", False)), None, None
 
-    preferred_type = "application/json" if "application/json" in content else next(iter(content))
+    preferred_type, schema = _extract_content_schema(content, root)
+    return bool(resolved.get("required", False)), schema, preferred_type
+
+
+def _extract_content_schema(
+    content: dict[str, Any],
+    root: dict[str, Any],
+) -> tuple[str | None, dict[str, Any] | None]:
+    if "application/json" in content:
+        preferred_type = "application/json"
+    else:
+        preferred_type = next(iter(content), None)
+
+    if preferred_type is None:
+        return None, None
+
     media_type = content.get(preferred_type, {})
     schema = resolve_refs(media_type.get("schema"), root) if media_type.get("schema") else None
-    return bool(resolved.get("required", False)), schema, preferred_type
+    return preferred_type, schema
 
 
 def _extract_security(
@@ -123,6 +138,31 @@ def _extract_security(
     return True, sorted(header_names), sorted(query_names)
 
 
+def _extract_response_schemas(
+    operation: dict[str, Any],
+    root: dict[str, Any],
+) -> dict[str, ResponseSpec]:
+    responses = operation.get("responses", {})
+    if not isinstance(responses, dict):
+        return {}
+
+    extracted: dict[str, ResponseSpec] = {}
+    for status_code, response in responses.items():
+        resolved = resolve_refs(response, root)
+        content = resolved.get("content", {})
+        if not isinstance(content, dict) or not content:
+            extracted[str(status_code)] = ResponseSpec()
+            continue
+
+        content_type, schema = _extract_content_schema(content, root)
+        extracted[str(status_code)] = ResponseSpec(
+            content_type=content_type,
+            schema_def=schema,
+        )
+
+    return extracted
+
+
 def load_operations(path: str | Path) -> list[OperationSpec]:
     document = load_openapi_document(path)
     operations: list[OperationSpec] = []
@@ -158,6 +198,7 @@ def load_operations(path: str | Path) -> list[OperationSpec]:
                 operation,
                 document,
             )
+            response_schemas = _extract_response_schemas(operation, document)
 
             operation_id = operation.get("operationId")
             if not operation_id:
@@ -179,6 +220,7 @@ def load_operations(path: str | Path) -> list[OperationSpec]:
                     auth_required=auth_required,
                     auth_header_names=auth_header_names,
                     auth_query_names=auth_query_names,
+                    response_schemas=response_schemas,
                 )
             )
 
