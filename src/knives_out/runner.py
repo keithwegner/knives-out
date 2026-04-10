@@ -3,13 +3,24 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
+from knives_out.auth_plugins import (
+    LoadedAuthPlugin,
+    PluginRuntimeError,
+    PreparedRequest,
+    RequestExecution,
+    RuntimeContext,
+    RuntimePlugin,
+    WorkflowHook,
+    extract_json_pointer,
+    make_auth_plugin,
+)
 from knives_out.models import (
     AttackCase,
     AttackResult,
@@ -35,45 +46,6 @@ _PLACEHOLDER_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 _EXACT_PLACEHOLDER_RE = re.compile(r"^\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}$")
 
 
-@dataclass
-class _ExecutedRequest:
-    url: str
-    headers: dict[str, str]
-    query: dict[str, Any]
-    response: httpx.Response | None
-    error: str | None
-    duration_ms: float
-    resolution_error: bool = False
-
-
-@dataclass
-class WorkflowContext:
-    client: httpx.Client
-    extracted_values: dict[str, Any] = field(default_factory=dict)
-
-
-class WorkflowHook:
-    def before_workflow(self, workflow: WorkflowAttackCase, context: WorkflowContext) -> None:
-        return None
-
-    def before_step(
-        self,
-        workflow: WorkflowAttackCase,
-        step: WorkflowStep | AttackCase,
-        context: WorkflowContext,
-    ) -> None:
-        return None
-
-    def after_step(
-        self,
-        workflow: WorkflowAttackCase,
-        step: WorkflowStep | AttackCase,
-        context: WorkflowContext,
-        execution: _ExecutedRequest,
-    ) -> None:
-        return None
-
-
 class WorkflowResolutionError(ValueError):
     pass
 
@@ -81,6 +53,55 @@ class WorkflowResolutionError(ValueError):
 def load_attack_suite(path: str | Path) -> AttackSuite:
     raw = Path(path).read_text(encoding="utf-8")
     return AttackSuite.model_validate_json(raw)
+
+
+def _prepared_request_from_attack(attack: AttackCase, *, phase: str = "request") -> PreparedRequest:
+    return PreparedRequest(
+        phase=phase,
+        attack_id=attack.id,
+        name=attack.name,
+        kind=attack.kind,
+        operation_id=attack.operation_id,
+        method=attack.method,
+        path=attack.path,
+        description=attack.description,
+        path_params=deepcopy(attack.path_params),
+        query=deepcopy(attack.query),
+        headers=deepcopy(attack.headers),
+        body_json=deepcopy(attack.body_json),
+        raw_body=attack.raw_body,
+        content_type=attack.content_type,
+        omit_body=attack.omit_body,
+        omit_header_names=list(attack.omit_header_names),
+        omit_query_names=list(attack.omit_query_names),
+    )
+
+
+def _prepared_request_from_step(
+    workflow: WorkflowAttackCase,
+    step: WorkflowStep,
+    *,
+    step_index: int,
+) -> PreparedRequest:
+    return PreparedRequest(
+        phase="workflow_setup",
+        attack_id=f"{workflow.id}-step-{step_index:02d}",
+        name=step.name,
+        kind="workflow_setup",
+        operation_id=step.operation_id,
+        method=step.method,
+        path=step.path,
+        description=step.name,
+        path_params=deepcopy(step.path_params),
+        query=deepcopy(step.query),
+        headers=deepcopy(step.headers),
+        body_json=deepcopy(step.body_json),
+        raw_body=step.raw_body,
+        content_type=step.content_type,
+        omit_body=step.omit_body,
+        omit_header_names=list(step.omit_header_names),
+        omit_query_names=list(step.omit_query_names),
+    )
 
 
 def _render_path(path_template: str, path_params: dict[str, Any]) -> str:
@@ -127,17 +148,17 @@ def _excerpt(text: str, limit: int = 300) -> str:
 
 
 def _request_body_artifact(
-    attack: AttackCase | WorkflowStep,
+    request: PreparedRequest,
     headers: dict[str, str],
     request_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if attack.omit_body:
+    if request.omit_body:
         return {"present": False}
     if request_kwargs and "content" in request_kwargs:
         return {
             "present": True,
             "kind": "raw",
-            "content_type": headers.get("Content-Type") or attack.content_type,
+            "content_type": headers.get("Content-Type") or request.content_type,
             "excerpt": _excerpt(str(request_kwargs["content"])),
         }
     if request_kwargs and "json" in request_kwargs:
@@ -148,15 +169,15 @@ def _request_body_artifact(
             "content_type": headers.get("Content-Type") or "application/json",
             "excerpt": _excerpt(serialized),
         }
-    if attack.raw_body is not None:
+    if request.raw_body is not None:
         return {
             "present": True,
             "kind": "raw",
-            "content_type": headers.get("Content-Type") or attack.content_type,
-            "excerpt": _excerpt(attack.raw_body),
+            "content_type": headers.get("Content-Type") or request.content_type,
+            "excerpt": _excerpt(request.raw_body),
         }
-    if attack.body_json is not None:
-        serialized = json.dumps(attack.body_json, sort_keys=True)
+    if request.body_json is not None:
+        serialized = json.dumps(request.body_json, sort_keys=True)
         return {
             "present": True,
             "kind": "json",
@@ -170,7 +191,7 @@ def _write_request_artifact(
     artifact_root: Path,
     *,
     filename: str,
-    request: AttackCase | WorkflowStep,
+    request: PreparedRequest,
     metadata: dict[str, Any],
     url: str,
     headers: dict[str, str],
@@ -449,33 +470,8 @@ def _status_matches_expected(status_code: int | None, expected_outcomes: list[st
     return False
 
 
-def _extract_json_pointer(value: Any, pointer: str) -> Any:
-    if pointer == "":
-        return value
-    if not pointer.startswith("/"):
-        raise ValueError(f"Invalid JSON pointer {pointer!r}.")
-
-    current = value
-    for token in pointer.split("/")[1:]:
-        token = token.replace("~1", "/").replace("~0", "~")
-        if isinstance(current, list):
-            if not token.isdigit():
-                raise ValueError(f"Expected array index in JSON pointer {pointer!r}.")
-            index = int(token)
-            if index >= len(current):
-                raise ValueError(f"JSON pointer {pointer!r} did not match the response body.")
-            current = current[index]
-        elif isinstance(current, dict):
-            if token not in current:
-                raise ValueError(f"JSON pointer {pointer!r} did not match the response body.")
-            current = current[token]
-        else:
-            raise ValueError(f"JSON pointer {pointer!r} did not match the response body.")
-    return current
-
-
 def _resolved_headers(
-    request: AttackCase | WorkflowStep,
+    request: PreparedRequest,
     *,
     default_headers: dict[str, str],
     extracted_values: dict[str, Any],
@@ -489,7 +485,7 @@ def _resolved_headers(
 
 
 def _resolved_query(
-    request: AttackCase | WorkflowStep,
+    request: PreparedRequest,
     *,
     default_query: dict[str, Any],
     extracted_values: dict[str, Any],
@@ -502,7 +498,7 @@ def _resolved_query(
 
 
 def _resolve_request_path(
-    request: AttackCase | WorkflowStep,
+    request: PreparedRequest,
     *,
     base_url: str,
     extracted_values: dict[str, Any],
@@ -512,54 +508,123 @@ def _resolve_request_path(
     return base_url.rstrip("/") + _render_path(resolved_path_template, resolved_path_params)
 
 
+def _invoke_auth_plugin_hook(
+    loaded_plugin: LoadedAuthPlugin,
+    hook_name: str,
+    *args: Any,
+) -> None:
+    hook = getattr(loaded_plugin.plugin, hook_name, None)
+    if not callable(hook):
+        return
+    try:
+        hook(*args)
+    except PluginRuntimeError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise PluginRuntimeError(
+            f"Auth plugin '{loaded_plugin.name}' failed during '{hook_name}': {exc}"
+        ) from exc
+
+
+def _invoke_auth_plugins(
+    loaded_plugins: list[LoadedAuthPlugin],
+    hook_name: str,
+    *args: Any,
+) -> None:
+    for loaded_plugin in loaded_plugins:
+        _invoke_auth_plugin_hook(loaded_plugin, hook_name, *args)
+
+
+def _coerce_loaded_auth_plugin(candidate: object, *, default_name: str) -> LoadedAuthPlugin:
+    if isinstance(candidate, LoadedAuthPlugin):
+        return candidate
+    if isinstance(candidate, RuntimePlugin):
+        plugin_name = getattr(candidate, "name", default_name)
+        return make_auth_plugin(str(plugin_name), candidate)
+    if isinstance(candidate, type) and issubclass(candidate, RuntimePlugin):
+        plugin_name = getattr(candidate, "name", default_name)
+        return make_auth_plugin(str(plugin_name), candidate())
+    raise TypeError(
+        "Auth plugins must be LoadedAuthPlugin instances, RuntimePlugin instances, "
+        "or RuntimePlugin subclasses."
+    )
+
+
+def _loaded_auth_plugins(
+    *,
+    auth_plugins: list[LoadedAuthPlugin | RuntimePlugin | type[RuntimePlugin]] | None,
+    workflow_hooks: list[WorkflowHook] | None,
+) -> list[LoadedAuthPlugin]:
+    loaded: list[LoadedAuthPlugin] = []
+    for index, plugin in enumerate(auth_plugins or [], start=1):
+        loaded.append(_coerce_loaded_auth_plugin(plugin, default_name=f"auth-plugin-{index}"))
+    for index, hook in enumerate(workflow_hooks or [], start=1):
+        loaded.append(_coerce_loaded_auth_plugin(hook, default_name=f"workflow-hook-{index}"))
+    return loaded
+
+
 def _execute_request(
     client: httpx.Client,
-    request: AttackCase | WorkflowStep,
+    request: PreparedRequest,
     *,
-    base_url: str,
+    context: RuntimeContext,
     default_headers: dict[str, str],
     default_query: dict[str, Any],
-    extracted_values: dict[str, Any],
     artifact_root: Path | None,
     artifact_filename: str | None,
     artifact_metadata: dict[str, Any] | None,
-) -> _ExecutedRequest:
+    auth_plugins: list[LoadedAuthPlugin],
+) -> RequestExecution:
+    _invoke_auth_plugins(auth_plugins, "before_request", request, context)
+
+    request_kwargs: dict[str, Any] | None = None
     try:
         url = _resolve_request_path(
             request,
-            base_url=base_url,
-            extracted_values=extracted_values,
+            base_url=context.base_url,
+            extracted_values=context.extracted_values,
         )
         headers = _resolved_headers(
             request,
             default_headers=default_headers,
-            extracted_values=extracted_values,
+            extracted_values=context.extracted_values,
         )
         query = _resolved_query(
             request,
             default_query=default_query,
-            extracted_values=extracted_values,
+            extracted_values=context.extracted_values,
         )
-        request_kwargs: dict[str, Any] = {
+        request_kwargs = {
             "params": query,
             "headers": headers,
         }
         if not request.omit_body:
             if request.raw_body is not None:
                 request_kwargs["content"] = str(
-                    _resolve_templates(request.raw_body, extracted_values)
+                    _resolve_templates(request.raw_body, context.extracted_values)
                 )
                 content_type = request.content_type
                 if content_type is not None:
-                    content_type = str(_resolve_templates(content_type, extracted_values))
+                    content_type = str(_resolve_templates(content_type, context.extracted_values))
                 if content_type and "Content-Type" not in headers:
                     request_kwargs["headers"] = {**headers, "Content-Type": content_type}
                     headers = request_kwargs["headers"]
             elif request.body_json is not None:
-                request_kwargs["json"] = _resolve_templates(request.body_json, extracted_values)
+                request_kwargs["json"] = _resolve_templates(
+                    request.body_json,
+                    context.extracted_values,
+                )
+        execution = RequestExecution(
+            url=url,
+            headers=headers,
+            query=query,
+            response=None,
+            error=None,
+            duration_ms=0.0,
+        )
     except WorkflowResolutionError as exc:
-        execution = _ExecutedRequest(
-            url=base_url.rstrip("/") + request.path,
+        execution = RequestExecution(
+            url=context.build_url(request.path),
             headers={},
             query={},
             response=None,
@@ -567,6 +632,7 @@ def _execute_request(
             duration_ms=0.0,
             resolution_error=True,
         )
+        _invoke_auth_plugins(auth_plugins, "after_request", request, context, execution)
         if (
             artifact_root is not None
             and artifact_filename is not None
@@ -588,14 +654,13 @@ def _execute_request(
         return execution
 
     start = time.perf_counter()
-    response: httpx.Response | None = None
-    error: str | None = None
     try:
-        response = client.request(request.method, url, **request_kwargs)
+        execution.response = client.request(request.method, execution.url, **request_kwargs)
     except Exception as exc:  # noqa: BLE001
-        error = str(exc)
-    duration_ms = (time.perf_counter() - start) * 1000.0
+        execution.error = str(exc)
+    execution.duration_ms = (time.perf_counter() - start) * 1000.0
 
+    _invoke_auth_plugins(auth_plugins, "after_request", request, context, execution)
     if (
         artifact_root is not None
         and artifact_filename is not None
@@ -606,28 +671,21 @@ def _execute_request(
             filename=artifact_filename,
             request=request,
             metadata=artifact_metadata,
-            url=url,
-            headers=headers,
-            query=query,
+            url=execution.url,
+            headers=execution.headers,
+            query=execution.query,
             request_kwargs=request_kwargs,
-            response=response,
-            error=error,
-            duration_ms=duration_ms,
+            response=execution.response,
+            error=execution.error,
+            duration_ms=execution.duration_ms,
         )
 
-    return _ExecutedRequest(
-        url=url,
-        headers=headers,
-        query=query,
-        response=response,
-        error=error,
-        duration_ms=duration_ms,
-    )
+    return execution
 
 
 def _request_result(
     attack: AttackCase,
-    execution: _ExecutedRequest,
+    execution: RequestExecution,
     *,
     attack_type: str,
     workflow_steps: list[WorkflowStepResult] | None = None,
@@ -678,7 +736,7 @@ def _request_result(
 
 def _workflow_step_result(
     step: WorkflowStep,
-    execution: _ExecutedRequest,
+    execution: RequestExecution,
 ) -> WorkflowStepResult:
     return WorkflowStepResult(
         name=step.name,
@@ -702,7 +760,10 @@ def _workflow_terminal_fallback_url(
 ) -> str:
     try:
         return _resolve_request_path(
-            workflow.terminal_attack,
+            _prepared_request_from_attack(
+                workflow.terminal_attack,
+                phase="workflow_terminal",
+            ),
             base_url=base_url,
             extracted_values=extracted_values,
         )
@@ -765,7 +826,7 @@ def _extract_step_values(
     extracted: dict[str, Any] = {}
     for extract in step.extracts:
         try:
-            extracted[extract.name] = _extract_json_pointer(payload, extract.json_pointer)
+            extracted[extract.name] = extract_json_pointer(payload, extract.json_pointer)
         except ValueError as exc:
             if extract.required:
                 raise WorkflowResolutionError(
@@ -782,26 +843,29 @@ def _execute_workflow_attack(
     default_query: dict[str, Any],
     timeout_seconds: float,
     artifact_root: Path | None,
-    workflow_hooks: list[WorkflowHook],
+    auth_plugins: list[LoadedAuthPlugin],
+    initial_state: dict[str, Any],
 ) -> AttackResult:
     total_duration_ms = 0.0
     with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
-        context = WorkflowContext(client=client)
-        for hook in workflow_hooks:
-            hook.before_workflow(workflow, context)
+        context = RuntimeContext(
+            client=client,
+            base_url=base_url,
+            scope="workflow",
+            state=dict(initial_state),
+            extracted_values={},
+            workflow_id=workflow.id,
+        )
+        _invoke_auth_plugins(auth_plugins, "before_workflow", workflow, context)
 
         workflow_steps: list[WorkflowStepResult] = []
         for index, step in enumerate(workflow.setup_steps, start=1):
-            for hook in workflow_hooks:
-                hook.before_step(workflow, step, context)
-
             execution = _execute_request(
                 client,
-                step,
-                base_url=base_url,
+                _prepared_request_from_step(workflow, step, step_index=index),
+                context=context,
                 default_headers=default_headers,
                 default_query=default_query,
-                extracted_values=context.extracted_values,
                 artifact_root=artifact_root,
                 artifact_filename=f"{workflow.id}-step-{index:02d}.json" if artifact_root else None,
                 artifact_metadata=(
@@ -816,6 +880,7 @@ def _execute_workflow_attack(
                     if artifact_root
                     else None
                 ),
+                auth_plugins=auth_plugins,
             )
             total_duration_ms += execution.duration_ms
             step_result = _workflow_step_result(step, execution)
@@ -842,13 +907,10 @@ def _execute_workflow_attack(
                 except WorkflowResolutionError as exc:
                     setup_error = str(exc)
 
-            for hook in workflow_hooks:
-                hook.after_step(workflow, step, context, execution)
-
             if setup_error is not None:
                 if not setup_error.startswith("Workflow setup failed"):
                     setup_error = f"Workflow setup failed during '{step.name}': {setup_error}"
-                return _workflow_failure_result(
+                result = _workflow_failure_result(
                     workflow,
                     base_url=base_url,
                     error=setup_error,
@@ -862,17 +924,18 @@ def _execute_workflow_attack(
                     duration_ms=total_duration_ms,
                     extracted_values=context.extracted_values,
                 )
-
-        for hook in workflow_hooks:
-            hook.before_step(workflow, workflow.terminal_attack, context)
+                _invoke_auth_plugins(auth_plugins, "after_workflow", workflow, context, result)
+                return result
 
         terminal_execution = _execute_request(
             client,
-            workflow.terminal_attack,
-            base_url=base_url,
+            _prepared_request_from_attack(
+                workflow.terminal_attack,
+                phase="workflow_terminal",
+            ),
+            context=context,
             default_headers=default_headers,
             default_query=default_query,
-            extracted_values=context.extracted_values,
             artifact_root=artifact_root,
             artifact_filename=f"{workflow.id}.json" if artifact_root else None,
             artifact_metadata=(
@@ -887,13 +950,12 @@ def _execute_workflow_attack(
                 if artifact_root
                 else None
             ),
+            auth_plugins=auth_plugins,
         )
         total_duration_ms += terminal_execution.duration_ms
-        for hook in workflow_hooks:
-            hook.after_step(workflow, workflow.terminal_attack, context, terminal_execution)
 
         if terminal_execution.resolution_error:
-            return _workflow_failure_result(
+            result = _workflow_failure_result(
                 workflow,
                 base_url=base_url,
                 error=f"Workflow setup failed before terminal step: {terminal_execution.error}",
@@ -901,20 +963,23 @@ def _execute_workflow_attack(
                 duration_ms=total_duration_ms,
                 extracted_values=context.extracted_values,
             )
+            _invoke_auth_plugins(auth_plugins, "after_workflow", workflow, context, result)
+            return result
 
         result = _request_result(
             workflow.terminal_attack,
             terminal_execution,
             attack_type="workflow",
             workflow_steps=workflow_steps,
-        )
-        return result.model_copy(
+        ).model_copy(
             update={
                 "attack_id": workflow.id,
                 "name": workflow.name,
                 "duration_ms": round(total_duration_ms, 2),
             }
         )
+        _invoke_auth_plugins(auth_plugins, "after_workflow", workflow, context, result)
+        return result
 
 
 def execute_attack_suite(
@@ -925,6 +990,7 @@ def execute_attack_suite(
     default_query: dict[str, Any] | None = None,
     timeout_seconds: float = 10.0,
     artifact_dir: str | Path | None = None,
+    auth_plugins: list[LoadedAuthPlugin | RuntimePlugin | type[RuntimePlugin]] | None = None,
     workflow_hooks: list[WorkflowHook] | None = None,
 ) -> AttackResults:
     default_headers = dict(default_headers or {})
@@ -934,8 +1000,17 @@ def execute_attack_suite(
     if artifact_root is not None:
         artifact_root.mkdir(parents=True, exist_ok=True)
 
-    hooks = list(workflow_hooks or [])
+    loaded_plugins = _loaded_auth_plugins(
+        auth_plugins=auth_plugins,
+        workflow_hooks=workflow_hooks,
+    )
     with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
+        suite_context = RuntimeContext(
+            client=client,
+            base_url=base_url,
+            scope="suite",
+        )
+        _invoke_auth_plugins(loaded_plugins, "before_suite", suite_context)
         for attack in suite.attacks:
             if isinstance(attack, WorkflowAttackCase):
                 results.append(
@@ -946,18 +1021,18 @@ def execute_attack_suite(
                         default_query=default_query,
                         timeout_seconds=timeout_seconds,
                         artifact_root=artifact_root,
-                        workflow_hooks=hooks,
+                        auth_plugins=loaded_plugins,
+                        initial_state=suite_context.state,
                     )
                 )
                 continue
 
             execution = _execute_request(
                 client,
-                attack,
-                base_url=base_url,
+                _prepared_request_from_attack(attack),
+                context=suite_context,
                 default_headers=default_headers,
                 default_query=default_query,
-                extracted_values={},
                 artifact_root=artifact_root,
                 artifact_filename=f"{attack.id}.json" if artifact_root else None,
                 artifact_metadata=(
@@ -971,6 +1046,7 @@ def execute_attack_suite(
                     if artifact_root
                     else None
                 ),
+                auth_plugins=loaded_plugins,
             )
             results.append(_request_result(attack, execution, attack_type="request"))
 

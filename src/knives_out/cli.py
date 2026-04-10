@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from knives_out.attack_packs import load_attack_packs
+from knives_out.auth_plugins import PluginRuntimeError, load_auth_plugins
 from knives_out.filtering import filter_attack_suite
 from knives_out.generator import generate_attack_suite
 from knives_out.models import AttackResults, PreflightWarning
@@ -256,6 +257,16 @@ def run(
         Path | None,
         typer.Option(help="Optional directory for per-attack request/response artifacts."),
     ] = None,
+    auth_plugin: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Load auth/session plugins from installed entry point names. Repeatable."
+        ),
+    ] = None,
+    auth_plugin_module: Annotated[
+        list[Path] | None,
+        typer.Option(help="Load auth/session plugins from local Python module paths. Repeatable."),
+    ] = None,
     operation: Annotated[
         list[str] | None,
         typer.Option(help="Only run attacks for these operation ids. Repeatable."),
@@ -297,14 +308,27 @@ def run(
     )
     default_headers = _parse_key_value(header, separator=":")
     default_query = _parse_key_value(query, separator="=")
-    results = execute_attack_suite(
-        suite,
-        base_url=base_url,
-        default_headers=default_headers,
-        default_query=default_query,
-        timeout_seconds=timeout,
-        artifact_dir=artifact_dir,
-    )
+    try:
+        auth_plugins = load_auth_plugins(
+            entry_point_names=auth_plugin,
+            module_paths=auth_plugin_module,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    try:
+        results = execute_attack_suite(
+            suite,
+            base_url=base_url,
+            default_headers=default_headers,
+            default_query=default_query,
+            timeout_seconds=timeout,
+            artifact_dir=artifact_dir,
+            auth_plugins=auth_plugins,
+        )
+    except PluginRuntimeError as exc:
+        console.print(f"[red]Auth plugin error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
     out.write_text(results.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
 
     flagged = sum(1 for result in results.results if result.flagged)

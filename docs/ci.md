@@ -22,11 +22,16 @@ Optional secrets:
 
 - `KNIVES_OUT_AUTH_HEADER`
 - `KNIVES_OUT_AUTH_QUERY`
+- plugin-specific login or bearer env vars if you use an auth plugin module
 
 The optional values should match the current CLI surface:
 
 - `KNIVES_OUT_AUTH_HEADER`: `Authorization: Bearer dev-token`
 - `KNIVES_OUT_AUTH_QUERY`: `api_key=dev-secret`
+
+For static credentials, `--header` and `--query` are still the simplest fit. Use auth/session
+plugins when your CI flow needs to log in, fetch a bearer token, or establish a shared session
+before the suite or each workflow runs.
 
 ## Expected exit behavior
 
@@ -101,6 +106,27 @@ You can add app-specific journeys by loading a workflow pack module or entry poi
       --workflow-pack-module examples/workflow_packs/listed_pet_lookup.py \
       --out attacks.json
 ```
+
+## Optional: auth/session plugins
+
+For login or shared-session flows, load a local auth plugin module during `run`:
+
+```yaml
+- name: Run suite with an auth plugin
+  run: |
+    knives-out run attacks.json \
+      --base-url "${KNIVES_OUT_BASE_URL}" \
+      --auth-plugin-module examples/auth_plugins/login_bearer.py \
+      --artifact-dir artifacts \
+      --out results.json
+```
+
+The sample `examples/auth_plugins/login_bearer.py` expects:
+
+- `KNIVES_OUT_LOGIN_USERNAME`
+- `KNIVES_OUT_LOGIN_PASSWORD`
+
+You can also install auth plugins as entry points and load them with `--auth-plugin env-bearer`.
 
 ## Optional: baseline-aware report
 

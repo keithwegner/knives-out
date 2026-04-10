@@ -4,6 +4,7 @@ import json
 
 import httpx
 
+from knives_out.auth_plugins import RuntimePlugin
 from knives_out.models import (
     AttackCase,
     AttackResult,
@@ -540,6 +541,115 @@ def test_execute_attack_suite_removes_only_declared_auth_query_param(monkeypatch
         "limit": 10,
         "page": "2",
     }
+
+
+def test_execute_attack_suite_applies_auth_plugin_before_omitting_auth_headers(monkeypatch) -> None:
+    class _BearerPlugin(RuntimePlugin):
+        def before_request(self, request, context) -> None:
+            del context
+            request.headers["Authorization"] = "Bearer plugin-token"
+            request.headers["X-Trace-Id"] = "trace-123"
+
+    response = httpx.Response(401, text="missing auth")
+    client = _install_recording_client(monkeypatch, response)
+
+    suite = AttackSuite(
+        source="unit",
+        attacks=[
+            AttackCase(
+                id="atk_plugin_auth",
+                name="Missing plugin auth",
+                kind="missing_auth",
+                operation_id="listPets",
+                method="GET",
+                path="/pets",
+                description="Missing plugin auth",
+                omit_header_names=["Authorization"],
+            )
+        ],
+    )
+
+    execute_attack_suite(
+        suite,
+        base_url="https://example.com",
+        auth_plugins=[_BearerPlugin()],
+    )
+
+    request = client.requests[0]
+    assert request["headers"] == {
+        "X-Trace-Id": "trace-123",
+    }
+
+
+def test_execute_attack_suite_copies_suite_auth_state_into_workflows(monkeypatch) -> None:
+    class _SuiteTokenPlugin(RuntimePlugin):
+        def before_suite(self, context) -> None:
+            context.state["token"] = "suite-token"
+
+        def before_request(self, request, context) -> None:
+            token = context.state.get("token")
+            if token is not None:
+                request.headers["Authorization"] = f"Bearer {token}"
+
+    def _handler(request: dict[str, object]) -> httpx.Response:
+        if request["url"] == "https://example.com/pets":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "application/json"},
+                json=[{"id": 7}],
+            )
+        if request["url"] == "https://example.com/pets/7":
+            return httpx.Response(404, text="not found")
+        raise AssertionError(f"Unexpected request: {request}")
+
+    workflow_client = _HandlerClient(_handler)
+    _install_client_sequence(monkeypatch, [_NoopClient(), workflow_client])
+
+    suite = AttackSuite(source="unit", attacks=[_workflow_attack()])
+
+    results = execute_attack_suite(
+        suite,
+        base_url="https://example.com",
+        auth_plugins=[_SuiteTokenPlugin()],
+    )
+
+    assert results.results[0].type == "workflow"
+    assert workflow_client.requests[0]["headers"]["Authorization"] == "Bearer suite-token"
+    assert workflow_client.requests[1]["headers"]["Authorization"] == "Bearer suite-token"
+
+
+def test_execute_attack_suite_auth_plugin_can_create_workflow_session(monkeypatch) -> None:
+    class _LoginPlugin(RuntimePlugin):
+        def before_workflow(self, workflow, context) -> None:
+            del workflow
+            context.client.request("POST", context.build_url("/login"))
+
+    def _handler(request: dict[str, object]) -> httpx.Response:
+        if request["url"] == "https://example.com/login":
+            return httpx.Response(200, headers={"set-cookie": "session=abc; Path=/"})
+        if request["url"] == "https://example.com/pets":
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "application/json"},
+                json=[{"id": 1}],
+            )
+        if request["url"] == "https://example.com/pets/1":
+            return httpx.Response(404, text="not found")
+        raise AssertionError(f"Unexpected request: {request}")
+
+    workflow_client = _HandlerClient(_handler)
+    _install_client_sequence(monkeypatch, [_NoopClient(), workflow_client])
+
+    suite = AttackSuite(source="unit", attacks=[_workflow_attack()])
+
+    execute_attack_suite(
+        suite,
+        base_url="https://example.com",
+        auth_plugins=[_LoginPlugin()],
+    )
+
+    assert workflow_client.requests[1]["headers"]["Cookie"] == "session=abc"
+    assert workflow_client.requests[2]["headers"]["Cookie"] == "session=abc"
 
 
 def test_execute_attack_suite_writes_artifacts(tmp_path, monkeypatch) -> None:
