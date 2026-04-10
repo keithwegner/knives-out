@@ -19,14 +19,18 @@ from knives_out.auth_plugins import (
     RuntimePlugin,
     WorkflowHook,
     extract_json_pointer,
+    load_auth_plugins,
     make_auth_plugin,
 )
 from knives_out.models import (
     AttackCase,
+    AttackDefinition,
     AttackResult,
     AttackResults,
     AttackSuite,
+    AuthProfile,
     ConfidenceLevel,
+    ProfileAttackResult,
     ResponseSpec,
     SeverityLevel,
     WorkflowAttackCase,
@@ -40,10 +44,25 @@ ISSUE_SCORES: dict[str, tuple[SeverityLevel, ConfidenceLevel]] = {
     "server_error": ("high", "high"),
     "unexpected_success": ("high", "medium"),
     "response_schema_mismatch": ("medium", "high"),
+    "anonymous_access": ("high", "high"),
+    "authorization_inversion": ("high", "medium"),
 }
 
 _PLACEHOLDER_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 _EXACT_PLACEHOLDER_RE = re.compile(r"^\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}$")
+_SEVERITY_ORDER = {
+    "none": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
+_CONFIDENCE_ORDER = {
+    "none": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+}
 
 
 class WorkflowResolutionError(ValueError):
@@ -810,6 +829,146 @@ def _workflow_failure_result(
     )
 
 
+def _attack_result_sort_key(result: AttackResult) -> tuple[int, int, str, str]:
+    return (
+        -_SEVERITY_ORDER.get(result.severity, 0),
+        -_CONFIDENCE_ORDER.get(result.confidence, 0),
+        result.issue or "",
+        result.name.lower(),
+    )
+
+
+def _profile_attack_result(profile: AuthProfile, result: AttackResult) -> ProfileAttackResult:
+    return ProfileAttackResult(
+        profile=profile.name,
+        level=profile.level,
+        anonymous=profile.anonymous,
+        url=result.url,
+        status_code=result.status_code,
+        error=result.error,
+        duration_ms=result.duration_ms,
+        flagged=result.flagged,
+        issue=result.issue,
+        severity=result.severity,
+        confidence=result.confidence,
+        response_excerpt=result.response_excerpt,
+        response_schema_status=result.response_schema_status,
+        response_schema_valid=result.response_schema_valid,
+        response_schema_error=result.response_schema_error,
+        workflow_steps=result.workflow_steps,
+    )
+
+
+def _success_status(status_code: int | None) -> bool:
+    return status_code is not None and 200 <= status_code < 400
+
+
+def _denied_status(status_code: int | None) -> bool:
+    return status_code in {401, 403}
+
+
+def _profile_artifact_dir(artifact_dir: str | Path | None, profile: AuthProfile) -> Path | None:
+    if artifact_dir is None:
+        return None
+    profile_name = re.sub(r"[^A-Za-z0-9._-]+", "-", profile.name).strip("-") or "profile"
+    return Path(artifact_dir) / profile_name
+
+
+def _execution_summary_result(
+    profile_pairs: list[tuple[AuthProfile, AttackResult]],
+    profile_results: list[ProfileAttackResult],
+) -> AttackResult:
+    flagged_results = [result for _, result in profile_pairs if result.flagged]
+    if flagged_results:
+        representative = sorted(flagged_results, key=_attack_result_sort_key)[0]
+    else:
+        representative = sorted(
+            profile_pairs,
+            key=lambda pair: (-pair[0].level, pair[0].name.casefold()),
+        )[0][1]
+    return representative.model_copy(update={"profile_results": profile_results})
+
+
+def _authorization_comparison_results(
+    attack: AttackDefinition,
+    profile_pairs: list[tuple[AuthProfile, AttackResult]],
+    profile_results: list[ProfileAttackResult],
+) -> list[AttackResult]:
+    results: list[AttackResult] = []
+
+    anonymous_success = [
+        (profile, result)
+        for profile, result in profile_pairs
+        if attack.auth_required and profile.anonymous and _success_status(result.status_code)
+    ]
+    if anonymous_success:
+        profile, result = sorted(
+            anonymous_success,
+            key=lambda pair: (pair[0].level, pair[0].name.casefold()),
+        )[0]
+        severity, confidence = score_result(flagged=True, issue="anonymous_access")
+        results.append(
+            result.model_copy(
+                update={
+                    "flagged": True,
+                    "issue": "anonymous_access",
+                    "severity": severity,
+                    "confidence": confidence,
+                    "error": (
+                        f"Anonymous profile '{profile.name}' succeeded on an auth-required "
+                        f"operation with status {result.status_code}."
+                    ),
+                    "profile_results": profile_results,
+                }
+            )
+        )
+
+    inversion_candidates: list[tuple[AuthProfile, AttackResult, AuthProfile, AttackResult]] = []
+    ordered_pairs = sorted(profile_pairs, key=lambda pair: (pair[0].level, pair[0].name.casefold()))
+    for lower_profile, lower_result in ordered_pairs:
+        if lower_profile.anonymous:
+            continue
+        if not _success_status(lower_result.status_code):
+            continue
+        for higher_profile, higher_result in ordered_pairs:
+            if higher_profile.level <= lower_profile.level:
+                continue
+            if _denied_status(higher_result.status_code):
+                inversion_candidates.append(
+                    (lower_profile, lower_result, higher_profile, higher_result)
+                )
+
+    if inversion_candidates:
+        lower_profile, lower_result, higher_profile, higher_result = sorted(
+            inversion_candidates,
+            key=lambda candidate: (
+                -(candidate[2].level - candidate[0].level),
+                candidate[0].name.casefold(),
+                candidate[2].name.casefold(),
+            ),
+        )[0]
+        severity, confidence = score_result(flagged=True, issue="authorization_inversion")
+        results.append(
+            lower_result.model_copy(
+                update={
+                    "flagged": True,
+                    "issue": "authorization_inversion",
+                    "severity": severity,
+                    "confidence": confidence,
+                    "error": (
+                        f"Lower-trust profile '{lower_profile.name}' succeeded with status "
+                        f"{lower_result.status_code} while higher-trust profile "
+                        f"'{higher_profile.name}' was denied with status "
+                        f"{higher_result.status_code}."
+                    ),
+                    "profile_results": profile_results,
+                }
+            )
+        )
+
+    return results
+
+
 def _extract_step_values(
     step: WorkflowStep,
     response: httpx.Response | None,
@@ -996,6 +1155,9 @@ def execute_attack_suite(
     artifact_dir: str | Path | None = None,
     auth_plugins: list[LoadedAuthPlugin | RuntimePlugin | type[RuntimePlugin]] | None = None,
     workflow_hooks: list[WorkflowHook] | None = None,
+    profile_name: str | None = None,
+    profile_level: int = 0,
+    profile_anonymous: bool = False,
 ) -> AttackResults:
     default_headers = dict(default_headers or {})
     default_query = dict(default_query or {})
@@ -1013,6 +1175,9 @@ def execute_attack_suite(
             client=client,
             base_url=base_url,
             scope="suite",
+            profile_name=profile_name,
+            profile_level=profile_level,
+            profile_anonymous=profile_anonymous,
         )
         _invoke_auth_plugins(loaded_plugins, "before_suite", suite_context)
         for attack in suite.attacks:
@@ -1054,4 +1219,85 @@ def execute_attack_suite(
             )
             results.append(_request_result(attack, execution, attack_type="request"))
 
-    return AttackResults(source=suite.source, base_url=base_url, results=results)
+    return AttackResults(
+        source=suite.source,
+        base_url=base_url,
+        profiles=[profile_name] if profile_name is not None else [],
+        results=results,
+    )
+
+
+def execute_attack_suite_profiles(
+    suite: AttackSuite,
+    *,
+    base_url: str,
+    profiles: list[AuthProfile],
+    default_headers: dict[str, str] | None = None,
+    default_query: dict[str, Any] | None = None,
+    timeout_seconds: float = 10.0,
+    artifact_dir: str | Path | None = None,
+) -> AttackResults:
+    if not profiles:
+        raise ValueError("At least one auth profile is required for multi-profile execution.")
+
+    default_headers = dict(default_headers or {})
+    default_query = dict(default_query or {})
+
+    per_profile_runs: list[tuple[AuthProfile, AttackResults]] = []
+    for profile in profiles:
+        loaded_plugins = load_auth_plugins(
+            entry_point_names=profile.auth_plugins,
+            module_paths=[Path(module_path) for module_path in profile.auth_plugin_modules],
+        )
+        profile_run = execute_attack_suite(
+            suite,
+            base_url=base_url,
+            default_headers={**default_headers, **profile.headers},
+            default_query={**default_query, **profile.query},
+            timeout_seconds=timeout_seconds,
+            artifact_dir=_profile_artifact_dir(artifact_dir, profile),
+            auth_plugins=loaded_plugins,
+            profile_name=profile.name,
+            profile_level=profile.level,
+            profile_anonymous=profile.anonymous,
+        )
+        per_profile_runs.append((profile, profile_run))
+
+    first_profile, first_run = per_profile_runs[0]
+    for profile, profile_run in per_profile_runs[1:]:
+        if len(profile_run.results) != len(first_run.results):
+            raise ValueError(
+                f"Profile '{profile.name}' produced a different number of results than "
+                f"profile '{first_profile.name}'."
+            )
+
+    aggregated_results: list[AttackResult] = []
+    for attack, index in zip(suite.attacks, range(len(first_run.results)), strict=True):
+        profile_pairs: list[tuple[AuthProfile, AttackResult]] = []
+        reference_result = first_run.results[index]
+        for profile, profile_run in per_profile_runs:
+            current_result = profile_run.results[index]
+            if (
+                current_result.attack_id != reference_result.attack_id
+                or current_result.type != reference_result.type
+            ):
+                raise ValueError(
+                    f"Profile '{profile.name}' produced a mismatched result ordering for "
+                    f"attack '{attack.id}'."
+                )
+            profile_pairs.append((profile, current_result))
+
+        profile_results = [
+            _profile_attack_result(profile, result) for profile, result in profile_pairs
+        ]
+        aggregated_results.append(_execution_summary_result(profile_pairs, profile_results))
+        aggregated_results.extend(
+            _authorization_comparison_results(attack, profile_pairs, profile_results)
+        )
+
+    return AttackResults(
+        source=suite.source,
+        base_url=base_url,
+        profiles=[profile.name for profile in profiles],
+        results=aggregated_results,
+    )

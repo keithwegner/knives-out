@@ -13,11 +13,20 @@ from knives_out.attack_packs import load_attack_packs
 from knives_out.auth_plugins import PluginRuntimeError, load_auth_plugins
 from knives_out.filtering import filter_attack_suite, filter_operations
 from knives_out.generator import generate_attack_suite
-from knives_out.models import AttackResults, PreflightWarning
+from knives_out.models import AttackResults, AuthProfile, PreflightWarning
 from knives_out.openapi_loader import load_operations_with_warnings
+from knives_out.profiles import (
+    load_auth_profiles,
+    resolve_auth_profile_modules,
+    select_auth_profiles,
+)
 from knives_out.promotion import PromotionError, promote_attack_suite
 from knives_out.reporting import load_attack_results, render_markdown_report
-from knives_out.runner import execute_attack_suite, load_attack_suite
+from knives_out.runner import (
+    execute_attack_suite,
+    execute_attack_suite_profiles,
+    load_attack_suite,
+)
 from knives_out.suppressions import (
     DEFAULT_SUPPRESSIONS_PATH,
     SuppressionRule,
@@ -113,6 +122,24 @@ def _load_suppressions_or_error(
         ) from exc
 
     return resolved_path, suppressions_file.suppressions
+
+
+def _load_auth_profiles_or_error(
+    path: Path | None,
+    *,
+    include_names: list[str] | None = None,
+) -> list[AuthProfile]:
+    if path is None:
+        if include_names:
+            raise typer.BadParameter("--profile requires --profile-file.")
+        return []
+
+    try:
+        profiles_file = load_auth_profiles(path)
+        selected_profiles = select_auth_profiles(profiles_file, include_names=include_names)
+        return resolve_auth_profile_modules(selected_profiles, relative_to=path)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(f"Could not read auth profile file '{path}': {exc}") from exc
 
 
 def _print_suppression_summary(
@@ -353,6 +380,14 @@ def run(
         list[Path] | None,
         typer.Option(help="Load auth/session plugins from local Python module paths. Repeatable."),
     ] = None,
+    profile_file: Annotated[
+        Path | None,
+        typer.Option(help="Optional auth profile YAML file for multi-profile execution."),
+    ] = None,
+    profile: Annotated[
+        list[str] | None,
+        typer.Option(help="Only execute these named auth profiles. Repeatable."),
+    ] = None,
     operation: Annotated[
         list[str] | None,
         typer.Option(help="Only run attacks for these operation ids. Repeatable."),
@@ -414,34 +449,72 @@ def run(
     )
     default_headers = _parse_key_value(header, separator=":")
     default_query = _parse_key_value(query, separator="=")
-    try:
-        auth_plugins = load_auth_plugins(
-            entry_point_names=auth_plugin,
-            module_paths=auth_plugin_module,
-        )
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    auth_profiles = _load_auth_profiles_or_error(profile_file, include_names=profile)
+    global_auth_plugin_modules = [str(path.resolve()) for path in auth_plugin_module or []]
+
+    if auth_profiles:
+        auth_profiles = [
+            auth_profile.model_copy(
+                update={
+                    "auth_plugins": [*(auth_plugin or []), *auth_profile.auth_plugins],
+                    "auth_plugin_modules": [
+                        *global_auth_plugin_modules,
+                        *auth_profile.auth_plugin_modules,
+                    ],
+                }
+            )
+            for auth_profile in auth_profiles
+        ]
+        auth_plugins = None
+    else:
+        try:
+            auth_plugins = load_auth_plugins(
+                entry_point_names=auth_plugin,
+                module_paths=auth_plugin_module,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
 
     try:
-        results = execute_attack_suite(
-            suite,
-            base_url=base_url,
-            default_headers=default_headers,
-            default_query=default_query,
-            timeout_seconds=timeout,
-            artifact_dir=artifact_dir,
-            auth_plugins=auth_plugins,
-        )
+        if auth_profiles:
+            results = execute_attack_suite_profiles(
+                suite,
+                base_url=base_url,
+                profiles=auth_profiles,
+                default_headers=default_headers,
+                default_query=default_query,
+                timeout_seconds=timeout,
+                artifact_dir=artifact_dir,
+            )
+        else:
+            results = execute_attack_suite(
+                suite,
+                base_url=base_url,
+                default_headers=default_headers,
+                default_query=default_query,
+                timeout_seconds=timeout,
+                artifact_dir=artifact_dir,
+                auth_plugins=auth_plugins,
+            )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     except PluginRuntimeError as exc:
         console.print(f"[red]Auth plugin error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
     out.write_text(results.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
 
     flagged = sum(1 for result in results.results if result.flagged)
-    console.print(
-        f"Executed {len(results.results)} attacks against [bold]{base_url}[/bold]. "
-        f"Flagged {flagged} result(s)."
-    )
+    if results.profiles:
+        console.print(
+            f"Executed {len(suite.attacks)} attacks across {len(results.profiles)} profile(s) "
+            f"against [bold]{base_url}[/bold] and produced {len(results.results)} result(s). "
+            f"Flagged {flagged} result(s)."
+        )
+    else:
+        console.print(
+            f"Executed {len(results.results)} attacks against [bold]{base_url}[/bold]. "
+            f"Flagged {flagged} result(s)."
+        )
     console.print(f"Wrote results to [bold]{out}[/bold].")
 
 

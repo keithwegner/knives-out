@@ -1,0 +1,19 @@
+profiles:
+  - name: anonymous
+    anonymous: true
+    level: 0
+    description: No credentials. Useful for catching accidental public access.
+
+  - name: user
+    level: 10
+    description: Typical authenticated user traffic with a bearer token.
+    headers:
+      Authorization: Bearer user-token
+
+  - name: admin
+    level: 20
+    description: Higher-trust admin traffic with a stronger bearer token.
+    headers:
+      Authorization: Bearer admin-token
+    query:
+      audit: "1"

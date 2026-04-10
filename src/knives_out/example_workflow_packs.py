@@ -42,6 +42,7 @@ def generate_listed_id_lookup_workflows(
                 method=attack.method,
                 path=attack.path,
                 tags=list(attack.tags),
+                auth_required=attack.auth_required,
                 description=(
                     "Lists pets, extracts the first item id, then reuses that value "
                     "when executing the terminal attack."

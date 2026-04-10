@@ -23,6 +23,9 @@ class RuntimeContext:
     state: dict[str, Any] = field(default_factory=dict)
     extracted_values: dict[str, Any] = field(default_factory=dict)
     workflow_id: str | None = None
+    profile_name: str | None = None
+    profile_level: int = 0
+    profile_anonymous: bool = False
 
     def build_url(self, path: str) -> str:
         if path.startswith("http://") or path.startswith("https://"):

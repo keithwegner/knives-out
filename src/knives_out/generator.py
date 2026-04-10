@@ -642,6 +642,7 @@ def _body_mutation_attack(
         method=operation.method,
         path=operation.path,
         tags=_tags_for_attack(operation),
+        auth_required=operation.auth_required,
         description=mutation.description,
         path_params=path_params,
         query=query_params,
@@ -748,6 +749,7 @@ def _parameter_constraint_attacks(
                 method=operation.method,
                 path=operation.path,
                 tags=_tags_for_attack(operation),
+                auth_required=operation.auth_required,
                 description=description,
                 path_params=path_params,
                 query=query_params,
@@ -946,6 +948,7 @@ def _workflow_attack_from_assignments(
         method=terminal_attack.method,
         path=terminal_attack.path,
         tags=list(terminal_attack.tags),
+        auth_required=terminal_attack.auth_required,
         description=(
             f"Creates state with {producer.operation_id} before executing "
             f"the terminal attack '{terminal_attack.name}'."
@@ -1048,6 +1051,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                     method=operation.method,
                     path=operation.path,
                     tags=_tags_for_attack(operation),
+                    auth_required=operation.auth_required,
                     description=(
                         f"Omits required {parameter.location} parameter '{parameter.name}'."
                     ),
@@ -1096,6 +1100,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 method=operation.method,
                 path=operation.path,
                 tags=_tags_for_attack(operation),
+                auth_required=operation.auth_required,
                 description=(
                     f"Substitutes a wrong-type value for {parameter.location} "
                     f"parameter '{parameter.name}'."
@@ -1135,6 +1140,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                     method=operation.method,
                     path=operation.path,
                     tags=_tags_for_attack(operation),
+                    auth_required=operation.auth_required,
                     description=f"Uses a value outside the declared enum for '{parameter.name}'.",
                     path_params=path_params,
                     query=query_params,
@@ -1157,6 +1163,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 method=operation.method,
                 path=operation.path,
                 tags=_tags_for_attack(operation),
+                auth_required=operation.auth_required,
                 description="Omits the required request body.",
                 path_params=path_params,
                 query=query_params,
@@ -1179,6 +1186,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 method=operation.method,
                 path=operation.path,
                 tags=_tags_for_attack(operation),
+                auth_required=operation.auth_required,
                 description="Sends invalid JSON for a JSON request body.",
                 path_params=path_params,
                 query=query_params,
@@ -1212,6 +1220,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 method=operation.method,
                 path=operation.path,
                 tags=_tags_for_attack(operation),
+                auth_required=operation.auth_required,
                 description="Removes the declared auth credential from the request.",
                 path_params=path_params,
                 query=query_params,

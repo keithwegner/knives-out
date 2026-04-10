@@ -19,6 +19,7 @@ Given an OpenAPI document, `knives-out` can:
 - generate schema-aware mutation attacks from declared constraints
 - optionally chain setup requests into replayable workflow attacks
 - load auth/session plugins for bearer tokens, login flows, and shared sessions
+- execute the same suite across named auth profiles and compare their outcomes
 - run those attacks against a live base URL
 - produce a Markdown report that highlights suspicious outcomes
 - verify findings for CI gating
@@ -120,6 +121,15 @@ knives-out run attacks.json \
   --out results.json
 ```
 
+Or execute the same suite across named profiles:
+
+```bash
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --profile-file examples/auth_profiles/anonymous-user-admin.yml \
+  --out results.json
+```
+
 Create a Markdown report:
 
 ```bash
@@ -180,7 +190,9 @@ to keep only the highest-signal regressions around, follow `verify` with
 workflow, secret setup, filtering patterns, baseline-aware CI flows, and checked-in suppressions.
 If you keep a `.knives-out-ignore.yml` file in the repo root, `report`, `verify`, and `promote`
 will load it automatically. Use `knives-out triage results.json` to seed new entries when you want
-to capture known findings without hand-writing YAML.
+to capture known findings without hand-writing YAML. For authorization-focused regression coverage,
+you can also run one suite across `anonymous`, `user`, and `admin` profiles with
+`--profile-file examples/auth_profiles/anonymous-user-admin.yml`.
 
 ## CLI
 
@@ -273,6 +285,22 @@ knives-out run attacks.json \
   --out results.json
 ```
 
+For authorization testing, you can load a profile file and optionally narrow to specific profiles:
+
+```bash
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --profile-file examples/auth_profiles/anonymous-user-admin.yml \
+  --profile anonymous \
+  --profile admin \
+  --out results.json
+```
+
+Each profile can contribute its own headers, query params, entry-point plugins, or local
+`auth_plugin_modules`. Multi-profile runs aggregate per-profile outcomes into one `results.json`
+and add auth comparison findings such as `anonymous_access` and `authorization_inversion` when
+those differences are strong enough to infer safely.
+
 Run-time filters match the same exact tag/path semantics:
 
 ```bash
@@ -300,6 +328,8 @@ knives-out report results.json --baseline previous-results.json --out report.md
 
 If `.knives-out-ignore.yml` exists in the repo root, `report` will automatically show suppressed
 findings separately. You can also point at another file explicitly with `--suppressions path/to.yml`.
+When the run used `--profile-file`, the report includes a per-profile outcome table under each
+attack so you can compare status codes and issues by identity.
 
 ### `verify`
 
@@ -371,6 +401,25 @@ suppressions:
     reason: Known issue tracked in API backlog
     owner: api-team
     expires_on: 2026-06-30
+```
+
+Example auth profile file:
+
+```yaml
+profiles:
+  - name: anonymous
+    anonymous: true
+    level: 0
+
+  - name: user
+    level: 10
+    headers:
+      Authorization: Bearer user-token
+
+  - name: admin
+    level: 20
+    headers:
+      Authorization: Bearer admin-token
 ```
 
 ## Development

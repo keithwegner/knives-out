@@ -6,6 +6,7 @@ from knives_out.attack_packs import load_module_attack_packs
 from knives_out.auth_plugins import load_module_auth_plugins
 from knives_out.generator import generate_attack_suite
 from knives_out.openapi_loader import load_operations
+from knives_out.profiles import load_auth_profiles
 from knives_out.workflow_packs import load_module_workflow_packs
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,7 @@ STOREFRONT_SPEC = ROOT / "examples" / "openapi" / "storefront.yaml"
 ATTACK_PACK_MODULE = ROOT / "examples" / "custom_packs" / "unexpected_header.py"
 WORKFLOW_PACK_MODULE = ROOT / "examples" / "workflow_packs" / "listed_pet_lookup.py"
 AUTH_PLUGIN_MODULE = ROOT / "examples" / "auth_plugins" / "login_bearer.py"
+AUTH_PROFILE_FILE = ROOT / "examples" / "auth_profiles" / "anonymous-user-admin.yml"
 
 
 def test_checked_in_openapi_examples_load() -> None:
@@ -45,3 +47,13 @@ def test_checked_in_example_modules_load() -> None:
     assert [pack.name for pack in attack_packs] == ["unexpected-header"]
     assert [pack.name for pack in workflow_packs] == ["listed-id-lookup"]
     assert [plugin.name for plugin in auth_plugins] == ["login-bearer"]
+
+
+def test_checked_in_auth_profile_example_loads() -> None:
+    profiles_file = load_auth_profiles(AUTH_PROFILE_FILE)
+
+    assert [profile.name for profile in profiles_file.profiles] == [
+        "anonymous",
+        "user",
+        "admin",
+    ]
