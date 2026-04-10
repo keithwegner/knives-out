@@ -36,6 +36,19 @@ class OperationSpec(BaseModel):
     response_schemas: dict[str, ResponseSpec] = Field(default_factory=dict)
 
 
+class PreflightWarning(BaseModel):
+    code: str
+    message: str
+    operation_id: str | None = None
+    method: str | None = None
+    path: str | None = None
+
+
+class LoadedOperations(BaseModel):
+    operations: list[OperationSpec] = Field(default_factory=list)
+    warnings: list[PreflightWarning] = Field(default_factory=list)
+
+
 class AttackCase(BaseModel):
     id: str
     name: str

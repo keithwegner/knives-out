@@ -1,6 +1,6 @@
 from textwrap import dedent
 
-from knives_out.openapi_loader import load_operations
+from knives_out.openapi_loader import load_operations, load_operations_with_warnings
 
 
 def test_load_operations_prefers_operation_level_parameter_overrides(tmp_path) -> None:
@@ -247,3 +247,73 @@ def test_load_operations_extracts_api_key_auth_from_components(tmp_path) -> None
 
     assert operations["optionalAuth"].auth_required is False
     assert operations["optionalAuth"].auth_header_names == ["X-API-Key"]
+
+
+def test_load_operations_with_warnings_reports_missing_request_schema_and_vague_security(
+    tmp_path,
+) -> None:
+    spec = tmp_path / "preflight-warnings.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Warning test
+              version: 1.0.0
+            components:
+              securitySchemes:
+                oauthSecurity:
+                  type: oauth2
+                  flows:
+                    clientCredentials:
+                      tokenUrl: https://example.com/token
+                      scopes: {}
+            paths:
+              /pets:
+                post:
+                  operationId: createPet
+                  security:
+                    - oauthSecurity: []
+                  requestBody:
+                    required: true
+                    content:
+                      application/json: {}
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_operations_with_warnings(spec)
+
+    warning_codes = {warning.code for warning in loaded.warnings}
+    assert warning_codes == {"missing_request_schema", "vague_security"}
+    assert {warning.operation_id for warning in loaded.warnings} == {"createPet"}
+
+
+def test_load_operations_with_warnings_reports_bad_refs_without_failing(tmp_path) -> None:
+    spec = tmp_path / "bad-refs.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Bad refs
+              version: 1.0.0
+            paths:
+              /pets:
+                get:
+                  operationId: getPets
+                  parameters:
+                    - $ref: ./parameters.yaml#/PetId
+                  requestBody:
+                    $ref: "#/components/requestBodies/MissingBody"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_operations_with_warnings(spec)
+
+    assert [operation.operation_id for operation in loaded.operations] == ["getPets"]
+    warning_codes = {warning.code for warning in loaded.warnings}
+    assert warning_codes == {"unsupported_ref", "unresolved_ref"}
