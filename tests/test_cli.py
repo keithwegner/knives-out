@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from textwrap import dedent
 
@@ -29,6 +30,10 @@ def _results_with_findings(*results: AttackResult) -> AttackResults:
         base_url="https://example.com",
         results=list(results),
     )
+
+
+def _normalized_output(output: str) -> str:
+    return re.sub(r"\s+", " ", output).strip()
 
 
 def test_inspect_command_runs() -> None:
@@ -345,9 +350,9 @@ def test_verify_command_passes_with_baseline_when_findings_only_persist(tmp_path
     )
 
     assert result.exit_code == 0
-    assert "Persisting:" in result.stdout
-    assert "1." in result.stdout
-    assert "Verification passed." in result.stdout
+    normalized = _normalized_output(result.stdout)
+    assert "Persisting: 1" in normalized
+    assert "Verification passed." in normalized
 
 
 def test_verify_command_fails_with_baseline_when_new_qualifying_findings_appear(
@@ -759,7 +764,8 @@ def test_promote_command_respects_suppressions(tmp_path: Path) -> None:
     assert result.exit_code == 0
     suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
     assert suite.attacks == []
-    assert "Qualifying attacks: 0." in result.stdout
+    normalized = _normalized_output(result.stdout)
+    assert "Qualifying attacks: 0." in normalized
 
 
 def test_triage_command_writes_review_ready_suppressions(tmp_path: Path) -> None:
