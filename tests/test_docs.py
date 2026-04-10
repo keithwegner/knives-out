@@ -17,7 +17,11 @@ def test_readme_includes_ci_guidance() -> None:
     assert "KNIVES_OUT_BASE_URL" in readme
     assert "`knives-out run` currently exits with status `0`" in readme
     assert "knives-out verify results.json" in readme
+    assert "knives-out promote results.json" in readme
     assert "--auto-workflows" in readme
+    assert "--tag orders" in readme
+    assert "--path /draft-orders/{draftId}" in readme
+    assert "examples/openapi/storefront.yaml" in readme
     assert "examples/workflow_packs/listed_pet_lookup.py" in readme
 
 
@@ -28,12 +32,16 @@ def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     assert "actions/checkout@v5" in workflow
     assert "actions/setup-python@v6" in workflow
     assert "actions/upload-artifact@v6" in workflow
-    assert 'knives-out generate "$SPEC_PATH" --out attacks.json' in workflow
+    assert "SPEC_PATH: examples/openapi/storefront.yaml" in workflow
+    assert 'knives-out generate "$SPEC_PATH" --tag orders --out attacks.json' in workflow
+    assert "--path /draft-orders/{draftId}" in workflow
     assert "--auto-workflows" in workflow
     assert "--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py" in workflow
     assert 'knives-out run attacks.json "${args[@]}"' in workflow
     assert "knives-out report results.json --out report.md" in workflow
+    assert "knives-out report results.json \\" in workflow
     assert "knives-out verify results.json" in workflow
+    assert "knives-out promote results.json" in workflow
     assert "KNIVES_OUT_BASE_URL" in workflow
 
 
@@ -47,6 +55,10 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "Baseline-aware gating" in ci_doc
     assert "--baseline previous-results.json" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc
+    assert "--tag orders" in ci_doc
+    assert "--path /draft-orders/{draftId}" in ci_doc
+    assert "Promote qualifying findings" in ci_doc
+    assert "pytest --cov=src/knives_out --cov-report=term-missing" in ci_doc
     assert "--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py" in ci_doc
 
 

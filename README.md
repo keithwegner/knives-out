@@ -16,10 +16,13 @@ Given an OpenAPI document, `knives-out` can:
 
 - inspect the operations in the spec
 - generate replayable negative test cases
+- generate schema-aware mutation attacks from declared constraints
 - optionally chain setup requests into replayable workflow attacks
 - load auth/session plugins for bearer tokens, login flows, and shared sessions
 - run those attacks against a live base URL
 - produce a Markdown report that highlights suspicious outcomes
+- verify findings for CI gating
+- promote qualifying findings back into a reusable regression suite
 
 The initial focus is narrow by design:
 
@@ -35,12 +38,17 @@ The starter scaffold generates a first wave of useful negative tests:
 - missing required query/header parameters
 - wrong-type parameter values
 - invalid enum values
+- below-minimum and above-maximum numeric values
+- too-short and too-long string values
+- too-few and too-many array items
+- invalid `uuid`, `email`, `date`, `date-time`, and `uri` formats
+- unexpected JSON properties and missing required JSON properties
 - missing request bodies
 - malformed JSON bodies
 - missing auth headers or query credentials when the spec declares security
 - opt-in setup-plus-terminal workflow attacks that reuse extracted response values
 
-This is not a full fuzzing engine yet. It is a structured attack generator and runner.
+This is not a full fuzzing engine yet. It is a structured attack generator, runner, and CI gate.
 
 ## Why this shape
 
@@ -50,14 +58,14 @@ The project is split into three explicit phases:
 2. **Run** those attack cases against a target.
 3. **Report** findings in a stable, reviewable format.
 
-That makes the architecture easier to extend later with:
+That makes the architecture easier to evolve further with:
 
 - custom attack packs
-- schema-aware payload mutation
+- deeper stateful workflows
 - LLM application testing
 - GraphQL support
-- CI gating policies
-- regression suites for previously found bugs
+- richer CI policies
+- protocol expansion beyond OpenAPI REST
 
 ## Quick start
 
@@ -67,25 +75,31 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Inspect the sample spec:
+Inspect the sample specs:
 
 ```bash
 knives-out inspect examples/openapi/petstore.yaml
+knives-out inspect examples/openapi/storefront.yaml --tag orders
 ```
 
 Generate attacks:
 
 ```bash
 knives-out generate examples/openapi/petstore.yaml --out attacks.json
+knives-out generate examples/openapi/storefront.yaml --tag orders --out attacks.json
 ```
 
 Opt in to built-in stateful workflows:
 
 ```bash
-knives-out generate examples/openapi/petstore.yaml \
+knives-out generate examples/openapi/storefront.yaml \
+  --tag orders \
   --auto-workflows \
   --out attacks.json
 ```
+
+The checked-in `examples/openapi/storefront.yaml` demonstrates exact tag/path filters, schema
+constraints, and a producer/consumer workflow chain via `createDraftOrder` -> `getDraftOrder`.
 
 Run them against a live API:
 
@@ -117,6 +131,12 @@ Verify findings against the default CI policy:
 knives-out verify results.json
 ```
 
+Promote qualifying findings back into a reusable regression suite:
+
+```bash
+knives-out promote results.json --attacks attacks.json --out regression-attacks.json
+```
+
 ## CI usage
 
 `knives-out` works well in CI when you follow the same generate/run/report flow and add a final
@@ -126,7 +146,8 @@ verification step:
 2. run them against a dev or staging environment
 3. render a Markdown report for review
 4. verify the results against a CI policy
-5. upload the JSON results, request artifacts, and Markdown report for triage
+5. optionally promote qualifying findings into a smaller regression suite
+6. upload the JSON results, request artifacts, and Markdown report for triage
 
 A ready-to-adapt GitHub Actions example lives at `.github/workflows/dev-environment-example.yml`.
 It uses repository secrets instead of hard-coded targets:
@@ -146,8 +167,10 @@ When you want stateful coverage, generate with `--auto-workflows` first, then ad
 `--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py` or your own custom pack as
 you move from generic coverage to app-specific journeys. For protected APIs, keep simple static
 credentials on `--header` or `--query`, or move up to
-`--auth-plugin-module examples/auth_plugins/login_bearer.py` for login/session flows. See
-`docs/ci.md` for the sample workflow, secret setup, and baseline-aware CI patterns.
+`--auth-plugin-module examples/auth_plugins/login_bearer.py` for login/session flows. When you want
+to keep only the highest-signal regressions around, follow `verify` with
+`knives-out promote results.json --attacks attacks.json`. See `docs/ci.md` for the sample
+workflow, secret setup, filtering patterns, and baseline-aware CI flows.
 
 ## CLI
 
@@ -161,6 +184,14 @@ knives-out inspect path/to/openapi.yaml
 
 `inspect` surfaces preflight warnings for spec gaps such as missing request schemas, vague
 security declarations, and broken `$ref` pointers.
+
+You can filter inspection to exact tags or paths:
+
+```bash
+knives-out inspect examples/openapi/storefront.yaml \
+  --tag orders \
+  --path /draft-orders/{draftId}
+```
 
 ### `generate`
 
@@ -191,6 +222,19 @@ knives-out generate path/to/openapi.yaml \
   --out attacks.json
 ```
 
+Filters are also available during generation:
+
+```bash
+knives-out generate examples/openapi/storefront.yaml \
+  --tag orders \
+  --path /draft-orders/{draftId} \
+  --out attacks.json
+```
+
+When the spec declares constraints, `generate` now emits additive schema-aware mutations such as
+`below_minimum`, `too_long`, `too_many_items`, `invalid_format`,
+`unexpected_property`, and `missing_required_property`.
+
 ### `run`
 
 Executes a saved attack suite against a base URL.
@@ -216,6 +260,16 @@ knives-out run attacks.json \
   --base-url http://localhost:8000 \
   --auth-plugin env-bearer \
   --auth-plugin-module examples/auth_plugins/login_bearer.py \
+  --out results.json
+```
+
+Run-time filters match the same exact tag/path semantics:
+
+```bash
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --tag orders \
+  --path /draft-orders/{draftId} \
   --out results.json
 ```
 
@@ -249,6 +303,26 @@ knives-out verify results.json \
   --baseline previous-results.json \
   --min-severity high \
   --min-confidence medium
+```
+
+### `promote`
+
+Turns qualifying findings from `results.json` back into a replayable `AttackSuite`.
+
+```bash
+knives-out promote results.json \
+  --attacks attacks.json \
+  --out regression-attacks.json
+```
+
+For baseline-aware regression promotion, pass the same prior `results.json` you would use with
+`verify`:
+
+```bash
+knives-out promote results.json \
+  --attacks attacks.json \
+  --baseline previous-results.json \
+  --out regression-attacks.json
 ```
 
 ## Development

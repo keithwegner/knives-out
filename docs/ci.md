@@ -7,7 +7,8 @@
 3. run that suite against a dev or staging deployment
 4. render a Markdown report for review
 5. verify the results against a CI policy
-6. publish the JSON results, Markdown report, and per-attack artifacts
+6. optionally promote qualifying findings into a smaller regression suite
+7. publish the JSON results, Markdown report, regression suite, and per-attack artifacts
 
 The repository includes a ready-to-adapt GitHub Actions example at
 `.github/workflows/dev-environment-example.yml`.
@@ -32,6 +33,9 @@ The optional values should match the current CLI surface:
 For static credentials, `--header` and `--query` are still the simplest fit. Use auth/session
 plugins when your CI flow needs to log in, fetch a bearer token, or establish a shared session
 before the suite or each workflow runs.
+
+For richer checked-in examples, the repo now includes `examples/openapi/storefront.yaml`, which
+combines exact tags, path filters, schema constraints, and a producer/consumer workflow chain.
 
 ## Expected exit behavior
 
@@ -107,6 +111,29 @@ You can add app-specific journeys by loading a workflow pack module or entry poi
       --out attacks.json
 ```
 
+## Optional: tag and path filtering
+
+The same exact-match filters work in `inspect`, `generate`, and `run`:
+
+```yaml
+- name: Generate only order-related attacks
+  run: |
+    knives-out generate "$SPEC_PATH" \
+      --tag orders \
+      --path /draft-orders/{draftId} \
+      --out attacks.json
+```
+
+```yaml
+- name: Run only order-related attacks
+  run: |
+    knives-out run attacks.json \
+      --base-url "${KNIVES_OUT_BASE_URL}" \
+      --tag orders \
+      --path /draft-orders/{draftId} \
+      --out results.json
+```
+
 ## Optional: auth/session plugins
 
 For login or shared-session flows, load a local auth plugin module during `run`:
@@ -139,3 +166,38 @@ You can also render a Markdown report that highlights new, resolved, and persist
       --baseline previous-results.json \
       --out report.md
 ```
+
+## Optional: promote a regression suite
+
+When you want to preserve only qualifying findings as a smaller replayable suite, use `promote`:
+
+```yaml
+- name: Promote qualifying findings
+  if: always()
+  run: |
+    knives-out promote results.json \
+      --attacks attacks.json \
+      --out regression-attacks.json
+```
+
+To promote only new regressions, pass the same baseline file you use with `verify`:
+
+```yaml
+- name: Promote new qualifying regressions
+  if: always()
+  run: |
+    knives-out promote results.json \
+      --attacks attacks.json \
+      --baseline previous-results.json \
+      --out regression-attacks.json
+```
+
+## Coverage in repository CI
+
+The repository's own `ci.yml` now runs:
+
+- `ruff check .`
+- `ruff format --check .`
+- `pytest --cov=src/knives_out --cov-report=term-missing`
+
+Coverage is printed in CI for visibility, but there is no hard percentage gate yet.
