@@ -15,6 +15,7 @@ from knives_out.filtering import filter_attack_suite, filter_operations
 from knives_out.generator import generate_attack_suite
 from knives_out.models import AttackResults, PreflightWarning
 from knives_out.openapi_loader import load_operations_with_warnings
+from knives_out.promotion import PromotionError, promote_attack_suite
 from knives_out.reporting import load_attack_results, render_markdown_report
 from knives_out.runner import execute_attack_suite, load_attack_suite
 from knives_out.verification import ComparedFinding, evaluate_verification
@@ -492,6 +493,78 @@ def verify(
 
     console.print("Verification failed.")
     raise typer.Exit(code=1)
+
+
+@app.command()
+def promote(
+    results: Path,
+    attacks: Annotated[
+        Path,
+        typer.Option(help="Attack suite JSON used to produce the results."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(help="Where to write the promoted regression attack suite."),
+    ] = Path("regression-attacks.json"),
+    baseline: Annotated[
+        Path | None,
+        typer.Option(help="Optional baseline results file for regression comparison."),
+    ] = None,
+    min_severity: Annotated[
+        SeverityThresholdOption,
+        typer.Option(help="Minimum severity that should be promoted."),
+    ] = SeverityThresholdOption.high,
+    min_confidence: Annotated[
+        ConfidenceThresholdOption,
+        typer.Option(help="Minimum confidence that should be promoted."),
+    ] = ConfidenceThresholdOption.medium,
+) -> None:
+    """Promote qualifying findings back into a reusable attack suite."""
+    current_results = _load_attack_results_or_error(results, label="current")
+    baseline_results = (
+        _load_attack_results_or_error(baseline, label="baseline") if baseline is not None else None
+    )
+
+    try:
+        attack_suite = load_attack_suite(attacks)
+    except (OSError, ValidationError, ValueError) as exc:
+        raise typer.BadParameter(f"Could not read attacks file '{attacks}': {exc}") from exc
+
+    try:
+        promotion = promote_attack_suite(
+            current_results,
+            attack_suite,
+            baseline=baseline_results,
+            min_severity=min_severity.value,
+            min_confidence=min_confidence.value,
+        )
+    except PromotionError as exc:
+        console.print(f"[red]Promotion error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    out.write_text(
+        promotion.promoted_suite.model_dump_json(indent=2, exclude_none=True),
+        encoding="utf-8",
+    )
+
+    console.print(
+        "Promotion policy: "
+        f"severity >= [bold]{min_severity.value}[/bold], "
+        f"confidence >= [bold]{min_confidence.value}[/bold]."
+    )
+    if promotion.verification.baseline_used:
+        console.print(
+            "Promoted new qualifying attacks against a baseline. "
+            f"Qualifying attacks: {len(promotion.promoted_attack_ids)}."
+        )
+    else:
+        console.print(
+            "Promoted qualifying attacks from the current results only. "
+            f"Qualifying attacks: {len(promotion.promoted_attack_ids)}."
+        )
+    console.print(
+        f"Wrote {len(promotion.promoted_suite.attacks)} promoted attack(s) to [bold]{out}[/bold]."
+    )
 
 
 def main() -> None:
