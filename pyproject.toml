@@ -29,6 +29,9 @@ dev = [
 [project.scripts]
 knives-out = "knives_out.cli:main"
 
+[project.entry-points."knives_out.attack_packs"]
+unexpected-header = "knives_out.example_packs:attack_pack"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/knives_out"]
 

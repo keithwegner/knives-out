@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from knives_out.attack_packs import load_attack_packs
 from knives_out.filtering import filter_attack_suite
 from knives_out.generator import generate_attack_suite
 from knives_out.openapi_loader import load_operations
@@ -89,13 +90,22 @@ def generate(
         list[str] | None,
         typer.Option(help="Exclude attacks for these attack kinds. Repeatable."),
     ] = None,
+    pack: Annotated[
+        list[str] | None,
+        typer.Option(help="Load custom attack packs from installed entry point names. Repeatable."),
+    ] = None,
+    pack_module: Annotated[
+        list[Path] | None,
+        typer.Option(help="Load custom attack packs from local Python module paths. Repeatable."),
+    ] = None,
 ) -> None:
     """Generate a replayable attack suite from an OpenAPI spec.
 
     Filters are applied after attack generation and before the suite is written.
     """
     operations = load_operations(spec)
-    suite = generate_attack_suite(operations, source=str(spec))
+    attack_packs = load_attack_packs(entry_point_names=pack, module_paths=pack_module)
+    suite = generate_attack_suite(operations, source=str(spec), extra_packs=attack_packs)
     suite = filter_attack_suite(
         suite,
         include_operations=operation,
