@@ -4,11 +4,14 @@ ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 CI_DOC = ROOT / "docs" / "ci.md"
 DEV_WORKFLOW = ROOT / ".github" / "workflows" / "dev-environment-example.yml"
+SYNC_WIKI_WORKFLOW = ROOT / ".github" / "workflows" / "sync-wiki.yml"
 
 
 def test_readme_includes_ci_guidance() -> None:
     readme = README.read_text(encoding="utf-8")
 
+    assert "Project wiki:" in readme
+    assert "https://github.com/keithwegner/knives-out/wiki" in readme
     assert "## CI usage" in readme
     assert ".github/workflows/dev-environment-example.yml" in readme
     assert "KNIVES_OUT_BASE_URL" in readme
@@ -45,3 +48,15 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "--baseline previous-results.json" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc
     assert "--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py" in ci_doc
+
+
+def test_sync_wiki_workflow_uses_dedicated_secret_and_sync_script() -> None:
+    workflow = SYNC_WIKI_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "README.md" in workflow
+    assert "docs/**" in workflow
+    assert "scripts/sync_wiki.py" in workflow
+    assert "WIKI_PUSH_TOKEN" in workflow
+    assert "python scripts/sync_wiki.py publish" in workflow
+    assert "github.repository }}.wiki.git" in workflow
