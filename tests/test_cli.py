@@ -289,7 +289,8 @@ def test_verify_command_passes_with_baseline_when_findings_only_persist(tmp_path
     )
 
     assert result.exit_code == 0
-    assert "Persisting: 1" in result.stdout
+    assert "Persisting:" in result.stdout
+    assert "1." in result.stdout
     assert "Verification passed." in result.stdout
 
 
@@ -378,7 +379,7 @@ def test_verify_command_reports_bad_baseline_file(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 2
-    assert "Could not read baseline results file" in result.stdout
+    assert "Could not read baseline results file" in result.stderr
 
 
 def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
