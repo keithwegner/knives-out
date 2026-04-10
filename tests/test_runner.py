@@ -109,6 +109,8 @@ def test_execute_attack_suite_flags_response_schema_mismatch(monkeypatch) -> Non
     result = results.results[0]
     assert result.flagged is True
     assert result.issue == "response_schema_mismatch"
+    assert result.severity == "medium"
+    assert result.confidence == "high"
     assert result.response_schema_status == "201"
     assert result.response_schema_valid is False
     assert result.response_schema_error == "$.id: expected integer, got string"
@@ -185,40 +187,101 @@ def test_execute_attack_suite_skips_unmapped_status_codes(monkeypatch) -> None:
     result = results.results[0]
     assert result.flagged is False
     assert result.issue is None
+    assert result.severity == "none"
+    assert result.confidence == "none"
     assert result.response_schema_status is None
     assert result.response_schema_valid is None
     assert result.response_schema_error is None
 
 
-def test_render_markdown_report_highlights_response_schema_mismatches() -> None:
+def test_execute_attack_suite_scores_server_errors(monkeypatch) -> None:
+    response = httpx.Response(503, text="upstream unavailable")
+    _install_stub_response(monkeypatch, response)
+
+    suite = AttackSuite(source="unit", attacks=[_attack_case(response_schemas={})])
+
+    results = execute_attack_suite(suite, base_url="https://example.com")
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "server_error"
+    assert result.severity == "high"
+    assert result.confidence == "high"
+
+
+def test_render_markdown_report_sorts_flagged_findings_by_score() -> None:
     results = AttackResults(
         source="unit",
         base_url="https://example.com",
         results=[
             AttackResult(
+                attack_id="atk_transport",
+                operation_id="listPets",
+                kind="missing_auth",
+                name="Transport error",
+                method="GET",
+                url="https://example.com/pets",
+                flagged=True,
+                issue="transport_error",
+                severity="low",
+                confidence="low",
+                error="timed out",
+            ),
+            AttackResult(
+                attack_id="atk_unexpected",
+                operation_id="listPets",
+                kind="missing_auth",
+                name="Unexpected success",
+                method="GET",
+                url="https://example.com/pets",
+                status_code=200,
+                flagged=True,
+                issue="unexpected_success",
+                severity="high",
+                confidence="medium",
+            ),
+            AttackResult(
                 attack_id="atk_test",
                 operation_id="createPet",
                 kind="wrong_type_param",
-                name="Test attack",
+                name="Schema mismatch",
                 method="POST",
                 url="https://example.com/pets",
                 status_code=201,
                 flagged=True,
                 issue="response_schema_mismatch",
+                severity="medium",
+                confidence="high",
                 response_schema_status="201",
                 response_schema_valid=False,
                 response_schema_error="$.id: expected integer, got string",
-            )
+            ),
+            AttackResult(
+                attack_id="atk_server",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            ),
         ],
     )
 
     report = render_markdown_report(results)
 
     assert "Response schema mismatches" in report
-    assert "| Attack | Kind | Status | Issue | Schema | URL |" in report
+    assert "| Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |" in report
     assert "response_schema_mismatch" in report
     assert "mismatch" in report
     assert "$.id: expected integer, got string" in report
+    assert report.index("| Server failure |") < report.index("| Unexpected success |")
+    assert report.index("| Unexpected success |") < report.index("| Schema mismatch |")
+    assert report.index("| Schema mismatch |") < report.index("| Transport error |")
 
 
 def test_execute_attack_suite_removes_only_declared_auth_header(monkeypatch) -> None:

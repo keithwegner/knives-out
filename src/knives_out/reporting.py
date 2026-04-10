@@ -3,12 +3,36 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from knives_out.models import AttackResults
+from knives_out.models import AttackResult, AttackResults
+
+SEVERITY_ORDER = {
+    "none": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
+
+CONFIDENCE_ORDER = {
+    "none": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+}
 
 
 def load_attack_results(path: str | Path) -> AttackResults:
     raw = Path(path).read_text(encoding="utf-8")
     return AttackResults.model_validate_json(raw)
+
+
+def _flagged_sort_key(result: AttackResult) -> tuple[int, int, str, str]:
+    return (
+        -SEVERITY_ORDER.get(result.severity, 0),
+        -CONFIDENCE_ORDER.get(result.confidence, 0),
+        result.issue or "",
+        result.name.lower(),
+    )
 
 
 def render_markdown_report(results: AttackResults) -> str:
@@ -39,23 +63,26 @@ def render_markdown_report(results: AttackResults) -> str:
     lines.append("")
     lines.append("## Flagged findings")
     lines.append("")
-    lines.append("| Attack | Kind | Status | Issue | Schema | URL |")
-    lines.append("| --- | --- | ---: | --- | --- | --- |")
+    lines.append("| Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |")
+    lines.append("| --- | --- | ---: | --- | --- | --- | --- | --- |")
 
     found_flagged = False
-    for result in results.results:
-        if not result.flagged:
-            continue
+    flagged_results = sorted(
+        (result for result in results.results if result.flagged),
+        key=_flagged_sort_key,
+    )
+    for result in flagged_results:
         found_flagged = True
         status = str(result.status_code) if result.status_code is not None else "-"
         schema = "mismatch" if result.response_schema_valid is False else "-"
         lines.append(
             f"| {result.name} | {result.kind} | {status} | "
-            f"{result.issue or '-'} | {schema} | `{result.url}` |"
+            f"{result.issue or '-'} | {result.severity} | {result.confidence} | "
+            f"{schema} | `{result.url}` |"
         )
 
     if not found_flagged:
-        lines.append("| None | - | - | - | - | - |")
+        lines.append("| None | - | - | - | - | - | - | - |")
 
     lines.append("")
     lines.append("## Detailed results")
@@ -72,6 +99,8 @@ def render_markdown_report(results: AttackResults) -> str:
             else "- Status: `-`"
         )
         lines.append(f"- Issue: `{result.issue}`" if result.issue else "- Issue: `ok`")
+        lines.append(f"- Severity: `{result.severity}`")
+        lines.append(f"- Confidence: `{result.confidence}`")
         if result.response_schema_status:
             lines.append(f"- Declared response schema: `{result.response_schema_status}`")
         if result.response_schema_valid is True:

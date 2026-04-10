@@ -8,7 +8,23 @@ from urllib.parse import quote
 
 import httpx
 
-from knives_out.models import AttackCase, AttackResult, AttackResults, AttackSuite, ResponseSpec
+from knives_out.models import (
+    AttackCase,
+    AttackResult,
+    AttackResults,
+    AttackSuite,
+    ConfidenceLevel,
+    ResponseSpec,
+    SeverityLevel,
+)
+
+ISSUE_SCORES: dict[str, tuple[SeverityLevel, ConfidenceLevel]] = {
+    "transport_error": ("low", "low"),
+    "no_status": ("low", "low"),
+    "server_error": ("high", "high"),
+    "unexpected_success": ("high", "medium"),
+    "response_schema_mismatch": ("medium", "high"),
+}
 
 
 def load_attack_suite(path: str | Path) -> AttackSuite:
@@ -40,6 +56,16 @@ def evaluate_result(status_code: int | None, error: str | None) -> tuple[bool, s
     if 200 <= status_code < 400:
         return True, "unexpected_success"
     return False, None
+
+
+def score_result(
+    *,
+    flagged: bool,
+    issue: str | None,
+) -> tuple[SeverityLevel, ConfidenceLevel]:
+    if not flagged or issue is None:
+        return "none", "none"
+    return ISSUE_SCORES.get(issue, ("medium", "medium"))
 
 
 def _excerpt(text: str, limit: int = 300) -> str:
@@ -391,6 +417,7 @@ def execute_attack_suite(
                 flagged = True
                 if issue in {None, "unexpected_success"}:
                     issue = "response_schema_mismatch"
+            severity, confidence = score_result(flagged=flagged, issue=issue)
 
             results.append(
                 AttackResult(
@@ -405,6 +432,8 @@ def execute_attack_suite(
                     duration_ms=round(duration_ms, 2),
                     flagged=flagged,
                     issue=issue,
+                    severity=severity,
+                    confidence=confidence,
                     response_excerpt=_excerpt(response.text) if response is not None else None,
                     response_schema_status=response_schema_status,
                     response_schema_valid=response_schema_valid,

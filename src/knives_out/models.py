@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+SeverityLevel = Literal["none", "low", "medium", "high", "critical"]
+ConfidenceLevel = Literal["none", "low", "medium", "high"]
 
 
 class ParameterSpec(BaseModel):
@@ -72,6 +75,8 @@ class AttackResult(BaseModel):
     duration_ms: float | None = None
     flagged: bool = False
     issue: str | None = None
+    severity: SeverityLevel = "none"
+    confidence: ConfidenceLevel = "none"
     response_excerpt: str | None = None
     response_schema_status: str | None = None
     response_schema_valid: bool | None = None
