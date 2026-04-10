@@ -413,3 +413,297 @@ def test_generate_attack_suite_skips_ambiguous_workflow_producers(tmp_path: Path
     suite = generate_attack_suite(operations, source=str(spec), auto_workflows=True)
 
     assert all(attack.type == "request" for attack in suite.attacks)
+
+
+def test_generate_attack_suite_emits_parameter_constraint_mutations(tmp_path: Path) -> None:
+    spec = tmp_path / "parameter-constraints.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Parameter constraints
+              version: 1.0.0
+            paths:
+              /accounts/{accountId}:
+                get:
+                  operationId: getAccount
+                  parameters:
+                    - name: accountId
+                      in: path
+                      required: true
+                      schema:
+                        type: string
+                        format: uuid
+                    - name: limit
+                      in: query
+                      required: false
+                      schema:
+                        type: integer
+                        minimum: 1
+                        maximum: 10
+                    - name: X-Trace
+                      in: header
+                      required: false
+                      schema:
+                        type: string
+                        minLength: 3
+                        maxLength: 5
+                  responses:
+                    '200':
+                      description: Account
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    suite = generate_attack_suite(load_operations(spec), source=str(spec))
+
+    below_minimum = next(
+        attack
+        for attack in suite.attacks
+        if attack.kind == "below_minimum" and "limit" in attack.name
+    )
+    above_maximum = next(
+        attack
+        for attack in suite.attacks
+        if attack.kind == "above_maximum" and "limit" in attack.name
+    )
+    too_short = next(
+        attack
+        for attack in suite.attacks
+        if attack.kind == "too_short" and "X-Trace" in attack.name
+    )
+    too_long = next(
+        attack for attack in suite.attacks if attack.kind == "too_long" and "X-Trace" in attack.name
+    )
+    invalid_format = next(
+        attack
+        for attack in suite.attacks
+        if attack.kind == "invalid_format" and "accountId" in attack.name
+    )
+
+    assert below_minimum.query["limit"] == 0
+    assert above_maximum.query["limit"] == 11
+    assert too_short.headers["X-Trace"] == "aa"
+    assert too_long.headers["X-Trace"] == "aaaaaa"
+    assert invalid_format.path_params["accountId"] == "not-a-uuid"
+
+
+def test_generate_attack_suite_emits_nested_body_constraint_mutations(tmp_path: Path) -> None:
+    spec = tmp_path / "body-constraints.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Body constraints
+              version: 1.0.0
+            paths:
+              /widgets:
+                post:
+                  operationId: createWidget
+                  requestBody:
+                    required: true
+                    content:
+                      application/json:
+                        schema:
+                          type: object
+                          required: [name, count, tags, owner, items]
+                          properties:
+                            name:
+                              type: string
+                              minLength: 3
+                              maxLength: 8
+                            count:
+                              type: integer
+                              minimum: 1
+                              maximum: 5
+                            tags:
+                              type: array
+                              minItems: 1
+                              maxItems: 2
+                              items:
+                                type: string
+                                minLength: 2
+                            owner:
+                              type: object
+                              required: [email]
+                              properties:
+                                email:
+                                  type: string
+                                  format: email
+                            items:
+                              type: array
+                              minItems: 1
+                              items:
+                                type: object
+                                required: [sku]
+                                properties:
+                                  sku:
+                                    type: string
+                                    format: uuid
+                  responses:
+                    '201':
+                      description: created
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    suite = generate_attack_suite(load_operations(spec), source=str(spec))
+
+    below_minimum = next(
+        attack
+        for attack in suite.attacks
+        if attack.kind == "below_minimum" and "body.count" in attack.name
+    )
+    too_long = next(
+        attack
+        for attack in suite.attacks
+        if attack.kind == "too_long" and "body.name" in attack.name
+    )
+    too_few_items = next(
+        attack
+        for attack in suite.attacks
+        if attack.kind == "too_few_items" and "body.tags" in attack.name
+    )
+    invalid_email = next(
+        attack
+        for attack in suite.attacks
+        if attack.kind == "invalid_format" and "body.owner.email" in attack.name
+    )
+    unexpected_property = next(
+        attack
+        for attack in suite.attacks
+        if attack.kind == "unexpected_property" and "request body object" in attack.name
+    )
+    missing_required = next(
+        attack
+        for attack in suite.attacks
+        if attack.kind == "missing_required_property" and "body.items[0].sku" in attack.name
+    )
+
+    assert below_minimum.body_json == {
+        "name": "example",
+        "count": 0,
+        "tags": ["example"],
+        "owner": {"email": "person@example.com"},
+        "items": [{"sku": "00000000-0000-4000-8000-000000000000"}],
+    }
+    assert too_long.body_json["name"] == "aaaaaaaaa"
+    assert too_few_items.body_json["tags"] == []
+    assert invalid_email.body_json["owner"]["email"] == "not-an-email"
+    assert unexpected_property.body_json["unexpectedProperty"] == "unexpected"
+    assert missing_required.body_json["items"] == [{}]
+
+
+def test_generate_attack_suite_skips_constraint_mutations_without_explicit_constraints(
+    tmp_path: Path,
+) -> None:
+    spec = tmp_path / "unconstrained-body.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Unconstrained body
+              version: 1.0.0
+            paths:
+              /notes:
+                post:
+                  operationId: createNote
+                  requestBody:
+                    required: true
+                    content:
+                      application/json:
+                        schema:
+                          type: object
+                          required: [title]
+                          properties:
+                            title:
+                              type: string
+                            metadata:
+                              type: object
+                              properties:
+                                note:
+                                  type: string
+                  responses:
+                    '201':
+                      description: created
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    suite = generate_attack_suite(load_operations(spec), source=str(spec))
+    constraint_kinds = {
+        "below_minimum",
+        "above_maximum",
+        "too_short",
+        "too_long",
+        "too_few_items",
+        "too_many_items",
+        "invalid_format",
+        "unexpected_property",
+        "missing_required_property",
+    }
+
+    assert all(
+        not (attack.kind in constraint_kinds and "body.metadata.note" in attack.name)
+        for attack in suite.attacks
+    )
+
+
+def test_generate_attack_suite_keeps_constraint_mutation_ids_deterministic(tmp_path: Path) -> None:
+    spec = tmp_path / "deterministic-constraints.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Deterministic constraints
+              version: 1.0.0
+            paths:
+              /widgets:
+                post:
+                  operationId: createWidget
+                  requestBody:
+                    required: true
+                    content:
+                      application/json:
+                        schema:
+                          type: object
+                          required: [name]
+                          properties:
+                            name:
+                              type: string
+                              minLength: 3
+                              maxLength: 8
+                  responses:
+                    '201':
+                      description: created
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    operations = load_operations(spec)
+    first = generate_attack_suite(operations, source=str(spec))
+    second = generate_attack_suite(operations, source=str(spec))
+    constraint_kinds = {
+        "below_minimum",
+        "above_maximum",
+        "too_short",
+        "too_long",
+        "too_few_items",
+        "too_many_items",
+        "invalid_format",
+        "unexpected_property",
+        "missing_required_property",
+    }
+
+    first_ids = sorted(attack.id for attack in first.attacks if attack.kind in constraint_kinds)
+    second_ids = sorted(attack.id for attack in second.attacks if attack.kind in constraint_kinds)
+
+    assert first_ids == second_ids

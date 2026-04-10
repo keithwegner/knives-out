@@ -20,6 +20,13 @@ from knives_out.workflow_packs import LoadedWorkflowPack
 
 MAX_SAMPLE_DEPTH = 4
 _SCALAR_SCHEMA_TYPES = {"string", "integer", "number", "boolean"}
+_INVALID_FORMAT_VALUES = {
+    "uuid": "not-a-uuid",
+    "email": "not-an-email",
+    "date": "2026-13-40",
+    "date-time": "not-a-date-time",
+    "uri": "not-a-uri",
+}
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,18 @@ class _BindingAssignment:
     binding: _TargetBinding
     extract: _ExtractCandidate
     exact_name: bool
+
+
+@dataclass(frozen=True)
+class _BodyMutation:
+    kind: str
+    target: str
+    name: str
+    description: str
+    action: str
+    path: tuple[str | int, ...]
+    value: Any = None
+    property_name: str | None = None
 
 
 def _normalize_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
@@ -258,6 +277,521 @@ def _escape_json_pointer_token(token: str) -> str:
 def _name_tokens(name: str) -> tuple[str, ...]:
     expanded = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
     return tuple(token.lower() for token in re.split(r"[^A-Za-z0-9]+", expanded) if token)
+
+
+def _numeric_step(schema: dict[str, Any]) -> int | float:
+    return 1 if _schema_type(schema) == "integer" else 1.0
+
+
+def _below_minimum_value(schema: dict[str, Any] | None) -> Any | None:
+    schema = _normalize_schema(schema)
+    exclusive_minimum = schema.get("exclusiveMinimum")
+    minimum = schema.get("minimum")
+    step = _numeric_step(schema)
+
+    if isinstance(exclusive_minimum, bool):
+        if exclusive_minimum and isinstance(minimum, (int, float)):
+            return int(minimum) if _schema_type(schema) == "integer" else minimum
+        exclusive_minimum = None
+    if isinstance(exclusive_minimum, (int, float)):
+        return int(exclusive_minimum) if _schema_type(schema) == "integer" else exclusive_minimum
+    if isinstance(minimum, (int, float)):
+        value = minimum - step
+        return int(value) if _schema_type(schema) == "integer" else value
+    return None
+
+
+def _above_maximum_value(schema: dict[str, Any] | None) -> Any | None:
+    schema = _normalize_schema(schema)
+    exclusive_maximum = schema.get("exclusiveMaximum")
+    maximum = schema.get("maximum")
+    step = _numeric_step(schema)
+
+    if isinstance(exclusive_maximum, bool):
+        if exclusive_maximum and isinstance(maximum, (int, float)):
+            return int(maximum) if _schema_type(schema) == "integer" else maximum
+        exclusive_maximum = None
+    if isinstance(exclusive_maximum, (int, float)):
+        return int(exclusive_maximum) if _schema_type(schema) == "integer" else exclusive_maximum
+    if isinstance(maximum, (int, float)):
+        value = maximum + step
+        return int(value) if _schema_type(schema) == "integer" else value
+    return None
+
+
+def _too_short_value(schema: dict[str, Any] | None) -> str | None:
+    schema = _normalize_schema(schema)
+    min_length = schema.get("minLength")
+    if not isinstance(min_length, int) or min_length <= 0:
+        return None
+    return "a" * (min_length - 1)
+
+
+def _too_long_value(schema: dict[str, Any] | None) -> str | None:
+    schema = _normalize_schema(schema)
+    max_length = schema.get("maxLength")
+    if not isinstance(max_length, int) or max_length < 0:
+        return None
+    return "a" * (max_length + 1)
+
+
+def _array_with_length(item_schema: dict[str, Any] | None, length: int) -> list[Any]:
+    return [sample_value(item_schema) for _ in range(max(length, 0))]
+
+
+def _too_few_items_value(schema: dict[str, Any] | None) -> list[Any] | None:
+    schema = _normalize_schema(schema)
+    min_items = schema.get("minItems")
+    if not isinstance(min_items, int) or min_items <= 0:
+        return None
+    return _array_with_length(schema.get("items"), min_items - 1)
+
+
+def _too_many_items_value(schema: dict[str, Any] | None) -> list[Any] | None:
+    schema = _normalize_schema(schema)
+    max_items = schema.get("maxItems")
+    if not isinstance(max_items, int) or max_items < 0:
+        return None
+    return _array_with_length(schema.get("items"), max_items + 1)
+
+
+def _invalid_format_value(schema: dict[str, Any] | None) -> str | None:
+    schema = _normalize_schema(schema)
+    if _schema_type(schema) != "string":
+        return None
+    return _INVALID_FORMAT_VALUES.get(schema.get("format"))
+
+
+def _json_content_type(content_type: str | None) -> bool:
+    return "json" in (content_type or "").split(";", 1)[0].strip().lower()
+
+
+def _body_path_label(path: tuple[str | int, ...]) -> str:
+    if not path:
+        return "body"
+
+    label = "body"
+    for token in path:
+        if isinstance(token, int):
+            label += f"[{token}]"
+        else:
+            label += f".{token}"
+    return label
+
+
+def _body_field_reference(path: tuple[str | int, ...]) -> str:
+    if not path:
+        return "request body"
+    return f"body field '{_body_path_label(path)}'"
+
+
+def _body_object_reference(path: tuple[str | int, ...]) -> str:
+    if not path:
+        return "request body object"
+    return f"body object '{_body_path_label(path)}'"
+
+
+def _json_value_at_path(value: Any, path: tuple[str | int, ...]) -> Any:
+    current = value
+    for token in path:
+        current = current[token]
+    return current
+
+
+def _replace_json_value(value: Any, path: tuple[str | int, ...], replacement: Any) -> Any:
+    if not path:
+        return replacement
+
+    parent = _json_value_at_path(value, path[:-1])
+    token = path[-1]
+    parent[token] = replacement
+    return value
+
+
+def _remove_json_value(value: Any, path: tuple[str | int, ...]) -> Any:
+    parent = _json_value_at_path(value, path[:-1])
+    token = path[-1]
+    if isinstance(token, int):
+        del parent[token]
+    else:
+        parent.pop(token, None)
+    return value
+
+
+def _next_unexpected_property_name(schema: dict[str, Any], value: dict[str, Any]) -> str:
+    candidate = "unexpectedProperty"
+    existing = set(schema.get("properties", {})) | set(value)
+    suffix = 1
+    while candidate in existing:
+        suffix += 1
+        candidate = f"unexpectedProperty{suffix}"
+    return candidate
+
+
+def _add_json_property(
+    value: Any,
+    path: tuple[str | int, ...],
+    property_name: str,
+    property_value: Any,
+) -> Any:
+    target = _json_value_at_path(value, path) if path else value
+    if not isinstance(target, dict):
+        raise ValueError("Unexpected property mutations require a dict target.")
+    target[property_name] = property_value
+    return value
+
+
+def _collect_body_mutations(
+    schema: dict[str, Any] | None,
+    value: Any,
+    *,
+    path: tuple[str | int, ...] = (),
+) -> list[_BodyMutation]:
+    schema = _normalize_schema(schema)
+    schema_type = _schema_type(schema)
+    mutations: list[_BodyMutation] = []
+    field_reference = _body_field_reference(path)
+
+    below_minimum = _below_minimum_value(schema)
+    if below_minimum is not None:
+        mutations.append(
+            _BodyMutation(
+                kind="below_minimum",
+                target=_body_path_label(path),
+                name=f"Below minimum {field_reference}",
+                description=f"Uses a value below the declared minimum for {field_reference}.",
+                action="replace",
+                path=path,
+                value=below_minimum,
+            )
+        )
+
+    above_maximum = _above_maximum_value(schema)
+    if above_maximum is not None:
+        mutations.append(
+            _BodyMutation(
+                kind="above_maximum",
+                target=_body_path_label(path),
+                name=f"Above maximum {field_reference}",
+                description=f"Uses a value above the declared maximum for {field_reference}.",
+                action="replace",
+                path=path,
+                value=above_maximum,
+            )
+        )
+
+    too_short = _too_short_value(schema)
+    if too_short is not None:
+        mutations.append(
+            _BodyMutation(
+                kind="too_short",
+                target=_body_path_label(path),
+                name=f"Too short {field_reference}",
+                description=f"Uses a too-short value for {field_reference}.",
+                action="replace",
+                path=path,
+                value=too_short,
+            )
+        )
+
+    too_long = _too_long_value(schema)
+    if too_long is not None:
+        mutations.append(
+            _BodyMutation(
+                kind="too_long",
+                target=_body_path_label(path),
+                name=f"Too long {field_reference}",
+                description=f"Uses a too-long value for {field_reference}.",
+                action="replace",
+                path=path,
+                value=too_long,
+            )
+        )
+
+    invalid_format = _invalid_format_value(schema)
+    if invalid_format is not None:
+        mutations.append(
+            _BodyMutation(
+                kind="invalid_format",
+                target=_body_path_label(path),
+                name=f"Invalid format {field_reference}",
+                description=f"Uses an invalid formatted value for {field_reference}.",
+                action="replace",
+                path=path,
+                value=invalid_format,
+            )
+        )
+
+    if schema_type == "array":
+        too_few_items = _too_few_items_value(schema)
+        if too_few_items is not None:
+            mutations.append(
+                _BodyMutation(
+                    kind="too_few_items",
+                    target=_body_path_label(path),
+                    name=f"Too few items in {field_reference}",
+                    description=f"Uses too few items for {field_reference}.",
+                    action="replace",
+                    path=path,
+                    value=too_few_items,
+                )
+            )
+
+        too_many_items = _too_many_items_value(schema)
+        if too_many_items is not None:
+            mutations.append(
+                _BodyMutation(
+                    kind="too_many_items",
+                    target=_body_path_label(path),
+                    name=f"Too many items in {field_reference}",
+                    description=f"Uses too many items for {field_reference}.",
+                    action="replace",
+                    path=path,
+                    value=too_many_items,
+                )
+            )
+
+        if isinstance(value, list) and value:
+            mutations.extend(
+                _collect_body_mutations(schema.get("items"), value[0], path=(*path, 0))
+            )
+        return mutations
+
+    if schema_type == "object" or schema.get("properties"):
+        properties = schema.get("properties", {})
+        if not isinstance(value, dict):
+            return mutations
+
+        if properties:
+            property_name = _next_unexpected_property_name(schema, value)
+            object_reference = _body_object_reference(path)
+            mutations.append(
+                _BodyMutation(
+                    kind="unexpected_property",
+                    target=_body_path_label(path),
+                    name=f"Unexpected property in {object_reference}",
+                    description=(
+                        f"Adds unexpected property '{property_name}' to {object_reference}."
+                    ),
+                    action="add_property",
+                    path=path,
+                    property_name=property_name,
+                    value="unexpected",
+                )
+            )
+
+        for required_name in schema.get("required", []):
+            if required_name not in value:
+                continue
+            property_path = (*path, required_name)
+            property_reference = _body_field_reference(property_path)
+            mutations.append(
+                _BodyMutation(
+                    kind="missing_required_property",
+                    target=_body_path_label(property_path),
+                    name=f"Missing required {property_reference}",
+                    description=f"Removes required {property_reference}.",
+                    action="remove",
+                    path=property_path,
+                )
+            )
+
+        for property_name, property_schema in properties.items():
+            if property_name not in value:
+                continue
+            mutations.extend(
+                _collect_body_mutations(
+                    property_schema,
+                    value[property_name],
+                    path=(*path, property_name),
+                )
+            )
+
+    return mutations
+
+
+def _body_mutation_attack(
+    operation: OperationSpec,
+    mutation: _BodyMutation,
+    *,
+    path_params: dict[str, Any],
+    query_params: dict[str, Any],
+    headers: dict[str, str],
+    body: Any,
+) -> AttackCase:
+    mutated_body = deepcopy(body)
+    if mutation.action == "replace":
+        mutated_body = _replace_json_value(mutated_body, mutation.path, deepcopy(mutation.value))
+    elif mutation.action == "remove":
+        mutated_body = _remove_json_value(mutated_body, mutation.path)
+    elif mutation.action == "add_property":
+        mutated_body = _add_json_property(
+            mutated_body,
+            mutation.path,
+            mutation.property_name or "unexpectedProperty",
+            deepcopy(mutation.value),
+        )
+    else:
+        raise ValueError(f"Unknown body mutation action: {mutation.action}")
+
+    return AttackCase(
+        id=attack_id(operation.operation_id, mutation.kind, mutation.target),
+        name=mutation.name,
+        kind=mutation.kind,
+        operation_id=operation.operation_id,
+        method=operation.method,
+        path=operation.path,
+        tags=_tags_for_attack(operation),
+        description=mutation.description,
+        path_params=path_params,
+        query=query_params,
+        headers=headers,
+        body_json=mutated_body,
+        response_schemas=_response_schemas_for_attack(operation),
+    )
+
+
+def _parameter_constraint_attacks(
+    operation: OperationSpec,
+    parameter: ParameterSpec,
+    *,
+    base_path_params: dict[str, Any],
+    base_query_params: dict[str, Any],
+    base_headers: dict[str, str],
+    base_body: Any | None,
+) -> list[AttackCase]:
+    schema = _normalize_schema(parameter.schema_def)
+    if _schema_type(schema) not in {"string", "integer", "number"}:
+        return []
+
+    mutations: list[tuple[str, Any, str, str]] = []
+    parameter_reference = f"{parameter.location} parameter '{parameter.name}'"
+
+    below_minimum = _below_minimum_value(schema)
+    if below_minimum is not None:
+        mutations.append(
+            (
+                "below_minimum",
+                below_minimum,
+                f"Below minimum {parameter_reference}",
+                f"Uses a value below the declared minimum for {parameter_reference}.",
+            )
+        )
+
+    above_maximum = _above_maximum_value(schema)
+    if above_maximum is not None:
+        mutations.append(
+            (
+                "above_maximum",
+                above_maximum,
+                f"Above maximum {parameter_reference}",
+                f"Uses a value above the declared maximum for {parameter_reference}.",
+            )
+        )
+
+    too_short = _too_short_value(schema)
+    if too_short is not None:
+        mutations.append(
+            (
+                "too_short",
+                too_short,
+                f"Too short {parameter_reference}",
+                f"Uses a too-short value for {parameter_reference}.",
+            )
+        )
+
+    too_long = _too_long_value(schema)
+    if too_long is not None:
+        mutations.append(
+            (
+                "too_long",
+                too_long,
+                f"Too long {parameter_reference}",
+                f"Uses a too-long value for {parameter_reference}.",
+            )
+        )
+
+    invalid_format = _invalid_format_value(schema)
+    if invalid_format is not None:
+        mutations.append(
+            (
+                "invalid_format",
+                invalid_format,
+                f"Invalid format {parameter_reference}",
+                f"Uses an invalid formatted value for {parameter_reference}.",
+            )
+        )
+
+    attacks: list[AttackCase] = []
+    for kind, value, name, description in mutations:
+        path_params, query_params, headers, body = _copy_context(
+            base_path_params,
+            base_query_params,
+            base_headers,
+            base_body,
+        )
+        if parameter.location == "path":
+            path_params[parameter.name] = value
+        elif parameter.location == "query":
+            query_params[parameter.name] = value
+        elif parameter.location == "header":
+            headers[parameter.name] = str(value)
+        else:
+            continue
+
+        attacks.append(
+            AttackCase(
+                id=attack_id(operation.operation_id, kind, _parameter_target_label(parameter)),
+                name=name,
+                kind=kind,
+                operation_id=operation.operation_id,
+                method=operation.method,
+                path=operation.path,
+                tags=_tags_for_attack(operation),
+                description=description,
+                path_params=path_params,
+                query=query_params,
+                headers=headers,
+                body_json=body,
+                response_schemas=_response_schemas_for_attack(operation),
+            )
+        )
+
+    return attacks
+
+
+def _body_constraint_attacks(
+    operation: OperationSpec,
+    *,
+    base_path_params: dict[str, Any],
+    base_query_params: dict[str, Any],
+    base_headers: dict[str, str],
+    base_body: Any | None,
+) -> list[AttackCase]:
+    if not _json_content_type(operation.request_body_content_type) or base_body is None:
+        return []
+
+    mutations = _collect_body_mutations(operation.request_body_schema, base_body)
+    attacks: list[AttackCase] = []
+    for mutation in mutations:
+        path_params, query_params, headers, body = _copy_context(
+            base_path_params,
+            base_query_params,
+            base_headers,
+            base_body,
+        )
+        attacks.append(
+            _body_mutation_attack(
+                operation,
+                mutation,
+                path_params=path_params,
+                query_params=query_params,
+                headers=headers,
+                body=body,
+            )
+        )
+
+    return attacks
 
 
 def _match_names(source_name: str, target_name: str) -> tuple[bool, bool]:
@@ -525,6 +1059,17 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 )
             )
 
+        attacks.extend(
+            _parameter_constraint_attacks(
+                operation,
+                parameter,
+                base_path_params=base_path_params,
+                base_query_params=base_query_params,
+                base_headers=base_headers,
+                base_body=base_body,
+            )
+        )
+
         path_params, query_params, headers, body = _copy_context(
             base_path_params, base_query_params, base_headers, base_body
         )
@@ -643,6 +1188,16 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 response_schemas=_response_schemas_for_attack(operation),
             )
         )
+
+    attacks.extend(
+        _body_constraint_attacks(
+            operation,
+            base_path_params=base_path_params,
+            base_query_params=base_query_params,
+            base_headers=base_headers,
+            base_body=base_body,
+        )
+    )
 
     if operation.auth_required and (operation.auth_header_names or operation.auth_query_names):
         path_params, query_params, headers, body = _copy_context(
