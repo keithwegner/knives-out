@@ -52,6 +52,9 @@ class BuiltInAuthPlugin(RuntimePlugin):
             context.state[self._state_key] = bundle
         return bundle
 
+    def _request_key(self, request: PreparedRequest) -> str:
+        return f"{request.phase}:{request.attack_id}"
+
     def _template_values(self, bundle: dict[str, Any]) -> dict[str, Any]:
         return dict(bundle.get("values") or {})
 
@@ -244,6 +247,7 @@ class BuiltInAuthPlugin(RuntimePlugin):
             return True
         except (RuntimeError, ValueError, httpx.HTTPError) as exc:
             bundle["last_error"] = str(exc)
+            bundle["client_id"] = id(context.client)
             bundle.pop("session_ready", None)
             bundle.pop("token", None)
             bundle.pop("expires_at", None)
@@ -259,6 +263,12 @@ class BuiltInAuthPlugin(RuntimePlugin):
 
     def _ensure_ready(self, context: RuntimeContext, *, trigger: str) -> bool:
         bundle = self._bundle(context)
+        if (
+            trigger == "request"
+            and bundle.get("last_error")
+            and bundle.get("client_id") == id(context.client)
+        ):
+            return False
         if self.config.strategy == "login_form_cookie":
             if bundle.get("session_ready") and bundle.get("client_id") == id(context.client):
                 return True
@@ -278,9 +288,14 @@ class BuiltInAuthPlugin(RuntimePlugin):
         self._ensure_ready(context, trigger="workflow")
 
     def before_request(self, request: PreparedRequest, context: RuntimeContext) -> None:
+        bundle = self._bundle(context)
+        request_key = self._request_key(request)
+        if bundle.get("active_request_key") != request_key:
+            bundle["active_request_key"] = request_key
+            bundle.pop("retried_request_key", None)
         self._ensure_ready(context, trigger="request")
         if self.config.strategy != "login_form_cookie":
-            self._inject_token(request, self._bundle(context))
+            self._inject_token(request, bundle)
 
     def after_request(
         self,
@@ -288,7 +303,6 @@ class BuiltInAuthPlugin(RuntimePlugin):
         context: RuntimeContext,
         execution: RequestExecution,
     ) -> None:
-        del request
         if (
             execution.response is None
             or execution.response.status_code != 401
@@ -297,7 +311,13 @@ class BuiltInAuthPlugin(RuntimePlugin):
             return
 
         bundle = self._bundle(context)
+        if bundle.get("retried_request_key") == self._request_key(request):
+            return
         if bundle.get("retry_in_progress"):
+            return
+        if bundle.get("last_error") and bundle.get("token") is None and not bundle.get(
+            "session_ready"
+        ):
             return
 
         bundle["retry_in_progress"] = True
@@ -307,6 +327,7 @@ class BuiltInAuthPlugin(RuntimePlugin):
             bundle["retry_in_progress"] = False
 
         if refreshed:
+            bundle["retried_request_key"] = self._request_key(request)
             execution.retry_requested = True
 
 

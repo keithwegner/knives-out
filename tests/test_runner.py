@@ -548,7 +548,7 @@ def test_render_markdown_report_shows_auth_diagnostics() -> None:
 
 
 def test_execute_attack_suite_applies_static_bearer_auth_config(monkeypatch) -> None:
-    response = httpx.Response(401, text="missing auth")
+    response = httpx.Response(422, text="invalid input")
     client = _install_recording_client(monkeypatch, response)
     suite = AttackSuite(source="unit", attacks=[_attack_case(response_schemas={})])
 
@@ -577,7 +577,7 @@ def test_execute_attack_suite_refreshes_bearer_token_on_401(monkeypatch) -> None
         if request["url"] == "https://example.com/oauth/token":
             return httpx.Response(
                 200,
-                json={"access_token": tokens.pop(0), "expires_in": 1},
+                json={"access_token": tokens.pop(0), "expires_in": 3600},
             )
         authorization = (request.get("headers") or {}).get("Authorization")
         if authorization == "Bearer expired-token":
