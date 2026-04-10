@@ -25,6 +25,9 @@ def test_readme_includes_ci_guidance() -> None:
     assert "--auto-workflows" in readme
     assert "--tag orders" in readme
     assert "--path /draft-orders/{draftId}" in readme
+    assert "knives-out report results.json --format html" in readme
+    assert "--artifact-root artifacts" in readme
+    assert "report.html" in readme
     assert "examples/openapi/storefront.yaml" in readme
     assert "examples/workflow_packs/listed_pet_lookup.py" in readme
 
@@ -45,6 +48,10 @@ def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     assert "--profile anonymous" in workflow
     assert 'knives-out run attacks.json "${args[@]}"' in workflow
     assert "knives-out report results.json --out report.md" in workflow
+    assert (
+        "knives-out report results.json --format html --artifact-root artifacts --out report.html"
+        in workflow
+    )
     assert "knives-out report results.json \\" in workflow
     assert "knives-out verify results.json" in workflow
     assert "knives-out triage results.json --out .knives-out-ignore.yml" in workflow
@@ -58,11 +65,13 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
 
     assert "results.json" in ci_doc
     assert "report.md" in ci_doc
+    assert "report.html" in ci_doc
     assert "artifacts/" in ci_doc
     assert "Simple gating with no baseline" in ci_doc
     assert "Baseline-aware gating" in ci_doc
     assert "Optional: checked-in suppressions" in ci_doc
     assert "Optional: multi-profile authorization runs" in ci_doc
+    assert "Optional: HTML report and artifact index" in ci_doc
     assert "examples/auth_profiles/anonymous-user-admin.yml" in ci_doc
     assert "knives-out triage results.json --out .knives-out-ignore.yml" in ci_doc
     assert ".knives-out-ignore.yml" in ci_doc
@@ -73,6 +82,9 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "Promote qualifying findings" in ci_doc
     assert "pytest --cov=src/knives_out --cov-report=term-missing" in ci_doc
     assert "--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py" in ci_doc
+    assert "--format html" in ci_doc
+    assert "--artifact-root artifacts" in ci_doc
+    assert "--out report.html" in ci_doc
 
 
 def test_sync_wiki_workflow_uses_dedicated_secret_and_sync_script() -> None:

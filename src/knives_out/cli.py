@@ -21,7 +21,11 @@ from knives_out.profiles import (
     select_auth_profiles,
 )
 from knives_out.promotion import PromotionError, promote_attack_suite
-from knives_out.reporting import load_attack_results, render_markdown_report
+from knives_out.reporting import (
+    load_attack_results,
+    render_html_report,
+    render_markdown_report,
+)
 from knives_out.runner import (
     execute_attack_suite,
     execute_attack_suite_profiles,
@@ -58,6 +62,11 @@ class ConfidenceThresholdOption(StrEnum):
     low = "low"
     medium = "medium"
     high = "high"
+
+
+class ReportFormatOption(StrEnum):
+    markdown = "markdown"
+    html = "html"
 
 
 def _parse_key_value(items: list[str] | None, *, separator: str) -> dict[str, Any]:
@@ -533,27 +542,44 @@ def report(
     ] = None,
     out: Annotated[
         Path | None,
-        typer.Option(help="Optional Markdown output file."),
+        typer.Option(help="Optional report output file."),
+    ] = None,
+    format: Annotated[
+        ReportFormatOption,
+        typer.Option(help="Report output format."),
+    ] = ReportFormatOption.markdown,
+    artifact_root: Annotated[
+        Path | None,
+        typer.Option(help="Optional artifact directory to index and link in HTML reports."),
     ] = None,
 ) -> None:
-    """Render a Markdown report from a results file."""
+    """Render a report from a results file."""
     attack_results = _load_attack_results_or_error(results, label="current")
     baseline_results = (
         _load_attack_results_or_error(baseline, label="baseline") if baseline is not None else None
     )
     suppressions_path, suppression_rules = _load_suppressions_or_error(suppressions)
-    markdown = render_markdown_report(
-        attack_results,
-        baseline=baseline_results,
-        suppressions=suppression_rules,
-    )
+
+    if format is ReportFormatOption.html:
+        rendered = render_html_report(
+            attack_results,
+            baseline=baseline_results,
+            suppressions=suppression_rules,
+            artifact_root=artifact_root,
+        )
+    else:
+        rendered = render_markdown_report(
+            attack_results,
+            baseline=baseline_results,
+            suppressions=suppression_rules,
+        )
 
     if out is None:
         _print_suppression_summary(suppressions_path, suppression_rules)
-        console.print(markdown)
+        console.print(rendered)
         return
 
-    out.write_text(markdown, encoding="utf-8")
+    out.write_text(rendered, encoding="utf-8")
     _print_suppression_summary(suppressions_path, suppression_rules)
     console.print(f"Wrote report to [bold]{out}[/bold].")
 
