@@ -1,0 +1,34 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+type Query {
+  book(id: ID!): Book
+  books(limit: Int, genre: Genre): [Book!]!
+}
+
+type Mutation {
+  createBook(input: CreateBookInput!): Book!
+  rateBook(id: ID!, rating: Int!): Book!
+}
+
+type Book {
+  id: ID!
+  title: String!
+  genre: Genre!
+  rating: Int
+}
+
+input CreateBookInput {
+  title: String!
+  genre: Genre!
+  rating: Int
+  tags: [String!]
+}
+
+enum Genre {
+  FICTION
+  NONFICTION
+  REFERENCE
+}

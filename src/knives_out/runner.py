@@ -137,13 +137,43 @@ def _remove_header_names(headers: dict[str, str], names: list[str]) -> dict[str,
     return {key: value for key, value in headers.items() if key.lower() not in lowered}
 
 
-def evaluate_result(status_code: int | None, error: str | None) -> tuple[bool, str | None]:
+def _response_has_graphql_errors(response: httpx.Response) -> bool:
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    return isinstance(errors, list) and bool(errors)
+
+
+def _response_matches_expected(
+    response: httpx.Response,
+    expected_outcomes: list[str],
+) -> bool:
+    if _status_matches_expected(response.status_code, expected_outcomes):
+        return True
+    return any(
+        expected.strip().lower() == "graphql_error" and _response_has_graphql_errors(response)
+        for expected in expected_outcomes
+    )
+
+
+def evaluate_result(
+    status_code: int | None,
+    error: str | None,
+    *,
+    response: httpx.Response | None = None,
+    expected_outcomes: list[str] | None = None,
+) -> tuple[bool, str | None]:
     if error:
         return True, "transport_error"
     if status_code is None:
         return True, "no_status"
     if 500 <= status_code < 600:
         return True, "server_error"
+    if response is not None and _response_matches_expected(response, expected_outcomes or ["4xx"]):
+        return False, None
     if 200 <= status_code < 400:
         return True, "unexpected_success"
     return False, None
@@ -712,6 +742,8 @@ def _request_result(
     flagged, issue = evaluate_result(
         execution.response.status_code if execution.response else None,
         execution.error,
+        response=execution.response,
+        expected_outcomes=attack.expected_outcomes,
     )
     response_schema_status: str | None = None
     response_schema_valid: bool | None = None

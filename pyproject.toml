@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "knives-out"
 version = "0.1.0"
-description = "Adversarial testing for APIs from OpenAPI specs."
+description = "Adversarial testing for APIs from OpenAPI and GraphQL schemas."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -13,6 +13,7 @@ authors = [
   { name = "Keith Wegner" }
 ]
 dependencies = [
+  "graphql-core>=3.2.6",
   "httpx>=0.27.0",
   "pydantic>=2.8.0",
   "PyYAML>=6.0.2",

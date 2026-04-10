@@ -26,6 +26,7 @@ class OperationSpec(BaseModel):
     operation_id: str
     method: str
     path: str
+    protocol: Literal["openapi", "graphql"] = "openapi"
     summary: str | None = None
     tags: list[str] = Field(default_factory=list)
     parameters: list[ParameterSpec] = Field(default_factory=list)
@@ -36,6 +37,9 @@ class OperationSpec(BaseModel):
     auth_header_names: list[str] = Field(default_factory=list)
     auth_query_names: list[str] = Field(default_factory=list)
     response_schemas: dict[str, ResponseSpec] = Field(default_factory=dict)
+    graphql_operation_type: Literal["query", "mutation"] | None = None
+    graphql_document: str | None = None
+    graphql_variables_schema: dict[str, Any] | None = None
 
 
 class PreflightWarning(BaseModel):

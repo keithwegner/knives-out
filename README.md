@@ -12,12 +12,13 @@ It helps developers break their APIs on purpose before someone else does.
 
 ## What it does
 
-Given an OpenAPI document, `knives-out` can:
+Given an OpenAPI or GraphQL schema, `knives-out` can:
 
 - inspect the operations in the spec
 - generate replayable negative test cases
 - generate schema-aware mutation attacks from declared constraints
 - optionally chain setup requests into replayable workflow attacks
+- generate GraphQL query and mutation attacks from SDL or introspection output
 - load auth/session plugins for bearer tokens, login flows, and shared sessions
 - execute the same suite across named auth profiles and compare their outcomes
 - run those attacks against a live base URL
@@ -29,7 +30,7 @@ Given an OpenAPI document, `knives-out` can:
 
 The initial focus is narrow by design:
 
-- OpenAPI input
+- OpenAPI and GraphQL input
 - replayable JSON artifacts
 - deterministic attack generation
 - CI-friendly output
@@ -50,6 +51,7 @@ The starter scaffold generates a first wave of useful negative tests:
 - malformed JSON bodies
 - missing auth headers or query credentials when the spec declares security
 - opt-in setup-plus-terminal workflow attacks that reuse extracted response values
+- GraphQL variable type coercion, required-variable removal, and invalid enum values
 
 This is not a full fuzzing engine yet. It is a structured attack generator, runner, and CI gate.
 
@@ -66,7 +68,6 @@ That makes the architecture easier to evolve further with:
 - custom attack packs
 - deeper stateful workflows
 - LLM application testing
-- GraphQL support
 - richer CI policies
 - protocol expansion beyond OpenAPI REST
 
@@ -83,6 +84,7 @@ Inspect the sample specs:
 ```bash
 knives-out inspect examples/openapi/petstore.yaml
 knives-out inspect examples/openapi/storefront.yaml --tag orders
+knives-out inspect examples/graphql/library.graphql
 ```
 
 Generate attacks:
@@ -90,6 +92,15 @@ Generate attacks:
 ```bash
 knives-out generate examples/openapi/petstore.yaml --out attacks.json
 knives-out generate examples/openapi/storefront.yaml --tag orders --out attacks.json
+knives-out generate examples/graphql/library.graphql --out graphql-attacks.json
+```
+
+If your GraphQL endpoint is not `/graphql`, pass it during inspection or generation:
+
+```bash
+knives-out generate examples/graphql/library.graphql \
+  --graphql-endpoint /api/graphql \
+  --out graphql-attacks.json
 ```
 
 Opt in to built-in stateful workflows:
@@ -198,6 +209,8 @@ credentials on `--header` or `--query`, or move up to
 to keep only the highest-signal regressions around, follow `verify` with
 `knives-out promote results.json --attacks attacks.json`. See `docs/ci.md` for the sample
 workflow, secret setup, filtering patterns, baseline-aware CI flows, and checked-in suppressions.
+GraphQL schemas follow the same `inspect` / `generate` / `run` / `report` / `verify` flow, with
+`generate` automatically emitting variable-coercion attacks from SDL or introspection input.
 If you keep a `.knives-out-ignore.yml` file in the repo root, `report`, `verify`, and `promote`
 will load it automatically. Use `knives-out triage results.json` to seed new entries when you want
 to capture known findings without hand-writing YAML. For authorization-focused regression coverage,
@@ -208,10 +221,16 @@ you can also run one suite across `anonymous`, `user`, and `admin` profiles with
 
 ### `inspect`
 
-Shows a summary of operations discovered in an OpenAPI document.
+Shows a summary of operations discovered in an OpenAPI document or GraphQL schema.
 
 ```bash
 knives-out inspect path/to/openapi.yaml
+```
+
+GraphQL SDL or introspection JSON works too:
+
+```bash
+knives-out inspect examples/graphql/library.graphql --graphql-endpoint /graphql
 ```
 
 `inspect` surfaces preflight warnings for spec gaps such as missing request schemas, vague
@@ -227,10 +246,16 @@ knives-out inspect examples/openapi/storefront.yaml \
 
 ### `generate`
 
-Builds an `AttackSuite` JSON file from an OpenAPI document.
+Builds an `AttackSuite` JSON file from an OpenAPI document or GraphQL schema.
 
 ```bash
 knives-out generate path/to/openapi.yaml --out attacks.json
+```
+
+GraphQL SDL or introspection JSON uses the same command:
+
+```bash
+knives-out generate examples/graphql/library.graphql --out graphql-attacks.json
 ```
 
 `generate` echoes the same preflight warnings as `inspect` because many CI flows skip an explicit
@@ -600,11 +625,13 @@ knives-out run attacks.json \
 
 ## Roadmap
 
-The current direction is still intentionally modest:
+The previously planned adoption and GraphQL milestones are now shipped. The next planning pass is
+intentionally still open so the roadmap can reflect real usage instead of guessing too early.
 
-- parse common OpenAPI patterns well
-- generate useful negative tests with low noise
-- make every generated attack replayable
-- make result triage fast and obvious
+Right now the likely themes are:
 
-See `docs/architecture.md` and `docs/roadmap.md` for the initial direction.
+- stronger built-in auth acquisition and refresh flows for common OAuth/session cases
+- deeper GraphQL response validation, federation awareness, and subscription coverage
+- richer CI triage ergonomics and report navigation
+
+See `docs/architecture.md` and `docs/roadmap.md` for the current planning notes.
