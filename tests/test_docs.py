@@ -7,6 +7,7 @@ ARCHITECTURE_DOC = ROOT / "docs" / "architecture.md"
 ROADMAP_DOC = ROOT / "docs" / "roadmap.md"
 DEV_WORKFLOW = ROOT / ".github" / "workflows" / "dev-environment-example.yml"
 SYNC_WIKI_WORKFLOW = ROOT / ".github" / "workflows" / "sync-wiki.yml"
+MAIN_MAINTENANCE_WORKFLOW = ROOT / ".github" / "workflows" / "main-maintenance.yml"
 
 
 def test_readme_includes_ci_guidance() -> None:
@@ -108,6 +109,31 @@ def test_sync_wiki_workflow_uses_dedicated_secret_and_sync_script() -> None:
     assert "WIKI_PUSH_TOKEN" in workflow
     assert "python scripts/sync_wiki.py publish" in workflow
     assert "github.repository }}.wiki.git" in workflow
+
+
+def test_main_maintenance_workflow_checks_docs_links_and_coverage_regressions() -> None:
+    workflow = MAIN_MAINTENANCE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "branches:" in workflow
+    assert "- main" in workflow
+    assert "actions/upload-artifact@v6" in workflow
+    assert "actions/github-script@v7" in workflow
+    assert "ruff check ." in workflow
+    assert "ruff format --check ." in workflow
+    assert "tests/test_maintenance_scripts.py" in workflow
+    assert "python scripts/check_markdown_links.py README.md docs" in workflow
+    assert (
+        'python scripts/sync_wiki.py render --out-dir "${{ runner.temp }}/wiki-render"'
+        in workflow
+    )
+    assert (
+        "pytest --cov=src/knives_out --cov-report=term-missing --cov-report=json:coverage.json"
+        in workflow
+    )
+    assert "main-maintenance-coverage" in workflow
+    assert 'workflow_id: "main-maintenance.yml"' in workflow
+    assert "python scripts/check_coverage_drop.py" in workflow
 
 
 def test_roadmap_and_architecture_describe_next_milestones() -> None:

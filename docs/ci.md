@@ -316,10 +316,21 @@ To promote only new regressions, pass the same baseline file you use with `verif
 
 ## Coverage in repository CI
 
-The repository's own `ci.yml` now runs:
+The repository now has two complementary repository workflows:
+
+- `ci.yml` runs on pushes and pull requests to keep the main Python test and lint loop fast
+- `main-maintenance.yml` runs on pushes to `main` and `workflow_dispatch` for deeper post-merge maintenance checks
+
+The `main-maintenance.yml` workflow currently runs:
 
 - `ruff check .`
 - `ruff format --check .`
-- `pytest --cov=src/knives_out --cov-report=term-missing`
+- `pytest tests/test_docs.py tests/test_sync_wiki.py tests/test_examples.py tests/test_maintenance_scripts.py`
+- `python scripts/check_markdown_links.py README.md docs`
+- `python scripts/sync_wiki.py render --out-dir ...`
+- `pytest --cov=src/knives_out --cov-report=term-missing --cov-report=json:coverage.json`
 
-Coverage is printed in CI for visibility, but there is no hard percentage gate yet.
+After the full test pass, it uploads `coverage.json` as the `main-maintenance-coverage` artifact,
+downloads the previous successful artifact from the same workflow on `main`, and fails if total
+coverage drops. The first successful run seeds that baseline automatically, so there is no separate
+manual setup step.
