@@ -437,6 +437,217 @@ def test_verify_command_reports_bad_baseline_file(tmp_path: Path) -> None:
     assert "Could not read baseline results file" in result.stderr
 
 
+def test_promote_command_writes_promoted_suite(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.json"
+    attacks_path = tmp_path / "attacks.json"
+    out_path = tmp_path / "regression-attacks.json"
+    _write_results(
+        current_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_two",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+    attacks_path.write_text(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                AttackCase(
+                    id="atk_one",
+                    name="Attack one",
+                    kind="wrong_type_param",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                    description="Attack one",
+                ),
+                AttackCase(
+                    id="atk_two",
+                    name="Attack two",
+                    kind="missing_request_body",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                    description="Attack two",
+                ),
+            ],
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "promote",
+            str(current_path),
+            "--attacks",
+            str(attacks_path),
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert [attack.id for attack in suite.attacks] == ["atk_two"]
+    assert "Wrote 1 promoted attack(s)" in result.stdout
+
+
+def test_promote_command_with_baseline_only_selects_new_findings(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.json"
+    baseline_path = tmp_path / "baseline.json"
+    attacks_path = tmp_path / "attacks.json"
+    out_path = tmp_path / "regression-attacks.json"
+
+    _write_results(
+        current_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Shared failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            ),
+            AttackResult(
+                attack_id="atk_new",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="New failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            ),
+        ),
+    )
+    _write_results(
+        baseline_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Shared failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+    attacks_path.write_text(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                AttackCase(
+                    id="atk_shared",
+                    name="Shared attack",
+                    kind="missing_request_body",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                    description="Shared attack",
+                ),
+                AttackCase(
+                    id="atk_new",
+                    name="New attack",
+                    kind="missing_request_body",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                    description="New attack",
+                ),
+            ],
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "promote",
+            str(current_path),
+            "--attacks",
+            str(attacks_path),
+            "--baseline",
+            str(baseline_path),
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert [attack.id for attack in suite.attacks] == ["atk_new"]
+    assert "Promoted new qualifying attacks against a baseline." in result.stdout
+
+
+def test_promote_command_reports_missing_attack_ids(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.json"
+    attacks_path = tmp_path / "attacks.json"
+
+    _write_results(
+        current_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_missing",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Missing attack",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+    attacks_path.write_text(
+        AttackSuite(source="unit", attacks=[]).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "promote",
+            str(current_path),
+            "--attacks",
+            str(attacks_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Promotion error:" in result.stdout
+    assert "atk_missing" in result.stdout
+
+
 def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
     out_path = tmp_path / "attacks.json"
 
