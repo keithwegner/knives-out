@@ -229,6 +229,10 @@ def _response_schemas_for_attack(operation: OperationSpec) -> dict[str, Any]:
     return deepcopy(operation.response_schemas)
 
 
+def _tags_for_attack(operation: OperationSpec) -> list[str]:
+    return list(operation.tags)
+
+
 def _schema_type(schema: dict[str, Any] | None) -> str | None:
     if not schema:
         return None
@@ -407,6 +411,7 @@ def _workflow_attack_from_assignments(
         operation_id=terminal_attack.operation_id,
         method=terminal_attack.method,
         path=terminal_attack.path,
+        tags=list(terminal_attack.tags),
         description=(
             f"Creates state with {producer.operation_id} before executing "
             f"the terminal attack '{terminal_attack.name}'."
@@ -508,6 +513,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                     operation_id=operation.operation_id,
                     method=operation.method,
                     path=operation.path,
+                    tags=_tags_for_attack(operation),
                     description=(
                         f"Omits required {parameter.location} parameter '{parameter.name}'."
                     ),
@@ -544,6 +550,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 operation_id=operation.operation_id,
                 method=operation.method,
                 path=operation.path,
+                tags=_tags_for_attack(operation),
                 description=(
                     f"Substitutes a wrong-type value for {parameter.location} "
                     f"parameter '{parameter.name}'."
@@ -582,6 +589,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                     operation_id=operation.operation_id,
                     method=operation.method,
                     path=operation.path,
+                    tags=_tags_for_attack(operation),
                     description=f"Uses a value outside the declared enum for '{parameter.name}'.",
                     path_params=path_params,
                     query=query_params,
@@ -603,6 +611,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 operation_id=operation.operation_id,
                 method=operation.method,
                 path=operation.path,
+                tags=_tags_for_attack(operation),
                 description="Omits the required request body.",
                 path_params=path_params,
                 query=query_params,
@@ -624,6 +633,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 operation_id=operation.operation_id,
                 method=operation.method,
                 path=operation.path,
+                tags=_tags_for_attack(operation),
                 description="Sends invalid JSON for a JSON request body.",
                 path_params=path_params,
                 query=query_params,
@@ -646,6 +656,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 operation_id=operation.operation_id,
                 method=operation.method,
                 path=operation.path,
+                tags=_tags_for_attack(operation),
                 description="Removes the declared auth credential from the request.",
                 path_params=path_params,
                 query=query_params,

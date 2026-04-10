@@ -62,6 +62,36 @@ def test_inspect_command_shows_preflight_warnings(monkeypatch) -> None:
     assert "createPet" in result.stdout
 
 
+def test_inspect_command_filters_operations_by_tag(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "knives_out.cli.load_operations_with_warnings",
+        lambda spec: LoadedOperations(
+            operations=[
+                {
+                    "operation_id": "listPets",
+                    "method": "GET",
+                    "path": "/pets",
+                    "tags": ["pets", "read"],
+                },
+                {
+                    "operation_id": "createPet",
+                    "method": "POST",
+                    "path": "/pets",
+                    "tags": ["pets", "write"],
+                },
+            ],
+            warnings=[],
+        ),
+    )
+
+    result = runner.invoke(app, ["inspect", str(EXAMPLE_SPEC), "--tag", "write"])
+
+    assert result.exit_code == 0
+    assert "createPet" in result.stdout
+    assert "listPets" not in result.stdout
+    assert "Found 1 operations." in result.stdout
+
+
 def test_generate_command_writes_attack_suite(tmp_path: Path) -> None:
     out_path = tmp_path / "attacks.json"
     result = runner.invoke(app, ["generate", str(EXAMPLE_SPEC), "--out", str(out_path)])
@@ -427,6 +457,7 @@ def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
                         operation_id="listPets",
                         method="GET",
                         path="/pets",
+                        tags=["pets", "read"],
                         description="GET attack",
                     ),
                     AttackCase(
@@ -436,6 +467,7 @@ def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
                         operation_id="createPet",
                         method="POST",
                         path="/pets",
+                        tags=["pets", "write"],
                         description="POST attack",
                     ),
                 ],
@@ -458,6 +490,61 @@ def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
     assert [attack.id for attack in suite.attacks] == ["atk_post"]
+
+
+def test_generate_command_filters_attacks_by_tag(tmp_path: Path, monkeypatch) -> None:
+    out_path = tmp_path / "attacks.json"
+
+    monkeypatch.setattr(
+        "knives_out.cli.load_operations_with_warnings",
+        lambda spec: LoadedOperations(operations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "knives_out.cli.generate_attack_suite",
+        lambda operations, source, extra_packs=None, auto_workflows=False, workflow_packs=None: (
+            AttackSuite(
+                source=source,
+                attacks=[
+                    AttackCase(
+                        id="atk_read",
+                        name="Read attack",
+                        kind="missing_auth",
+                        operation_id="listPets",
+                        method="GET",
+                        path="/pets",
+                        tags=["pets", "read"],
+                        description="Read attack",
+                    ),
+                    AttackCase(
+                        id="atk_write",
+                        name="Write attack",
+                        kind="missing_request_body",
+                        operation_id="createPet",
+                        method="POST",
+                        path="/pets",
+                        tags=["pets", "write"],
+                        description="Write attack",
+                    ),
+                ],
+            )
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            str(EXAMPLE_SPEC),
+            "--out",
+            str(out_path),
+            "--tag",
+            "write",
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert [attack.id for attack in suite.attacks] == ["atk_write"]
 
 
 def test_generate_command_echoes_preflight_warnings(tmp_path: Path, monkeypatch) -> None:
@@ -512,6 +599,7 @@ def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatc
                     operation_id="listPets",
                     method="GET",
                     path="/pets",
+                    tags=["pets", "read"],
                     description="GET attack",
                 ),
                 AttackCase(
@@ -521,6 +609,7 @@ def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatc
                     operation_id="createPet",
                     method="POST",
                     path="/pets",
+                    tags=["pets", "write"],
                     description="POST attack",
                 ),
             ],
@@ -564,6 +653,83 @@ def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatc
     assert result.exit_code == 0
     assert captured["attack_ids"] == ["atk_post"]
     assert captured["auth_plugins"] == []
+
+
+def test_run_command_filters_attacks_by_path_before_execution(tmp_path: Path, monkeypatch) -> None:
+    attacks_path = tmp_path / "attacks.json"
+    out_path = tmp_path / "results.json"
+    attacks_path.write_text(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                AttackCase(
+                    id="atk_get",
+                    name="GET attack",
+                    kind="missing_auth",
+                    operation_id="listPets",
+                    method="GET",
+                    path="/pets",
+                    tags=["pets", "read"],
+                    description="GET attack",
+                ),
+                AttackCase(
+                    id="atk_post",
+                    name="POST attack",
+                    kind="missing_request_body",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets/{petId}",
+                    tags=["pets", "write"],
+                    description="POST attack",
+                ),
+            ],
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_execute_attack_suite(
+        suite: AttackSuite,
+        *,
+        base_url: str,
+        default_headers: dict[str, str],
+        default_query: dict[str, str],
+        timeout_seconds: float,
+        artifact_dir: Path | None,
+        auth_plugins=None,
+        workflow_hooks=None,
+    ) -> AttackResults:
+        del (
+            base_url,
+            default_headers,
+            default_query,
+            timeout_seconds,
+            artifact_dir,
+            auth_plugins,
+            workflow_hooks,
+        )
+        captured["attack_ids"] = [attack.id for attack in suite.attacks]
+        return AttackResults(source=suite.source, base_url="https://example.com", results=[])
+
+    monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(attacks_path),
+            "--base-url",
+            "https://example.com",
+            "--path",
+            "/pets/{petId}",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["attack_ids"] == ["atk_post"]
 
 
 def test_run_command_loads_local_auth_plugin(tmp_path: Path, monkeypatch) -> None:

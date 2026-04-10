@@ -27,6 +27,7 @@ class OperationSpec(BaseModel):
     method: str
     path: str
     summary: str | None = None
+    tags: list[str] = Field(default_factory=list)
     parameters: list[ParameterSpec] = Field(default_factory=list)
     request_body_required: bool = False
     request_body_schema: dict[str, Any] | None = None
@@ -58,6 +59,7 @@ class AttackCase(BaseModel):
     operation_id: str
     method: str
     path: str
+    tags: list[str] = Field(default_factory=list)
     description: str
     path_params: dict[str, Any] = Field(default_factory=dict)
     query: dict[str, Any] = Field(default_factory=dict)
@@ -104,6 +106,7 @@ class WorkflowAttackCase(BaseModel):
     operation_id: str
     method: str
     path: str
+    tags: list[str] = Field(default_factory=list)
     description: str
     setup_steps: list[WorkflowStep] = Field(default_factory=list)
     terminal_attack: AttackCase

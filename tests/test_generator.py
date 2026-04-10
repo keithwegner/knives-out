@@ -257,6 +257,94 @@ def test_generate_attack_suite_can_emit_built_in_workflows() -> None:
     assert get_pet_workflow.terminal_attack.path_params["petId"] == "{{id}}"
 
 
+def test_generate_attack_suite_copies_operation_tags_to_attacks_and_workflows(
+    tmp_path: Path,
+) -> None:
+    spec = tmp_path / "tagged-workflows.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Tagged workflow spec
+              version: 1.0.0
+            paths:
+              /pets:
+                get:
+                  operationId: listPets
+                  tags: [pets, read]
+                  responses:
+                    '200':
+                      description: Pets
+                      content:
+                        application/json:
+                          schema:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: integer
+                post:
+                  operationId: createPet
+                  tags: [pets, write]
+                  requestBody:
+                    required: true
+                    content:
+                      application/json:
+                        schema:
+                          type: object
+                          required: [name]
+                          properties:
+                            name:
+                              type: string
+                  responses:
+                    '201':
+                      description: created
+              /pets/{petId}:
+                get:
+                  operationId: getPet
+                  tags: [pets, read]
+                  parameters:
+                    - name: petId
+                      in: path
+                      required: true
+                      schema:
+                        type: integer
+                  responses:
+                    '200':
+                      description: Pet
+                      content:
+                        application/json:
+                          schema:
+                            type: object
+                            properties:
+                              id:
+                                type: integer
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    operations = load_operations(spec)
+    suite = generate_attack_suite(operations, source=str(spec), auto_workflows=True)
+
+    create_pet_attack = next(
+        attack
+        for attack in suite.attacks
+        if attack.type == "request" and attack.operation_id == "createPet"
+    )
+    get_pet_workflow = next(
+        attack
+        for attack in suite.attacks
+        if isinstance(attack, WorkflowAttackCase) and attack.operation_id == "getPet"
+    )
+
+    assert create_pet_attack.tags == ["pets", "write"]
+    assert get_pet_workflow.tags == ["pets", "read"]
+    assert get_pet_workflow.terminal_attack.tags == ["pets", "read"]
+
+
 def test_generate_attack_suite_skips_ambiguous_workflow_producers(tmp_path: Path) -> None:
     spec = tmp_path / "ambiguous-workflows.yaml"
     spec.write_text(
