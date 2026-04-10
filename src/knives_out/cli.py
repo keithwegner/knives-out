@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from knives_out.filtering import filter_attack_suite
 from knives_out.generator import generate_attack_suite
 from knives_out.openapi_loader import load_operations
 from knives_out.reporting import load_attack_results, render_markdown_report
@@ -64,10 +65,46 @@ def generate(
         Path,
         typer.Option(help="Where to write the generated attack suite."),
     ] = Path("attacks.json"),
+    operation: Annotated[
+        list[str] | None,
+        typer.Option(help="Only include attacks for these operation ids. Repeatable."),
+    ] = None,
+    exclude_operation: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude attacks for these operation ids. Repeatable."),
+    ] = None,
+    method: Annotated[
+        list[str] | None,
+        typer.Option(help="Only include attacks for these HTTP methods. Repeatable."),
+    ] = None,
+    exclude_method: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude attacks for these HTTP methods. Repeatable."),
+    ] = None,
+    kind: Annotated[
+        list[str] | None,
+        typer.Option(help="Only include attacks for these attack kinds. Repeatable."),
+    ] = None,
+    exclude_kind: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude attacks for these attack kinds. Repeatable."),
+    ] = None,
 ) -> None:
-    """Generate a replayable attack suite from an OpenAPI spec."""
+    """Generate a replayable attack suite from an OpenAPI spec.
+
+    Filters are applied after attack generation and before the suite is written.
+    """
     operations = load_operations(spec)
     suite = generate_attack_suite(operations, source=str(spec))
+    suite = filter_attack_suite(
+        suite,
+        include_operations=operation,
+        exclude_operations=exclude_operation,
+        include_methods=method,
+        exclude_methods=exclude_method,
+        include_kinds=kind,
+        exclude_kinds=exclude_kind,
+    )
     out.write_text(suite.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
     console.print(f"Wrote {len(suite.attacks)} attacks to [bold]{out}[/bold].")
 
@@ -99,9 +136,45 @@ def run(
         Path | None,
         typer.Option(help="Optional directory for per-attack request/response artifacts."),
     ] = None,
+    operation: Annotated[
+        list[str] | None,
+        typer.Option(help="Only run attacks for these operation ids. Repeatable."),
+    ] = None,
+    exclude_operation: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude attacks for these operation ids. Repeatable."),
+    ] = None,
+    method: Annotated[
+        list[str] | None,
+        typer.Option(help="Only run attacks for these HTTP methods. Repeatable."),
+    ] = None,
+    exclude_method: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude attacks for these HTTP methods. Repeatable."),
+    ] = None,
+    kind: Annotated[
+        list[str] | None,
+        typer.Option(help="Only run attacks for these attack kinds. Repeatable."),
+    ] = None,
+    exclude_kind: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude attacks for these attack kinds. Repeatable."),
+    ] = None,
 ) -> None:
-    """Run a saved attack suite against a live API."""
+    """Run a saved attack suite against a live API.
+
+    Filters are applied to the loaded suite before any requests are executed.
+    """
     suite = load_attack_suite(attacks)
+    suite = filter_attack_suite(
+        suite,
+        include_operations=operation,
+        exclude_operations=exclude_operation,
+        include_methods=method,
+        exclude_methods=exclude_method,
+        include_kinds=kind,
+        exclude_kinds=exclude_kind,
+    )
     default_headers = _parse_key_value(header, separator=":")
     default_query = _parse_key_value(query, separator="=")
     results = execute_attack_suite(

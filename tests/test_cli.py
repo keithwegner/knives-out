@@ -3,7 +3,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from knives_out.cli import app
-from knives_out.models import AttackResults, AttackSuite
+from knives_out.models import AttackCase, AttackResults, AttackSuite
 
 runner = CliRunner()
 EXAMPLE_SPEC = Path(__file__).resolve().parents[1] / "examples" / "openapi" / "petstore.yaml"
@@ -72,3 +72,115 @@ def test_run_command_passes_artifact_dir(tmp_path: Path, monkeypatch) -> None:
     assert captured["suite_source"] == "unit"
     assert captured["base_url"] == "https://example.com"
     assert captured["artifact_dir"] == artifact_dir
+
+
+def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
+    out_path = tmp_path / "attacks.json"
+
+    monkeypatch.setattr("knives_out.cli.load_operations", lambda spec: [])
+    monkeypatch.setattr(
+        "knives_out.cli.generate_attack_suite",
+        lambda operations, source: AttackSuite(
+            source=source,
+            attacks=[
+                AttackCase(
+                    id="atk_get",
+                    name="GET attack",
+                    kind="missing_auth",
+                    operation_id="listPets",
+                    method="GET",
+                    path="/pets",
+                    description="GET attack",
+                ),
+                AttackCase(
+                    id="atk_post",
+                    name="POST attack",
+                    kind="missing_request_body",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                    description="POST attack",
+                ),
+            ],
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            str(EXAMPLE_SPEC),
+            "--out",
+            str(out_path),
+            "--operation",
+            "createPet",
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert [attack.id for attack in suite.attacks] == ["atk_post"]
+
+
+def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatch) -> None:
+    attacks_path = tmp_path / "attacks.json"
+    out_path = tmp_path / "results.json"
+    attacks_path.write_text(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                AttackCase(
+                    id="atk_get",
+                    name="GET attack",
+                    kind="missing_auth",
+                    operation_id="listPets",
+                    method="GET",
+                    path="/pets",
+                    description="GET attack",
+                ),
+                AttackCase(
+                    id="atk_post",
+                    name="POST attack",
+                    kind="missing_request_body",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                    description="POST attack",
+                ),
+            ],
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_execute_attack_suite(
+        suite: AttackSuite,
+        *,
+        base_url: str,
+        default_headers: dict[str, str],
+        default_query: dict[str, str],
+        timeout_seconds: float,
+        artifact_dir: Path | None,
+    ) -> AttackResults:
+        captured["attack_ids"] = [attack.id for attack in suite.attacks]
+        return AttackResults(source=suite.source, base_url=base_url, results=[])
+
+    monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(attacks_path),
+            "--base-url",
+            "https://example.com",
+            "--method",
+            "POST",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["attack_ids"] == ["atk_post"]
