@@ -21,11 +21,43 @@ class _StubClient:
         return self._response
 
 
+class _RecordingClient:
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+        self.requests: list[dict[str, object]] = []
+
+    def __enter__(self) -> _RecordingClient:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+        self.requests.append(
+            {
+                "method": method,
+                "url": url,
+                "params": kwargs.get("params"),
+                "headers": kwargs.get("headers"),
+            }
+        )
+        return self._response
+
+
 def _install_stub_response(monkeypatch, response: httpx.Response) -> None:
     monkeypatch.setattr(
         "knives_out.runner.httpx.Client",
         lambda **_: _StubClient(response),
     )
+
+
+def _install_recording_client(monkeypatch, response: httpx.Response) -> _RecordingClient:
+    client = _RecordingClient(response)
+    monkeypatch.setattr(
+        "knives_out.runner.httpx.Client",
+        lambda **_: client,
+    )
+    return client
 
 
 def _attack_case(*, response_schemas: dict[str, dict[str, object]]) -> AttackCase:
@@ -185,3 +217,78 @@ def test_render_markdown_report_highlights_response_schema_mismatches() -> None:
     assert "response_schema_mismatch" in report
     assert "mismatch" in report
     assert "$.id: expected integer, got string" in report
+
+
+def test_execute_attack_suite_removes_only_declared_auth_header(monkeypatch) -> None:
+    response = httpx.Response(401, text="missing api key")
+    client = _install_recording_client(monkeypatch, response)
+
+    suite = AttackSuite(
+        source="unit",
+        attacks=[
+            AttackCase(
+                id="atk_header_auth",
+                name="Missing header auth",
+                kind="missing_auth",
+                operation_id="headerAuth",
+                method="GET",
+                path="/pets",
+                description="Missing header auth",
+                headers={"X-Tenant": "tenant-123"},
+                omit_header_names=["X-API-Key"],
+            )
+        ],
+    )
+
+    execute_attack_suite(
+        suite,
+        base_url="https://example.com",
+        default_headers={
+            "X-API-Key": "secret-key",
+            "X-Trace-Id": "trace-123",
+            "X-Tenant": "default-tenant",
+        },
+    )
+
+    request = client.requests[0]
+    assert request["headers"] == {
+        "X-Trace-Id": "trace-123",
+        "X-Tenant": "tenant-123",
+    }
+
+
+def test_execute_attack_suite_removes_only_declared_auth_query_param(monkeypatch) -> None:
+    response = httpx.Response(401, text="missing api key")
+    client = _install_recording_client(monkeypatch, response)
+
+    suite = AttackSuite(
+        source="unit",
+        attacks=[
+            AttackCase(
+                id="atk_query_auth",
+                name="Missing query auth",
+                kind="missing_auth",
+                operation_id="queryAuth",
+                method="GET",
+                path="/pets",
+                description="Missing query auth",
+                query={"limit": 10},
+                omit_query_names=["api_key"],
+            )
+        ],
+    )
+
+    execute_attack_suite(
+        suite,
+        base_url="https://example.com",
+        default_query={
+            "api_key": "secret-key",
+            "page": "2",
+        },
+    )
+
+    request = client.requests[0]
+    assert request["params"] == {
+        "limit": 10,
+        "page": "2",
+    }

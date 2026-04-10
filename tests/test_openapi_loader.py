@@ -192,3 +192,58 @@ def test_load_operations_extracts_response_schemas(tmp_path) -> None:
             "error": {"type": "string"},
         },
     }
+
+
+def test_load_operations_extracts_api_key_auth_from_components(tmp_path) -> None:
+    spec = tmp_path / "api-key-auth.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: API key auth test
+              version: 1.0.0
+            components:
+              securitySchemes:
+                headerKey:
+                  type: apiKey
+                  in: header
+                  name: X-API-Key
+                queryKey:
+                  type: apiKey
+                  in: query
+                  name: api_key
+            paths:
+              /header-auth:
+                get:
+                  operationId: headerAuth
+                  security:
+                    - headerKey: []
+              /query-auth:
+                get:
+                  operationId: queryAuth
+                  security:
+                    - queryKey: []
+              /optional-auth:
+                get:
+                  operationId: optionalAuth
+                  security:
+                    - {}
+                    - headerKey: []
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    operations = {operation.operation_id: operation for operation in load_operations(spec)}
+
+    assert operations["headerAuth"].auth_required is True
+    assert operations["headerAuth"].auth_header_names == ["X-API-Key"]
+    assert operations["headerAuth"].auth_query_names == []
+
+    assert operations["queryAuth"].auth_required is True
+    assert operations["queryAuth"].auth_header_names == []
+    assert operations["queryAuth"].auth_query_names == ["api_key"]
+
+    assert operations["optionalAuth"].auth_required is False
+    assert operations["optionalAuth"].auth_header_names == ["X-API-Key"]

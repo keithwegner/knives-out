@@ -1,4 +1,5 @@
 from pathlib import Path
+from textwrap import dedent
 
 from knives_out.generator import generate_attack_suite, sample_value
 from knives_out.openapi_loader import load_operations
@@ -157,3 +158,72 @@ def test_sample_value_preserves_array_item_shapes_past_depth_limit() -> None:
             ]
         }
     }
+
+
+def test_generate_missing_auth_attacks_target_only_api_key_credentials(tmp_path) -> None:
+    spec = tmp_path / "api-key-attacks.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: API key attack test
+              version: 1.0.0
+            components:
+              securitySchemes:
+                headerKey:
+                  type: apiKey
+                  in: header
+                  name: X-API-Key
+                queryKey:
+                  type: apiKey
+                  in: query
+                  name: api_key
+            paths:
+              /header-auth:
+                get:
+                  operationId: headerAuth
+                  security:
+                    - headerKey: []
+                  parameters:
+                    - name: X-Tenant
+                      in: header
+                      required: true
+                      schema:
+                        type: string
+              /query-auth:
+                get:
+                  operationId: queryAuth
+                  security:
+                    - queryKey: []
+                  parameters:
+                    - name: limit
+                      in: query
+                      required: true
+                      schema:
+                        type: integer
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    operations = load_operations(spec)
+    suite = generate_attack_suite(operations, source=str(spec))
+
+    header_attack = next(
+        attack
+        for attack in suite.attacks
+        if attack.operation_id == "headerAuth" and attack.kind == "missing_auth"
+    )
+    assert header_attack.headers == {"X-Tenant": "example"}
+    assert header_attack.omit_header_names == ["X-API-Key"]
+    assert header_attack.omit_query_names == []
+
+    query_attack = next(
+        attack
+        for attack in suite.attacks
+        if attack.operation_id == "queryAuth" and attack.kind == "missing_auth"
+    )
+    assert query_attack.query == {"limit": 1}
+    assert query_attack.omit_header_names == []
+    assert query_attack.omit_query_names == ["api_key"]
