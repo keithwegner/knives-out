@@ -87,7 +87,8 @@ The next milestone work should extend the current architecture in two directions
 1. first-class auth/session profile strategies for common OAuth and session-login flows
 2. clearer auth setup diagnostics in reports and CI flows
 3. protocol-aware filtering that still shares the current run/report/verify pipeline
-4. stronger GraphQL response-shape validation on top of the new protocol loader
+4. stronger GraphQL response-shape validation, federation awareness, and staged subscription
+   support on top of the new protocol loader
 
 ## Things intentionally deferred
 

@@ -625,13 +625,11 @@ knives-out run attacks.json \
 
 ## Roadmap
 
-The previously planned adoption and GraphQL milestones are now shipped. The next planning pass is
-intentionally still open so the roadmap can reflect real usage instead of guessing too early.
+The next two milestones are:
 
-Right now the likely themes are:
+- **v0.9:** first-class auth and session realism through built-in OAuth and session profile config
+- **v0.10:** deeper GraphQL coverage with response validation, federation awareness, and
+  subscription support as staged scope
 
-- stronger built-in auth acquisition and refresh flows for common OAuth/session cases
-- deeper GraphQL response validation, federation awareness, and subscription coverage
-- richer CI triage ergonomics and report navigation
-
-See `docs/architecture.md` and `docs/roadmap.md` for the current planning notes.
+LLM application testing stays deferred until after that API-focused expansion. See
+`docs/architecture.md` and `docs/roadmap.md` for the detailed milestone breakdown.
