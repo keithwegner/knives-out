@@ -127,3 +127,68 @@ def test_load_operations_orders_parameters_deterministically(tmp_path) -> None:
         ("query", "zQuery"),
         ("header", "X-Mode"),
     ]
+
+
+def test_load_operations_extracts_response_schemas(tmp_path) -> None:
+    spec = tmp_path / "response-schemas.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Response schema test
+              version: 1.0.0
+            paths:
+              /pets:
+                get:
+                  operationId: listPets
+                  responses:
+                    "200":
+                      description: Pet list
+                      content:
+                        application/json:
+                          schema:
+                            type: array
+                            items:
+                              type: object
+                              required: [id]
+                              properties:
+                                id:
+                                  type: integer
+                    default:
+                      description: Error response
+                      content:
+                        application/json:
+                          schema:
+                            type: object
+                            required: [error]
+                            properties:
+                              error:
+                                type: string
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    operations = load_operations(spec)
+
+    assert len(operations) == 1
+    operation = operations[0]
+    assert operation.response_schemas["200"].content_type == "application/json"
+    assert operation.response_schemas["200"].schema_def == {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+                "id": {"type": "integer"},
+            },
+        },
+    }
+    assert operation.response_schemas["default"].schema_def == {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+            "error": {"type": "string"},
+        },
+    }

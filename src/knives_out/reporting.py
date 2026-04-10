@@ -14,6 +14,9 @@ def load_attack_results(path: str | Path) -> AttackResults:
 def render_markdown_report(results: AttackResults) -> str:
     total = len(results.results)
     flagged = sum(1 for result in results.results if result.flagged)
+    response_schema_mismatches = sum(
+        1 for result in results.results if result.response_schema_valid is False
+    )
     issue_counter = Counter(result.issue or "ok" for result in results.results)
 
     lines: list[str] = []
@@ -24,6 +27,7 @@ def render_markdown_report(results: AttackResults) -> str:
     lines.append(f"- Executed at: `{results.executed_at.isoformat()}`")
     lines.append(f"- Total attacks: **{total}**")
     lines.append(f"- Flagged results: **{flagged}**")
+    lines.append(f"- Response schema mismatches: **{response_schema_mismatches}**")
     lines.append("")
     lines.append("## Outcome summary")
     lines.append("")
@@ -35,8 +39,8 @@ def render_markdown_report(results: AttackResults) -> str:
     lines.append("")
     lines.append("## Flagged findings")
     lines.append("")
-    lines.append("| Attack | Kind | Status | Issue | URL |")
-    lines.append("| --- | --- | ---: | --- | --- |")
+    lines.append("| Attack | Kind | Status | Issue | Schema | URL |")
+    lines.append("| --- | --- | ---: | --- | --- | --- |")
 
     found_flagged = False
     for result in results.results:
@@ -44,12 +48,14 @@ def render_markdown_report(results: AttackResults) -> str:
             continue
         found_flagged = True
         status = str(result.status_code) if result.status_code is not None else "-"
+        schema = "mismatch" if result.response_schema_valid is False else "-"
         lines.append(
-            f"| {result.name} | {result.kind} | {status} | {result.issue or '-'} | `{result.url}` |"
+            f"| {result.name} | {result.kind} | {status} | "
+            f"{result.issue or '-'} | {schema} | `{result.url}` |"
         )
 
     if not found_flagged:
-        lines.append("| None | - | - | - | - |")
+        lines.append("| None | - | - | - | - | - |")
 
     lines.append("")
     lines.append("## Detailed results")
@@ -66,6 +72,12 @@ def render_markdown_report(results: AttackResults) -> str:
             else "- Status: `-`"
         )
         lines.append(f"- Issue: `{result.issue}`" if result.issue else "- Issue: `ok`")
+        if result.response_schema_status:
+            lines.append(f"- Declared response schema: `{result.response_schema_status}`")
+        if result.response_schema_valid is True:
+            lines.append("- Response schema: `ok`")
+        elif result.response_schema_error:
+            lines.append(f"- Response schema mismatch: `{result.response_schema_error}`")
         if result.error:
             lines.append(f"- Error: `{result.error}`")
         if result.duration_ms is not None:

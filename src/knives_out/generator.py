@@ -193,6 +193,10 @@ def _parameter_target_label(parameter: ParameterSpec) -> str:
     return f"{parameter.location}:{parameter.name}"
 
 
+def _response_schemas_for_attack(operation: OperationSpec) -> dict[str, Any]:
+    return deepcopy(operation.response_schemas)
+
+
 def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]:
     attacks: list[AttackCase] = []
     base_path_params, base_query_params, base_headers, base_body = _base_request_context(operation)
@@ -226,6 +230,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                     query=query_params,
                     headers=headers,
                     body_json=body,
+                    response_schemas=_response_schemas_for_attack(operation),
                 )
             )
 
@@ -262,6 +267,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 query=query_params,
                 headers=headers,
                 body_json=body,
+                response_schemas=_response_schemas_for_attack(operation),
             )
         )
 
@@ -296,6 +302,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                     query=query_params,
                     headers=headers,
                     body_json=body,
+                    response_schemas=_response_schemas_for_attack(operation),
                 )
             )
 
@@ -316,6 +323,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 query=query_params,
                 headers=headers,
                 omit_body=True,
+                response_schemas=_response_schemas_for_attack(operation),
             )
         )
 
@@ -337,6 +345,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 headers=headers,
                 raw_body=malformed_json_body(operation.request_body_schema),
                 content_type="application/json",
+                response_schemas=_response_schemas_for_attack(operation),
             )
         )
 
@@ -359,6 +368,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                 body_json=body,
                 omit_header_names=operation.auth_header_names,
                 omit_query_names=operation.auth_query_names,
+                response_schemas=_response_schemas_for_attack(operation),
             )
         )
 
