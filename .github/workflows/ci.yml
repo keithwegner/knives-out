@@ -21,4 +21,4 @@ jobs:
           ruff check .
           ruff format --check .
       - name: Pytest
-        run: pytest
+        run: pytest --cov=src/knives_out --cov-report=term-missing
