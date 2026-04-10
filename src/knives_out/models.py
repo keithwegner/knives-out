@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -49,7 +49,7 @@ class AttackCase(BaseModel):
 
 class AttackSuite(BaseModel):
     source: str
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     attacks: list[AttackCase] = Field(default_factory=list)
 
 
@@ -71,5 +71,5 @@ class AttackResult(BaseModel):
 class AttackResults(BaseModel):
     source: str
     base_url: str
-    executed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    executed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     results: list[AttackResult] = Field(default_factory=list)

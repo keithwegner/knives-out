@@ -60,7 +60,11 @@ def render_markdown_report(results: AttackResults) -> str:
         lines.append(f"- Operation: `{result.operation_id}`")
         lines.append(f"- Method: `{result.method}`")
         lines.append(f"- URL: `{result.url}`")
-        lines.append(f"- Status: `{result.status_code}`" if result.status_code is not None else "- Status: `-`")
+        lines.append(
+            f"- Status: `{result.status_code}`"
+            if result.status_code is not None
+            else "- Status: `-`"
+        )
         lines.append(f"- Issue: `{result.issue}`" if result.issue else "- Issue: `ok`")
         if result.error:
             lines.append(f"- Error: `{result.error}`")

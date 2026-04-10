@@ -59,7 +59,10 @@ def test_load_operations_prefers_operation_level_parameter_overrides(tmp_path) -
 
     assert len(operations) == 1
     operation = operations[0]
-    parameters = {(parameter.location, parameter.name): parameter for parameter in operation.parameters}
+    parameters = {
+        (parameter.location, parameter.name): parameter
+        for parameter in operation.parameters
+    }
 
     assert parameters[("path", "petId")].required is True
     assert parameters[("path", "petId")].schema_def["type"] == "string"

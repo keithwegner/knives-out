@@ -19,7 +19,9 @@ def _normalize_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
         for part in result["allOf"]:
             normalized_part = _normalize_schema(part)
             merged["properties"].update(normalized_part.get("properties", {}))
-            merged["required"] = sorted(set(merged["required"]) | set(normalized_part.get("required", [])))
+            merged["required"] = sorted(
+                set(merged["required"]) | set(normalized_part.get("required", []))
+            )
         result = merged
     elif "oneOf" in result:
         result = _normalize_schema(result["oneOf"][0])
@@ -154,11 +156,13 @@ def malformed_json_body(_: dict[str, Any] | None) -> str:
 
 
 def _attack_id(operation_id: str, kind: str, target: str) -> str:
-    digest = hashlib.sha1(f"{operation_id}:{kind}:{target}".encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha1(f"{operation_id}:{kind}:{target}".encode()).hexdigest()[:12]
     return f"atk_{digest}"
 
 
-def _base_request_context(operation: OperationSpec) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], Any | None]:
+def _base_request_context(
+    operation: OperationSpec,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], Any | None]:
     path_params: dict[str, Any] = {}
     query_params: dict[str, Any] = {}
     headers: dict[str, str] = {}
@@ -205,13 +209,20 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
 
             attacks.append(
                 AttackCase(
-                    id=_attack_id(operation.operation_id, "missing_required_param", _parameter_target_label(parameter)),
+                    id=_attack_id(
+                        operation.operation_id,
+                        "missing_required_param",
+                        _parameter_target_label(parameter),
+                    ),
                     name=f"Missing required {parameter.location} parameter '{parameter.name}'",
                     kind="missing_required_param",
                     operation_id=operation.operation_id,
                     method=operation.method,
                     path=operation.path,
-                    description=f"Omits required {parameter.location} parameter '{parameter.name}'.",
+                    description=(
+                        f"Omits required {parameter.location} parameter "
+                        f"'{parameter.name}'."
+                    ),
                     path_params=path_params,
                     query=query_params,
                     headers=headers,
@@ -234,13 +245,20 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
 
         attacks.append(
             AttackCase(
-                id=_attack_id(operation.operation_id, "wrong_type_param", _parameter_target_label(parameter)),
+                id=_attack_id(
+                    operation.operation_id,
+                    "wrong_type_param",
+                    _parameter_target_label(parameter),
+                ),
                 name=f"Wrong-type {parameter.location} parameter '{parameter.name}'",
                 kind="wrong_type_param",
                 operation_id=operation.operation_id,
                 method=operation.method,
                 path=operation.path,
-                description=f"Substitutes a wrong-type value for {parameter.location} parameter '{parameter.name}'.",
+                description=(
+                    f"Substitutes a wrong-type value for {parameter.location} "
+                    f"parameter '{parameter.name}'."
+                ),
                 path_params=path_params,
                 query=query_params,
                 headers=headers,
@@ -264,7 +282,11 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
 
             attacks.append(
                 AttackCase(
-                    id=_attack_id(operation.operation_id, "invalid_enum", _parameter_target_label(parameter)),
+                    id=_attack_id(
+                        operation.operation_id,
+                        "invalid_enum",
+                        _parameter_target_label(parameter),
+                    ),
                     name=f"Invalid enum {parameter.location} parameter '{parameter.name}'",
                     kind="invalid_enum",
                     operation_id=operation.operation_id,

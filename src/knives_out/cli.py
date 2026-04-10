@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
@@ -60,7 +60,10 @@ def inspect(spec: Path) -> None:
 @app.command()
 def generate(
     spec: Path,
-    out: Path = typer.Option(Path("attacks.json"), help="Where to write the generated attack suite."),
+    out: Annotated[
+        Path,
+        typer.Option(help="Where to write the generated attack suite."),
+    ] = Path("attacks.json"),
 ) -> None:
     """Generate a replayable attack suite from an OpenAPI spec."""
     operations = load_operations(spec)
@@ -72,11 +75,26 @@ def generate(
 @app.command()
 def run(
     attacks: Path,
-    base_url: str = typer.Option(..., help="Base URL of the target API."),
-    out: Path = typer.Option(Path("results.json"), help="Where to write execution results."),
-    header: list[str] | None = typer.Option(None, help="Default header in the form 'Name: value'."),
-    query: list[str] | None = typer.Option(None, help="Default query value in the form 'name=value'."),
-    timeout: float = typer.Option(10.0, help="HTTP timeout in seconds."),
+    base_url: Annotated[
+        str,
+        typer.Option(help="Base URL of the target API."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(help="Where to write execution results."),
+    ] = Path("results.json"),
+    header: Annotated[
+        list[str] | None,
+        typer.Option(help="Default header in the form 'Name: value'."),
+    ] = None,
+    query: Annotated[
+        list[str] | None,
+        typer.Option(help="Default query value in the form 'name=value'."),
+    ] = None,
+    timeout: Annotated[
+        float,
+        typer.Option(help="HTTP timeout in seconds."),
+    ] = 10.0,
 ) -> None:
     """Run a saved attack suite against a live API."""
     suite = load_attack_suite(attacks)
@@ -102,7 +120,10 @@ def run(
 @app.command()
 def report(
     results: Path,
-    out: Path | None = typer.Option(None, help="Optional Markdown output file."),
+    out: Annotated[
+        Path | None,
+        typer.Option(help="Optional Markdown output file."),
+    ] = None,
 ) -> None:
     """Render a Markdown report from a results file."""
     attack_results = load_attack_results(results)

@@ -52,7 +52,9 @@ def resolve_refs(node: Any, root: dict[str, Any]) -> Any:
 
 
 def _merge_parameters(
-    root: dict[str, Any], path_parameters: list[dict[str, Any]], operation_parameters: list[dict[str, Any]]
+    root: dict[str, Any],
+    path_parameters: list[dict[str, Any]],
+    operation_parameters: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     merged: dict[tuple[str, str], dict[str, Any]] = {}
     for parameter in path_parameters + operation_parameters:
@@ -67,7 +69,10 @@ def _merge_parameters(
     )
 
 
-def _extract_request_body(operation: dict[str, Any], root: dict[str, Any]) -> tuple[bool, dict[str, Any] | None, str | None]:
+def _extract_request_body(
+    operation: dict[str, Any],
+    root: dict[str, Any],
+) -> tuple[bool, dict[str, Any] | None, str | None]:
     request_body = operation.get("requestBody")
     if not request_body:
         return False, None, None
@@ -83,7 +88,10 @@ def _extract_request_body(operation: dict[str, Any], root: dict[str, Any]) -> tu
     return bool(resolved.get("required", False)), schema, preferred_type
 
 
-def _extract_security(operation: dict[str, Any], root: dict[str, Any]) -> tuple[bool, list[str], list[str]]:
+def _extract_security(
+    operation: dict[str, Any],
+    root: dict[str, Any],
+) -> tuple[bool, list[str], list[str]]:
     if "security" in operation:
         security = operation["security"]
     else:
@@ -141,14 +149,22 @@ def load_operations(path: str | Path) -> list[OperationSpec]:
                 for parameter in merged_parameters
             ]
 
-            request_body_required, request_body_schema, request_body_content_type = _extract_request_body(
-                operation, document
+            (
+                request_body_required,
+                request_body_schema,
+                request_body_content_type,
+            ) = _extract_request_body(operation, document)
+            auth_required, auth_header_names, auth_query_names = _extract_security(
+                operation,
+                document,
             )
-            auth_required, auth_header_names, auth_query_names = _extract_security(operation, document)
 
             operation_id = operation.get("operationId")
             if not operation_id:
-                sanitized_path = route.strip("/").replace("/", "_").replace("{", "").replace("}", "") or "root"
+                sanitized_path = (
+                    route.strip("/").replace("/", "_").replace("{", "").replace("}", "")
+                    or "root"
+                )
                 operation_id = f"{method}_{sanitized_path}"
 
             operations.append(

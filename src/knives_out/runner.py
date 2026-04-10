@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 import httpx
 
-from knives_out.models import AttackCase, AttackResult, AttackResults, AttackSuite
+from knives_out.models import AttackResult, AttackResults, AttackSuite
 
 
 def load_attack_suite(path: str | Path) -> AttackSuite:
