@@ -1,0 +1,57 @@
+name: sync-wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - README.md
+      - docs/**
+      - scripts/sync_wiki.py
+      - .github/workflows/sync-wiki.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Check wiki sync prerequisites
+        id: preflight
+        env:
+          WIKI_PUSH_TOKEN: ${{ secrets.WIKI_PUSH_TOKEN }}
+          WIKI_REMOTE: https://x-access-token:${{ secrets.WIKI_PUSH_TOKEN }}@github.com/${{ github.repository }}.wiki.git
+        run: |
+          if [[ -z "${WIKI_PUSH_TOKEN}" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "WIKI_PUSH_TOKEN is not configured; skipping wiki sync."
+            exit 0
+          fi
+
+          if ! git ls-remote "${WIKI_REMOTE}" > /dev/null 2>&1; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Bootstrap the wiki by creating the first page in GitHub, then rerun this workflow."
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - name: Configure git identity
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Publish wiki
+        if: steps.preflight.outputs.ready == 'true'
+        env:
+          WIKI_REMOTE: https://x-access-token:${{ secrets.WIKI_PUSH_TOKEN }}@github.com/${{ github.repository }}.wiki.git
+        run: |
+          wiki_dir="$(mktemp -d)/wiki"
+          python scripts/sync_wiki.py publish --wiki-dir "${wiki_dir}" --remote "${WIKI_REMOTE}"
