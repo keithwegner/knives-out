@@ -2,6 +2,9 @@
   "name": "knives-out",
   "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
   "postCreateCommand": "pip install --upgrade pip && pip install -e \".[dev]\"",
+  "remoteEnv": {
+    "GH_TOKEN": "${localEnv:GH_TOKEN}"
+  },
   "customizations": {
     "vscode": {
       "extensions": [
