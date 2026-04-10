@@ -13,6 +13,7 @@ def test_readme_includes_ci_guidance() -> None:
     assert ".github/workflows/dev-environment-example.yml" in readme
     assert "KNIVES_OUT_BASE_URL" in readme
     assert "`knives-out run` currently exits with status `0`" in readme
+    assert "knives-out verify results.json" in readme
 
 
 def test_dev_environment_workflow_matches_current_cli_surface() -> None:
@@ -25,6 +26,7 @@ def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     assert 'knives-out generate "$SPEC_PATH" --out attacks.json' in workflow
     assert 'knives-out run attacks.json "${args[@]}"' in workflow
     assert "knives-out report results.json --out report.md" in workflow
+    assert "knives-out verify results.json" in workflow
     assert "KNIVES_OUT_BASE_URL" in workflow
 
 
@@ -34,4 +36,6 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "results.json" in ci_doc
     assert "report.md" in ci_doc
     assert "artifacts/" in ci_doc
-    assert "Optional: fail the job when findings are present" in ci_doc
+    assert "Simple gating with no baseline" in ci_doc
+    assert "Baseline-aware gating" in ci_doc
+    assert "--baseline previous-results.json" in ci_doc

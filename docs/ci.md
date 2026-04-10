@@ -4,7 +4,9 @@
 
 1. generate a replayable attack suite from a checked-in OpenAPI spec
 2. run that suite against a dev or staging deployment
-3. publish the JSON results, Markdown report, and per-attack artifacts
+3. render a Markdown report for review
+4. verify the results against a CI policy
+5. publish the JSON results, Markdown report, and per-attack artifacts
 
 The repository includes a ready-to-adapt GitHub Actions example at
 `.github/workflows/dev-environment-example.yml`.
@@ -37,23 +39,49 @@ That default behavior is intentional for review-first workflows:
 - `report.md` stays available for humans
 - `artifacts/` keeps one request/response record per attack for debugging
 
-## Optional: fail the job when findings are present
+`knives-out verify` is the built-in gating step. It reads `results.json`, applies severity and
+confidence thresholds, and exits with:
 
-If you want the workflow to gate merges, add a follow-up step after `knives-out run`:
+- `0` when the policy passes
+- `1` when the policy fails
+
+## Simple gating with no baseline
+
+Use this when you want CI to fail on qualifying findings in the current run:
 
 ```yaml
-- name: Fail on flagged findings
+- name: Verify findings
   run: |
-    python - <<'PY'
-    import json
-    from pathlib import Path
-
-    results = json.loads(Path("results.json").read_text(encoding="utf-8"))
-    flagged = sum(1 for result in results["results"] if result.get("flagged"))
-    print(f"Flagged results: {flagged}")
-    raise SystemExit(1 if flagged else 0)
-    PY
+    knives-out verify results.json \
+      --min-severity high \
+      --min-confidence medium
 ```
 
-You can replace that logic with a severity threshold later if you only want to fail on higher
-signal findings.
+## Baseline-aware gating
+
+If your workflow can provide a prior `results.json`, `verify` can fail only on new qualifying
+findings:
+
+```yaml
+- name: Verify against baseline
+  run: |
+    knives-out verify results.json \
+      --baseline previous-results.json \
+      --min-severity high \
+      --min-confidence medium
+```
+
+The tool does not fetch that baseline for you. Your workflow is responsible for placing
+`previous-results.json` in the workspace before this step.
+
+## Optional: baseline-aware report
+
+You can also render a Markdown report that highlights new, resolved, and persisting findings:
+
+```yaml
+- name: Render baseline-aware report
+  run: |
+    knives-out report results.json \
+      --baseline previous-results.json \
+      --out report.md
+```

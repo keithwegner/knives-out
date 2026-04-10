@@ -1,22 +1,38 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 
 from knives_out.attack_packs import load_attack_packs
 from knives_out.filtering import filter_attack_suite
 from knives_out.generator import generate_attack_suite
-from knives_out.models import PreflightWarning
+from knives_out.models import AttackResults, PreflightWarning
 from knives_out.openapi_loader import load_operations_with_warnings
 from knives_out.reporting import load_attack_results, render_markdown_report
 from knives_out.runner import execute_attack_suite, load_attack_suite
+from knives_out.verification import ComparedFinding, evaluate_verification
 
 app = typer.Typer(no_args_is_help=True, help="Adversarial API testing from OpenAPI specs.")
 console = Console()
+
+
+class SeverityThresholdOption(StrEnum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
+
+
+class ConfidenceThresholdOption(StrEnum):
+    low = "low"
+    medium = "medium"
+    high = "high"
 
 
 def _parse_key_value(items: list[str] | None, *, separator: str) -> dict[str, Any]:
@@ -52,6 +68,38 @@ def _print_preflight_warnings(warnings: list[PreflightWarning]) -> None:
 
     for warning in warnings:
         table.add_row(warning.code, _warning_target(warning), warning.message)
+
+    console.print("")
+    console.print(table)
+
+
+def _load_attack_results_or_error(path: Path, *, label: str) -> AttackResults:
+    try:
+        return load_attack_results(path)
+    except (OSError, ValidationError, ValueError) as exc:
+        raise typer.BadParameter(f"Could not read {label} results file '{path}': {exc}") from exc
+
+
+def _print_compared_findings(title: str, findings: list[ComparedFinding]) -> None:
+    if not findings:
+        return
+
+    table = Table(title=title)
+    table.add_column("Attack")
+    table.add_column("Issue")
+    table.add_column("Severity")
+    table.add_column("Confidence")
+    table.add_column("Status")
+
+    for finding in findings:
+        result = finding.result
+        table.add_row(
+            result.name,
+            result.issue or "-",
+            result.severity,
+            result.confidence,
+            str(result.status_code) if result.status_code is not None else "-",
+        )
 
     console.print("")
     console.print(table)
@@ -237,14 +285,21 @@ def run(
 @app.command()
 def report(
     results: Path,
+    baseline: Annotated[
+        Path | None,
+        typer.Option(help="Optional baseline results file for regression comparison."),
+    ] = None,
     out: Annotated[
         Path | None,
         typer.Option(help="Optional Markdown output file."),
     ] = None,
 ) -> None:
     """Render a Markdown report from a results file."""
-    attack_results = load_attack_results(results)
-    markdown = render_markdown_report(attack_results)
+    attack_results = _load_attack_results_or_error(results, label="current")
+    baseline_results = (
+        _load_attack_results_or_error(baseline, label="baseline") if baseline is not None else None
+    )
+    markdown = render_markdown_report(attack_results, baseline=baseline_results)
 
     if out is None:
         console.print(markdown)
@@ -252,6 +307,70 @@ def report(
 
     out.write_text(markdown, encoding="utf-8")
     console.print(f"Wrote report to [bold]{out}[/bold].")
+
+
+@app.command()
+def verify(
+    results: Path,
+    baseline: Annotated[
+        Path | None,
+        typer.Option(help="Optional baseline results file for regression comparison."),
+    ] = None,
+    min_severity: Annotated[
+        SeverityThresholdOption,
+        typer.Option(help="Minimum severity that should fail verification."),
+    ] = SeverityThresholdOption.high,
+    min_confidence: Annotated[
+        ConfidenceThresholdOption,
+        typer.Option(help="Minimum confidence that should fail verification."),
+    ] = ConfidenceThresholdOption.medium,
+) -> None:
+    """Verify results against CI policy, optionally compared to a baseline."""
+    attack_results = _load_attack_results_or_error(results, label="current")
+    baseline_results = (
+        _load_attack_results_or_error(baseline, label="baseline") if baseline is not None else None
+    )
+    verification = evaluate_verification(
+        attack_results,
+        baseline=baseline_results,
+        min_severity=min_severity.value,
+        min_confidence=min_confidence.value,
+    )
+    comparison = verification.comparison
+
+    console.print(
+        "Verification policy: "
+        f"severity >= [bold]{min_severity.value}[/bold], "
+        f"confidence >= [bold]{min_confidence.value}[/bold]."
+    )
+    if verification.baseline_used:
+        console.print(
+            "Compared current findings against a baseline. "
+            f"New: {len(comparison.new_findings)}, "
+            f"Resolved: {len(comparison.resolved_findings)}, "
+            f"Persisting: {len(comparison.persisting_findings)}."
+        )
+        _print_compared_findings(
+            "New findings meeting policy",
+            verification.failing_findings,
+        )
+    else:
+        console.print(
+            "Evaluated current flagged findings only. "
+            f"Flagged: {len(comparison.current_findings)}, "
+            f"meeting policy: {len(verification.failing_findings)}."
+        )
+        _print_compared_findings(
+            "Current findings meeting policy",
+            verification.failing_findings,
+        )
+
+    if verification.passed:
+        console.print("Verification passed.")
+        return
+
+    console.print("Verification failed.")
+    raise typer.Exit(code=1)
 
 
 def main() -> None:
