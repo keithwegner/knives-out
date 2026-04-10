@@ -8,7 +8,8 @@
 4. render a Markdown report for review
 5. verify the results against a CI policy
 6. optionally promote qualifying findings into a smaller regression suite
-7. publish the JSON results, Markdown report, regression suite, and per-attack artifacts
+7. optionally maintain a checked-in suppressions file for accepted findings
+8. publish the JSON results, Markdown report, regression suite, and per-attack artifacts
 
 The repository includes a ready-to-adapt GitHub Actions example at
 `.github/workflows/dev-environment-example.yml`.
@@ -55,6 +56,9 @@ confidence thresholds, and exits with:
 - `0` when the policy passes
 - `1` when the policy fails
 
+If `.knives-out-ignore.yml` exists in the repository root, `report`, `verify`, and `promote` load
+it automatically. Use `--suppressions path/to/file.yml` to point at a different suppression file.
+
 ## Simple gating with no baseline
 
 Use this when you want CI to fail on qualifying findings in the current run:
@@ -83,6 +87,53 @@ findings:
 
 The tool does not fetch that baseline for you. Your workflow is responsible for placing
 `previous-results.json` in the workspace before this step.
+
+## Optional: checked-in suppressions
+
+Use suppressions when the team has reviewed a finding and wants CI to stay focused on active,
+unsuppressed regressions.
+
+Seed a review-ready file from the current active findings:
+
+```yaml
+- name: Seed or refresh suppressions for review
+  if: always()
+  run: knives-out triage results.json --out .knives-out-ignore.yml
+```
+
+The generated file includes placeholder `reason` and `owner` fields so a reviewer can edit the
+entries before committing them. A typical checked-in file looks like:
+
+```yaml
+suppressions:
+  - attack_id: atk_create_pet_missing_body
+    issue: server_error
+    operation_id: createPet
+    method: POST
+    path: /pets
+    tags:
+      - pets
+      - write
+    reason: Known issue tracked in API backlog
+    owner: api-team
+    expires_on: 2026-06-30
+```
+
+If you keep that file at the repo root, the standard commands pick it up automatically:
+
+```yaml
+- name: Verify findings with checked-in suppressions
+  run: knives-out verify results.json
+```
+
+```yaml
+- name: Promote qualifying findings with checked-in suppressions
+  if: always()
+  run: |
+    knives-out promote results.json \
+      --attacks attacks.json \
+      --out regression-attacks.json
+```
 
 ## Optional: stateful workflow coverage
 

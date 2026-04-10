@@ -18,7 +18,20 @@ from knives_out.openapi_loader import load_operations_with_warnings
 from knives_out.promotion import PromotionError, promote_attack_suite
 from knives_out.reporting import load_attack_results, render_markdown_report
 from knives_out.runner import execute_attack_suite, load_attack_suite
-from knives_out.verification import ComparedFinding, evaluate_verification
+from knives_out.suppressions import (
+    DEFAULT_SUPPRESSIONS_PATH,
+    SuppressionRule,
+    SuppressionsFile,
+    load_suppressions,
+    merge_suppressions,
+    triage_rule_for_result,
+    write_suppressions,
+)
+from knives_out.verification import (
+    ComparedFinding,
+    compare_attack_results,
+    evaluate_verification,
+)
 from knives_out.workflow_packs import load_workflow_packs
 
 app = typer.Typer(no_args_is_help=True, help="Adversarial API testing from OpenAPI specs.")
@@ -81,6 +94,34 @@ def _load_attack_results_or_error(path: Path, *, label: str) -> AttackResults:
         return load_attack_results(path)
     except (OSError, ValidationError, ValueError) as exc:
         raise typer.BadParameter(f"Could not read {label} results file '{path}': {exc}") from exc
+
+
+def _load_suppressions_or_error(
+    path: Path | None,
+) -> tuple[Path | None, list[SuppressionRule]]:
+    resolved_path = path
+    if resolved_path is None and DEFAULT_SUPPRESSIONS_PATH.exists():
+        resolved_path = DEFAULT_SUPPRESSIONS_PATH
+    if resolved_path is None:
+        return None, []
+
+    try:
+        suppressions_file = load_suppressions(resolved_path)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(
+            f"Could not read suppressions file '{resolved_path}': {exc}"
+        ) from exc
+
+    return resolved_path, suppressions_file.suppressions
+
+
+def _print_suppression_summary(
+    path: Path | None,
+    suppressions: list[SuppressionRule],
+) -> None:
+    if path is None:
+        return
+    console.print(f"Applied {len(suppressions)} suppression rule(s) from [bold]{path}[/bold].")
 
 
 def _print_compared_findings(title: str, findings: list[ComparedFinding]) -> None:
@@ -411,6 +452,12 @@ def report(
         Path | None,
         typer.Option(help="Optional baseline results file for regression comparison."),
     ] = None,
+    suppressions: Annotated[
+        Path | None,
+        typer.Option(
+            help="Optional suppressions file. Defaults to .knives-out-ignore.yml if present."
+        ),
+    ] = None,
     out: Annotated[
         Path | None,
         typer.Option(help="Optional Markdown output file."),
@@ -421,13 +468,20 @@ def report(
     baseline_results = (
         _load_attack_results_or_error(baseline, label="baseline") if baseline is not None else None
     )
-    markdown = render_markdown_report(attack_results, baseline=baseline_results)
+    suppressions_path, suppression_rules = _load_suppressions_or_error(suppressions)
+    markdown = render_markdown_report(
+        attack_results,
+        baseline=baseline_results,
+        suppressions=suppression_rules,
+    )
 
     if out is None:
+        _print_suppression_summary(suppressions_path, suppression_rules)
         console.print(markdown)
         return
 
     out.write_text(markdown, encoding="utf-8")
+    _print_suppression_summary(suppressions_path, suppression_rules)
     console.print(f"Wrote report to [bold]{out}[/bold].")
 
 
@@ -437,6 +491,12 @@ def verify(
     baseline: Annotated[
         Path | None,
         typer.Option(help="Optional baseline results file for regression comparison."),
+    ] = None,
+    suppressions: Annotated[
+        Path | None,
+        typer.Option(
+            help="Optional suppressions file. Defaults to .knives-out-ignore.yml if present."
+        ),
     ] = None,
     min_severity: Annotated[
         SeverityThresholdOption,
@@ -452,11 +512,13 @@ def verify(
     baseline_results = (
         _load_attack_results_or_error(baseline, label="baseline") if baseline is not None else None
     )
+    suppressions_path, suppression_rules = _load_suppressions_or_error(suppressions)
     verification = evaluate_verification(
         attack_results,
         baseline=baseline_results,
         min_severity=min_severity.value,
         min_confidence=min_confidence.value,
+        suppressions=suppression_rules,
     )
     comparison = verification.comparison
 
@@ -465,12 +527,14 @@ def verify(
         f"severity >= [bold]{min_severity.value}[/bold], "
         f"confidence >= [bold]{min_confidence.value}[/bold]."
     )
+    _print_suppression_summary(suppressions_path, suppression_rules)
     if verification.baseline_used:
         console.print(
             "Compared current findings against a baseline. "
             f"New: {len(comparison.new_findings)}, "
             f"Resolved: {len(comparison.resolved_findings)}, "
-            f"Persisting: {len(comparison.persisting_findings)}."
+            f"Persisting: {len(comparison.persisting_findings)}, "
+            f"Suppressed current: {len(comparison.suppressed_current_findings)}."
         )
         _print_compared_findings(
             "New findings meeting policy",
@@ -479,7 +543,8 @@ def verify(
     else:
         console.print(
             "Evaluated current flagged findings only. "
-            f"Flagged: {len(comparison.current_findings)}, "
+            f"Active flagged: {len(comparison.current_findings)}, "
+            f"suppressed: {len(comparison.suppressed_current_findings)}, "
             f"meeting policy: {len(verification.failing_findings)}."
         )
         _print_compared_findings(
@@ -510,6 +575,12 @@ def promote(
         Path | None,
         typer.Option(help="Optional baseline results file for regression comparison."),
     ] = None,
+    suppressions: Annotated[
+        Path | None,
+        typer.Option(
+            help="Optional suppressions file. Defaults to .knives-out-ignore.yml if present."
+        ),
+    ] = None,
     min_severity: Annotated[
         SeverityThresholdOption,
         typer.Option(help="Minimum severity that should be promoted."),
@@ -524,6 +595,7 @@ def promote(
     baseline_results = (
         _load_attack_results_or_error(baseline, label="baseline") if baseline is not None else None
     )
+    suppressions_path, suppression_rules = _load_suppressions_or_error(suppressions)
 
     try:
         attack_suite = load_attack_suite(attacks)
@@ -537,6 +609,7 @@ def promote(
             baseline=baseline_results,
             min_severity=min_severity.value,
             min_confidence=min_confidence.value,
+            suppressions=suppression_rules,
         )
     except PromotionError as exc:
         console.print(f"[red]Promotion error:[/red] {exc}")
@@ -552,6 +625,7 @@ def promote(
         f"severity >= [bold]{min_severity.value}[/bold], "
         f"confidence >= [bold]{min_confidence.value}[/bold]."
     )
+    _print_suppression_summary(suppressions_path, suppression_rules)
     if promotion.verification.baseline_used:
         console.print(
             "Promoted new qualifying attacks against a baseline. "
@@ -565,6 +639,41 @@ def promote(
     console.print(
         f"Wrote {len(promotion.promoted_suite.attacks)} promoted attack(s) to [bold]{out}[/bold]."
     )
+
+
+@app.command()
+def triage(
+    results: Path,
+    out: Annotated[
+        Path,
+        typer.Option(help="Where to write the suppressions file."),
+    ] = DEFAULT_SUPPRESSIONS_PATH,
+) -> None:
+    """Append review-ready suppressions for current active findings."""
+    current_results = _load_attack_results_or_error(results, label="current")
+
+    existing_file = SuppressionsFile()
+    if out.exists():
+        try:
+            existing_file = load_suppressions(out)
+        except (OSError, ValueError) as exc:
+            raise typer.BadParameter(f"Could not read suppressions file '{out}': {exc}") from exc
+
+    comparison = compare_attack_results(
+        current_results,
+        suppressions=existing_file.suppressions,
+    )
+    generated_rules = [triage_rule_for_result(result) for result in comparison.current_findings]
+    merged_rules = merge_suppressions(existing_file.suppressions, generated_rules)
+    added_count = len(merged_rules) - len(existing_file.suppressions)
+
+    write_suppressions(out, SuppressionsFile(suppressions=merged_rules))
+
+    console.print(
+        f"Triaged {len(comparison.current_findings)} active finding(s). "
+        f"Added {added_count} suppression rule(s)."
+    )
+    console.print(f"Wrote suppressions to [bold]{out}[/bold].")
 
 
 def main() -> None:

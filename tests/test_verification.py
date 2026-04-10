@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from knives_out.models import AttackResult, AttackResults
+from knives_out.suppressions import SuppressionRule
 from knives_out.verification import compare_attack_results, evaluate_verification
 
 
@@ -125,3 +126,51 @@ def test_evaluate_verification_with_baseline_fails_only_on_new_findings() -> Non
 
     assert verification.passed is False
     assert [finding.attack_id for finding in verification.failing_findings] == ["atk_new"]
+
+
+def test_compare_attack_results_excludes_suppressed_findings() -> None:
+    current = _results(
+        _finding("atk_suppressed", issue="server_error", severity="high", confidence="high"),
+        _finding("atk_visible", issue="server_error", severity="high", confidence="high"),
+    )
+
+    comparison = compare_attack_results(
+        current,
+        suppressions=[
+            SuppressionRule(
+                attack_id="atk_suppressed",
+                issue="server_error",
+                reason="known issue",
+                owner="api-team",
+            )
+        ],
+    )
+
+    assert [result.attack_id for result in comparison.current_findings] == ["atk_visible"]
+    assert [finding.result.attack_id for finding in comparison.suppressed_current_findings] == [
+        "atk_suppressed"
+    ]
+
+
+def test_evaluate_verification_respects_suppressions() -> None:
+    current = _results(
+        _finding("atk_suppressed", issue="server_error", severity="high", confidence="high"),
+    )
+
+    verification = evaluate_verification(
+        current,
+        suppressions=[
+            SuppressionRule(
+                attack_id="atk_suppressed",
+                issue="server_error",
+                reason="known issue",
+                owner="api-team",
+            )
+        ],
+    )
+
+    assert verification.passed is True
+    assert verification.comparison.current_findings == []
+    assert [
+        finding.result.attack_id for finding in verification.comparison.suppressed_current_findings
+    ] == ["atk_suppressed"]

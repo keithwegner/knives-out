@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from knives_out.models import AttackResults, AttackSuite
+from knives_out.suppressions import SuppressionRule
 from knives_out.verification import (
     ConfidenceThreshold,
     SeverityThreshold,
@@ -51,12 +52,14 @@ def promote_attack_suite(
     baseline: AttackResults | None = None,
     min_severity: SeverityThreshold = "high",
     min_confidence: ConfidenceThreshold = "medium",
+    suppressions: list[SuppressionRule] | None = None,
 ) -> PromotionResult:
     verification = evaluate_verification(
         current,
         baseline=baseline,
         min_severity=min_severity,
         min_confidence=min_confidence,
+        suppressions=suppressions,
     )
 
     available_ids = {attack.id for attack in attacks.attacks}

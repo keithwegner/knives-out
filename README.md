@@ -23,6 +23,7 @@ Given an OpenAPI document, `knives-out` can:
 - produce a Markdown report that highlights suspicious outcomes
 - verify findings for CI gating
 - promote qualifying findings back into a reusable regression suite
+- suppress or triage known findings so CI stays focused on active risk
 
 The initial focus is narrow by design:
 
@@ -137,6 +138,12 @@ Promote qualifying findings back into a reusable regression suite:
 knives-out promote results.json --attacks attacks.json --out regression-attacks.json
 ```
 
+Generate a review-ready suppressions file for known findings:
+
+```bash
+knives-out triage results.json --out .knives-out-ignore.yml
+```
+
 ## CI usage
 
 `knives-out` works well in CI when you follow the same generate/run/report flow and add a final
@@ -170,7 +177,10 @@ credentials on `--header` or `--query`, or move up to
 `--auth-plugin-module examples/auth_plugins/login_bearer.py` for login/session flows. When you want
 to keep only the highest-signal regressions around, follow `verify` with
 `knives-out promote results.json --attacks attacks.json`. See `docs/ci.md` for the sample
-workflow, secret setup, filtering patterns, and baseline-aware CI flows.
+workflow, secret setup, filtering patterns, baseline-aware CI flows, and checked-in suppressions.
+If you keep a `.knives-out-ignore.yml` file in the repo root, `report`, `verify`, and `promote`
+will load it automatically. Use `knives-out triage results.json` to seed new entries when you want
+to capture known findings without hand-writing YAML.
 
 ## CLI
 
@@ -288,6 +298,9 @@ and persisting findings:
 knives-out report results.json --baseline previous-results.json --out report.md
 ```
 
+If `.knives-out-ignore.yml` exists in the repo root, `report` will automatically show suppressed
+findings separately. You can also point at another file explicitly with `--suppressions path/to.yml`.
+
 ### `verify`
 
 Checks a results JSON file against a CI policy and exits non-zero when the policy fails.
@@ -304,6 +317,9 @@ knives-out verify results.json \
   --min-severity high \
   --min-confidence medium
 ```
+
+`verify` also auto-loads `.knives-out-ignore.yml` when present, so known accepted findings do not
+fail CI. Use `--suppressions path/to.yml` when you want a different file.
 
 ### `promote`
 
@@ -323,6 +339,38 @@ knives-out promote results.json \
   --attacks attacks.json \
   --baseline previous-results.json \
   --out regression-attacks.json
+```
+
+`promote` uses the same suppression behavior as `verify`, so suppressed findings stay out of the
+generated regression suite.
+
+### `triage`
+
+Generates review-ready suppression entries for the current active findings.
+
+```bash
+knives-out triage results.json --out .knives-out-ignore.yml
+```
+
+If the output file already exists, `triage` appends only new selector entries and keeps the
+existing rules intact. The generated YAML includes placeholder `reason` and `owner` fields so the
+team can review and fill them in before committing.
+
+Example suppression file:
+
+```yaml
+suppressions:
+  - attack_id: atk_create_pet_missing_body
+    issue: server_error
+    operation_id: createPet
+    method: POST
+    path: /pets
+    tags:
+      - pets
+      - write
+    reason: Known issue tracked in API backlog
+    owner: api-team
+    expires_on: 2026-06-30
 ```
 
 ## Development

@@ -716,6 +716,8 @@ def _request_result(
         kind=attack.kind,
         name=attack.name,
         method=attack.method,
+        path=attack.path,
+        tags=list(attack.tags),
         url=execution.url,
         status_code=execution.response.status_code if execution.response else None,
         error=execution.error,
@@ -789,6 +791,8 @@ def _workflow_failure_result(
         kind=workflow.kind,
         name=workflow.name,
         method=workflow.method,
+        path=workflow.path,
+        tags=list(workflow.tags),
         url=_workflow_terminal_fallback_url(
             workflow,
             base_url=base_url,
