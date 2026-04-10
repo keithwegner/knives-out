@@ -20,6 +20,7 @@ def test_load_auth_profiles_reads_named_profiles(tmp_path: Path) -> None:
         "    level: 0\n"
         "  - name: admin\n"
         "    level: 20\n"
+        "    auth_config: admin\n"
         "    headers:\n"
         "      Authorization: Bearer admin\n",
         encoding="utf-8",
@@ -28,6 +29,7 @@ def test_load_auth_profiles_reads_named_profiles(tmp_path: Path) -> None:
     profiles_file = load_auth_profiles(profile_path)
 
     assert [profile.name for profile in profiles_file.profiles] == ["anonymous", "admin"]
+    assert profiles_file.profiles[1].auth_config == "admin"
     assert profiles_file.profiles[1].headers["Authorization"] == "Bearer admin"
 
 

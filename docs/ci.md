@@ -25,6 +25,11 @@ Optional secrets:
 
 - `KNIVES_OUT_AUTH_HEADER`
 - `KNIVES_OUT_AUTH_QUERY`
+- `KNIVES_OUT_USER_TOKEN`
+- `KNIVES_OUT_ADMIN_TOKEN`
+- `KNIVES_OUT_CLIENT_ID`
+- `KNIVES_OUT_CLIENT_SECRET`
+- `KNIVES_OUT_CLIENT_AUDIENCE`
 - plugin-specific login or bearer env vars if you use an auth plugin module
 
 The optional values should match the current CLI surface:
@@ -32,9 +37,10 @@ The optional values should match the current CLI surface:
 - `KNIVES_OUT_AUTH_HEADER`: `Authorization: Bearer dev-token`
 - `KNIVES_OUT_AUTH_QUERY`: `api_key=dev-secret`
 
-For static credentials, `--header` and `--query` are still the simplest fit. Use auth/session
-plugins when your CI flow needs to log in, fetch a bearer token, or establish a shared session
-before the suite or each workflow runs.
+For static credentials, `--header` and `--query` are still the simplest fit. For common auth
+flows, prefer `--auth-config examples/auth_configs/user-admin.yml` or
+`--auth-config examples/auth_configs/client-credentials.yml`. Use auth/session plugins when your
+CI flow needs custom logic beyond the built-in bearer and session-cookie strategies.
 
 If you want identity-aware authorization coverage, the repo also includes
 `examples/auth_profiles/anonymous-user-admin.yml` as a starter profile file.
@@ -211,6 +217,39 @@ The same exact-match filters work in `inspect`, `generate`, and `run`:
 ```
 
 ## Optional: auth/session plugins
+
+For many protected APIs, a built-in auth config is enough:
+
+```yaml
+- name: Run suite with built-in auth config
+  run: |
+    knives-out run attacks.json \
+      --base-url "${KNIVES_OUT_BASE_URL}" \
+      --auth-config examples/auth_configs/client-credentials.yml \
+      --artifact-dir artifacts \
+      --out results.json
+```
+
+Or execute checked-in named auth configs as profiles:
+
+```yaml
+- name: Run suite across built-in user and admin auth configs
+  run: |
+    knives-out run attacks.json \
+      --base-url "${KNIVES_OUT_BASE_URL}" \
+      --auth-config examples/auth_configs/user-admin.yml \
+      --auth-profile user \
+      --auth-profile admin \
+      --artifact-dir artifacts \
+      --out results.json
+```
+
+Built-in auth config examples live at:
+
+- `examples/auth_configs/user-admin.yml`
+- `examples/auth_configs/client-credentials.yml`
+
+If your target needs custom Python logic instead, fall back to plugins:
 
 For login or shared-session flows, load a local auth plugin module during `run`:
 

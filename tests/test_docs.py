@@ -35,9 +35,13 @@ def test_readme_includes_ci_guidance() -> None:
     assert "examples/graphql/library.graphql" in readme
     assert "--graphql-endpoint /api/graphql" in readme
     assert "graphql-attacks.json" in readme
+    assert "examples/auth_configs/user-admin.yml" in readme
+    assert "examples/auth_configs/client-credentials.yml" in readme
+    assert "--auth-config examples/auth_configs/user-admin.yml" in readme
+    assert "--auth-profile user" in readme
     assert "examples/workflow_packs/listed_pet_lookup.py" in readme
-    assert "**v0.9:** first-class auth and session realism" in readme
     assert "**v0.10:** deeper GraphQL coverage" in readme
+    assert "The built-in auth/config milestone is now shipped." in readme
 
 
 def test_dev_environment_workflow_matches_current_cli_surface() -> None:
@@ -54,6 +58,9 @@ def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     assert "--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py" in workflow
     assert "examples/graphql/library.graphql" in workflow
     assert "--graphql-endpoint /graphql" in workflow
+    assert "--auth-config examples/auth_configs/client-credentials.yml" in workflow
+    assert "--auth-config examples/auth_configs/user-admin.yml" in workflow
+    assert "--auth-profile user" in workflow
     assert "--profile-file examples/auth_profiles/anonymous-user-admin.yml" in workflow
     assert "--profile anonymous" in workflow
     assert 'knives-out run attacks.json "${args[@]}"' in workflow
@@ -81,8 +88,11 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "Baseline-aware gating" in ci_doc
     assert "Optional: checked-in suppressions" in ci_doc
     assert "Optional: multi-profile authorization runs" in ci_doc
+    assert "built-in auth config" in ci_doc
     assert "Optional: HTML report and artifact index" in ci_doc
     assert "Optional: GraphQL schemas" in ci_doc
+    assert "examples/auth_configs/user-admin.yml" in ci_doc
+    assert "examples/auth_configs/client-credentials.yml" in ci_doc
     assert "examples/auth_profiles/anonymous-user-admin.yml" in ci_doc
     assert "examples/graphql/library.graphql" in ci_doc
     assert "knives-out triage results.json --out .knives-out-ignore.yml" in ci_doc
@@ -141,7 +151,7 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
 
     assert "## Recently completed" in roadmap
     assert "v0.8: GraphQL schema support" in roadmap
-    assert "## v0.9 — first-class auth and session realism" in roadmap
+    assert "v0.9: built-in auth acquisition and refresh flows" in roadmap
     assert "client_credentials" in roadmap
     assert "## v0.10 — deeper GraphQL coverage" in roadmap
     assert "subscription coverage" in roadmap
@@ -149,8 +159,11 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
 
     assert "graphql_loader.py" in architecture
     assert "spec_loader.py" in architecture
+    assert "auth_config.py" in architecture
+    assert "builtin_auth.py" in architecture
     assert "GraphQL SDL or introspection JSON" in architecture
-    assert "200` response with an `errors` array" in architecture
-    assert "first-class auth/session profile strategies" in architecture
+    assert "`200` response" in architecture
+    assert "`errors`" in architecture
+    assert "built-in auth acquisition/refresh" in architecture
     assert "GraphQL response-shape validation, federation awareness" in architecture
     assert "redirect-driven OAuth auth-code flows" in architecture

@@ -1,0 +1,14 @@
+auth:
+  - name: user
+    strategy: static_bearer
+    description: Typical authenticated user traffic with a bearer token from CI secrets.
+    level: 10
+    token: "{{env.KNIVES_OUT_USER_TOKEN}}"
+
+  - name: admin
+    strategy: static_bearer
+    description: Higher-trust admin traffic with an audit header.
+    level: 20
+    headers:
+      X-Audit: "1"
+    token: "{{env.KNIVES_OUT_ADMIN_TOKEN}}"

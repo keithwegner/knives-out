@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 import httpx
 
+from knives_out.auth_config import BuiltInAuthConfig
 from knives_out.auth_plugins import (
     LoadedAuthPlugin,
     PluginRuntimeError,
@@ -22,6 +23,7 @@ from knives_out.auth_plugins import (
     load_auth_plugins,
     make_auth_plugin,
 )
+from knives_out.builtin_auth import make_builtin_auth_plugin
 from knives_out.models import (
     AttackCase,
     AttackDefinition,
@@ -603,12 +605,15 @@ def _loaded_auth_plugins(
     *,
     auth_plugins: list[LoadedAuthPlugin | RuntimePlugin | type[RuntimePlugin]] | None,
     workflow_hooks: list[WorkflowHook] | None,
+    built_in_auth_configs: list[BuiltInAuthConfig] | None = None,
 ) -> list[LoadedAuthPlugin]:
     loaded: list[LoadedAuthPlugin] = []
     for index, plugin in enumerate(auth_plugins or [], start=1):
         loaded.append(_coerce_loaded_auth_plugin(plugin, default_name=f"auth-plugin-{index}"))
     for index, hook in enumerate(workflow_hooks or [], start=1):
         loaded.append(_coerce_loaded_auth_plugin(hook, default_name=f"workflow-hook-{index}"))
+    for config in built_in_auth_configs or []:
+        loaded.append(make_builtin_auth_plugin(config))
     return loaded
 
 
@@ -624,92 +629,98 @@ def _execute_request(
     artifact_metadata: dict[str, Any] | None,
     auth_plugins: list[LoadedAuthPlugin],
 ) -> RequestExecution:
-    _invoke_auth_plugins(auth_plugins, "before_request", request, context)
-
+    total_duration_ms = 0.0
     request_kwargs: dict[str, Any] | None = None
-    try:
-        url = _resolve_request_path(
-            request,
-            base_url=context.base_url,
-            extracted_values=context.extracted_values,
-        )
-        headers = _resolved_headers(
-            request,
-            default_headers=default_headers,
-            extracted_values=context.extracted_values,
-        )
-        query = _resolved_query(
-            request,
-            default_query=default_query,
-            extracted_values=context.extracted_values,
-        )
-        request_kwargs = {
-            "params": query,
-            "headers": headers,
-        }
-        if not request.omit_body:
-            if request.raw_body is not None:
-                request_kwargs["content"] = str(
-                    _resolve_templates(request.raw_body, context.extracted_values)
-                )
-                content_type = request.content_type
-                if content_type is not None:
-                    content_type = str(_resolve_templates(content_type, context.extracted_values))
-                if content_type and "Content-Type" not in headers:
-                    request_kwargs["headers"] = {**headers, "Content-Type": content_type}
-                    headers = request_kwargs["headers"]
-            elif request.body_json is not None:
-                request_kwargs["json"] = _resolve_templates(
-                    request.body_json,
-                    context.extracted_values,
-                )
-        execution = RequestExecution(
-            url=url,
-            headers=headers,
-            query=query,
-            response=None,
-            error=None,
-            duration_ms=0.0,
-        )
-    except WorkflowResolutionError as exc:
+    execution: RequestExecution | None = None
+    max_attempts = 2
+
+    for attempt in range(max_attempts):
+        _invoke_auth_plugins(auth_plugins, "before_request", request, context)
+
+        try:
+            url = _resolve_request_path(
+                request,
+                base_url=context.base_url,
+                extracted_values=context.extracted_values,
+            )
+            headers = _resolved_headers(
+                request,
+                default_headers=default_headers,
+                extracted_values=context.extracted_values,
+            )
+            query = _resolved_query(
+                request,
+                default_query=default_query,
+                extracted_values=context.extracted_values,
+            )
+            request_kwargs = {
+                "params": query,
+                "headers": headers,
+            }
+            if not request.omit_body:
+                if request.raw_body is not None:
+                    request_kwargs["content"] = str(
+                        _resolve_templates(request.raw_body, context.extracted_values)
+                    )
+                    content_type = request.content_type
+                    if content_type is not None:
+                        content_type = str(
+                            _resolve_templates(content_type, context.extracted_values)
+                        )
+                    if content_type and "Content-Type" not in headers:
+                        request_kwargs["headers"] = {**headers, "Content-Type": content_type}
+                        headers = request_kwargs["headers"]
+                elif request.body_json is not None:
+                    request_kwargs["json"] = _resolve_templates(
+                        request.body_json,
+                        context.extracted_values,
+                    )
+            execution = RequestExecution(
+                url=url,
+                headers=headers,
+                query=query,
+                response=None,
+                error=None,
+                duration_ms=0.0,
+            )
+        except WorkflowResolutionError as exc:
+            execution = RequestExecution(
+                url=context.build_url(request.path),
+                headers={},
+                query={},
+                response=None,
+                error=str(exc),
+                duration_ms=0.0,
+                resolution_error=True,
+            )
+            _invoke_auth_plugins(auth_plugins, "after_request", request, context, execution)
+            break
+
+        start = time.perf_counter()
+        try:
+            execution.response = client.request(request.method, execution.url, **request_kwargs)
+        except Exception as exc:  # noqa: BLE001
+            execution.error = str(exc)
+        execution.duration_ms = (time.perf_counter() - start) * 1000.0
+        total_duration_ms += execution.duration_ms
+
+        _invoke_auth_plugins(auth_plugins, "after_request", request, context, execution)
+        if execution.retry_requested and attempt + 1 < max_attempts:
+            continue
+        break
+
+    if execution is None:
         execution = RequestExecution(
             url=context.build_url(request.path),
             headers={},
             query={},
             response=None,
-            error=str(exc),
+            error="Request execution did not produce a result.",
             duration_ms=0.0,
-            resolution_error=True,
         )
-        _invoke_auth_plugins(auth_plugins, "after_request", request, context, execution)
-        if (
-            artifact_root is not None
-            and artifact_filename is not None
-            and artifact_metadata is not None
-        ):
-            _write_request_artifact(
-                artifact_root,
-                filename=artifact_filename,
-                request=request,
-                metadata=artifact_metadata,
-                url=execution.url,
-                headers=execution.headers,
-                query=execution.query,
-                request_kwargs=None,
-                response=None,
-                error=execution.error,
-                duration_ms=execution.duration_ms,
-            )
-        return execution
+    else:
+        execution.duration_ms = total_duration_ms or execution.duration_ms
 
-    start = time.perf_counter()
-    try:
-        execution.response = client.request(request.method, execution.url, **request_kwargs)
-    except Exception as exc:  # noqa: BLE001
-        execution.error = str(exc)
-    execution.duration_ms = (time.perf_counter() - start) * 1000.0
-
-    _invoke_auth_plugins(auth_plugins, "after_request", request, context, execution)
     if (
         artifact_root is not None
         and artifact_filename is not None
@@ -1040,6 +1051,7 @@ def _execute_workflow_attack(
     artifact_root: Path | None,
     auth_plugins: list[LoadedAuthPlugin],
     initial_state: dict[str, Any],
+    auth_events,
 ) -> AttackResult:
     total_duration_ms = 0.0
     with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
@@ -1049,6 +1061,7 @@ def _execute_workflow_attack(
             scope="workflow",
             state=dict(initial_state),
             extracted_values={},
+            auth_events=auth_events,
             workflow_id=workflow.id,
         )
         _invoke_auth_plugins(auth_plugins, "before_workflow", workflow, context)
@@ -1187,6 +1200,7 @@ def execute_attack_suite(
     artifact_dir: str | Path | None = None,
     auth_plugins: list[LoadedAuthPlugin | RuntimePlugin | type[RuntimePlugin]] | None = None,
     workflow_hooks: list[WorkflowHook] | None = None,
+    built_in_auth_configs: list[BuiltInAuthConfig] | None = None,
     profile_name: str | None = None,
     profile_level: int = 0,
     profile_anonymous: bool = False,
@@ -1201,6 +1215,7 @@ def execute_attack_suite(
     loaded_plugins = _loaded_auth_plugins(
         auth_plugins=auth_plugins,
         workflow_hooks=workflow_hooks,
+        built_in_auth_configs=built_in_auth_configs,
     )
     with httpx.Client(timeout=timeout_seconds, follow_redirects=False) as client:
         suite_context = RuntimeContext(
@@ -1224,6 +1239,7 @@ def execute_attack_suite(
                         artifact_root=artifact_root,
                         auth_plugins=loaded_plugins,
                         initial_state=suite_context.state,
+                        auth_events=suite_context.auth_events,
                     )
                 )
                 continue
@@ -1255,6 +1271,7 @@ def execute_attack_suite(
         source=suite.source,
         base_url=base_url,
         profiles=[profile_name] if profile_name is not None else [],
+        auth_events=suite_context.auth_events,
         results=results,
     )
 
@@ -1268,6 +1285,7 @@ def execute_attack_suite_profiles(
     default_query: dict[str, Any] | None = None,
     timeout_seconds: float = 10.0,
     artifact_dir: str | Path | None = None,
+    built_in_auth_configs: dict[str, BuiltInAuthConfig] | None = None,
 ) -> AttackResults:
     if not profiles:
         raise ValueError("At least one auth profile is required for multi-profile execution.")
@@ -1277,6 +1295,14 @@ def execute_attack_suite_profiles(
 
     per_profile_runs: list[tuple[AuthProfile, AttackResults]] = []
     for profile in profiles:
+        built_in_configs = []
+        if profile.auth_config:
+            if built_in_auth_configs is None or profile.auth_config not in built_in_auth_configs:
+                raise ValueError(
+                    f"Profile '{profile.name}' references unknown auth config "
+                    f"{profile.auth_config!r}."
+                )
+            built_in_configs.append(built_in_auth_configs[profile.auth_config])
         loaded_plugins = load_auth_plugins(
             entry_point_names=profile.auth_plugins,
             module_paths=[Path(module_path) for module_path in profile.auth_plugin_modules],
@@ -1289,6 +1315,7 @@ def execute_attack_suite_profiles(
             timeout_seconds=timeout_seconds,
             artifact_dir=_profile_artifact_dir(artifact_dir, profile),
             auth_plugins=loaded_plugins,
+            built_in_auth_configs=built_in_configs,
             profile_name=profile.name,
             profile_level=profile.level,
             profile_anonymous=profile.anonymous,
@@ -1331,5 +1358,6 @@ def execute_attack_suite_profiles(
         source=suite.source,
         base_url=base_url,
         profiles=[profile.name for profile in profiles],
+        auth_events=[event for _, run in per_profile_runs for event in run.auth_events],
         results=aggregated_results,
     )
