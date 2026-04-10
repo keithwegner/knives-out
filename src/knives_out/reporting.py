@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from knives_out.models import AttackResults
+from knives_out.models import AttackResults, ProfileAttackResult
 from knives_out.suppressions import SuppressedFinding, SuppressionRule
 from knives_out.verification import (
     ComparedFinding,
@@ -42,6 +42,24 @@ def _suppressed_table_rows(findings: list[SuppressedFinding]) -> list[str]:
     return rows
 
 
+def _profile_table_rows(profile_results: list[ProfileAttackResult]) -> list[str]:
+    rows: list[str] = []
+    for profile_result in sorted(
+        profile_results,
+        key=lambda result: (result.level, result.profile.casefold()),
+    ):
+        status = str(profile_result.status_code) if profile_result.status_code is not None else "-"
+        schema = "mismatch" if profile_result.response_schema_valid is False else "-"
+        profile_name = profile_result.profile
+        if profile_result.anonymous:
+            profile_name = f"{profile_name} (anonymous)"
+        rows.append(
+            f"| {profile_name} | {profile_result.level} | {status} | "
+            f"{profile_result.issue or 'ok'} | {schema} | `{profile_result.url}` |"
+        )
+    return rows
+
+
 def _workflow_phase(result) -> str:
     if result.type != "workflow":
         return "request"
@@ -73,6 +91,9 @@ def render_markdown_report(
     lines.append(f"- Base URL: `{results.base_url}`")
     lines.append(f"- Executed at: `{results.executed_at.isoformat()}`")
     lines.append(f"- Total attacks: **{total}**")
+    if results.profiles:
+        lines.append(f"- Profiles: **{len(results.profiles)}**")
+        lines.append(f"- Profile names: `{', '.join(results.profiles)}`")
     lines.append(f"- Active flagged results: **{flagged}**")
     lines.append(f"- Suppressed flagged results: **{suppressed_flagged}**")
     lines.append(f"- Response schema mismatches: **{response_schema_mismatches}**")
@@ -183,6 +204,11 @@ def render_markdown_report(
             lines.append(f"- Error: `{result.error}`")
         if result.duration_ms is not None:
             lines.append(f"- Duration: `{result.duration_ms:.2f} ms`")
+        if result.profile_results:
+            lines.append("")
+            lines.append("| Profile | Level | Status | Issue | Schema | URL |")
+            lines.append("| --- | ---: | ---: | --- | --- | --- |")
+            lines.extend(_profile_table_rows(result.profile_results))
         if result.response_excerpt:
             lines.append("")
             lines.append("```text")

@@ -69,6 +69,12 @@ jobs:
 
           # For login/session auth, load a plugin module instead of static header/query credentials:
           # args+=(--auth-plugin-module examples/auth_plugins/login_bearer.py)
+          # For identity-aware authorization coverage, use a checked-in profile file instead:
+          # args+=(
+          #   --profile-file examples/auth_profiles/anonymous-user-admin.yml
+          #   --profile anonymous
+          #   --profile admin
+          # )
 
           knives-out run attacks.json "${args[@]}"
       - name: Render Markdown report

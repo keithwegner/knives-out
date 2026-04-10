@@ -20,6 +20,8 @@ def test_readme_includes_ci_guidance() -> None:
     assert "knives-out promote results.json" in readme
     assert "knives-out triage results.json" in readme
     assert ".knives-out-ignore.yml" in readme
+    assert "--profile-file examples/auth_profiles/anonymous-user-admin.yml" in readme
+    assert "anonymous_access" in readme
     assert "--auto-workflows" in readme
     assert "--tag orders" in readme
     assert "--path /draft-orders/{draftId}" in readme
@@ -39,6 +41,8 @@ def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     assert "--path /draft-orders/{draftId}" in workflow
     assert "--auto-workflows" in workflow
     assert "--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py" in workflow
+    assert "--profile-file examples/auth_profiles/anonymous-user-admin.yml" in workflow
+    assert "--profile anonymous" in workflow
     assert 'knives-out run attacks.json "${args[@]}"' in workflow
     assert "knives-out report results.json --out report.md" in workflow
     assert "knives-out report results.json \\" in workflow
@@ -58,6 +62,8 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "Simple gating with no baseline" in ci_doc
     assert "Baseline-aware gating" in ci_doc
     assert "Optional: checked-in suppressions" in ci_doc
+    assert "Optional: multi-profile authorization runs" in ci_doc
+    assert "examples/auth_profiles/anonymous-user-admin.yml" in ci_doc
     assert "knives-out triage results.json --out .knives-out-ignore.yml" in ci_doc
     assert ".knives-out-ignore.yml" in ci_doc
     assert "--baseline previous-results.json" in ci_doc

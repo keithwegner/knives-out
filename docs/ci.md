@@ -35,6 +35,9 @@ For static credentials, `--header` and `--query` are still the simplest fit. Use
 plugins when your CI flow needs to log in, fetch a bearer token, or establish a shared session
 before the suite or each workflow runs.
 
+If you want identity-aware authorization coverage, the repo also includes
+`examples/auth_profiles/anonymous-user-admin.yml` as a starter profile file.
+
 For richer checked-in examples, the repo now includes `examples/openapi/storefront.yaml`, which
 combines exact tags, path filters, schema constraints, and a producer/consumer workflow chain.
 
@@ -205,6 +208,38 @@ The sample `examples/auth_plugins/login_bearer.py` expects:
 - `KNIVES_OUT_LOGIN_PASSWORD`
 
 You can also install auth plugins as entry points and load them with `--auth-plugin env-bearer`.
+
+## Optional: multi-profile authorization runs
+
+To compare the same suite across multiple identities, pass a profile file to `run`:
+
+```yaml
+- name: Run suite across anonymous, user, and admin profiles
+  run: |
+    knives-out run attacks.json \
+      --base-url "${KNIVES_OUT_BASE_URL}" \
+      --profile-file examples/auth_profiles/anonymous-user-admin.yml \
+      --artifact-dir artifacts \
+      --out results.json
+```
+
+You can narrow the run to a subset of profiles when needed:
+
+```yaml
+- name: Run only anonymous and admin profiles
+  run: |
+    knives-out run attacks.json \
+      --base-url "${KNIVES_OUT_BASE_URL}" \
+      --profile-file examples/auth_profiles/anonymous-user-admin.yml \
+      --profile anonymous \
+      --profile admin \
+      --out results.json
+```
+
+Each profile can contribute its own headers, query params, installed auth plugins, or local
+`auth_plugin_modules`. The resulting `results.json` keeps a normal top-level result list so
+`report`, `verify`, `promote`, and suppressions continue to work, while the Markdown report adds
+per-profile outcome tables for deeper authorization review.
 
 ## Optional: baseline-aware report
 

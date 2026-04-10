@@ -10,13 +10,15 @@ from knives_out.models import (
     AttackResult,
     AttackResults,
     AttackSuite,
+    AuthProfile,
     ExtractRule,
+    ProfileAttackResult,
     WorkflowAttackCase,
     WorkflowStep,
     WorkflowStepResult,
 )
 from knives_out.reporting import render_markdown_report
-from knives_out.runner import execute_attack_suite
+from knives_out.runner import execute_attack_suite, execute_attack_suite_profiles
 from knives_out.suppressions import SuppressionRule
 
 
@@ -130,7 +132,11 @@ def _install_client_sequence(monkeypatch, clients: list[object]) -> None:
     monkeypatch.setattr("knives_out.runner.httpx.Client", _client_factory)
 
 
-def _attack_case(*, response_schemas: dict[str, dict[str, object]]) -> AttackCase:
+def _attack_case(
+    *,
+    response_schemas: dict[str, dict[str, object]],
+    auth_required: bool = False,
+) -> AttackCase:
     return AttackCase(
         id="atk_test",
         name="Test attack",
@@ -138,6 +144,7 @@ def _attack_case(*, response_schemas: dict[str, dict[str, object]]) -> AttackCas
         operation_id="createPet",
         method="POST",
         path="/pets",
+        auth_required=auth_required,
         description="Test attack",
         response_schemas=response_schemas,
     )
@@ -511,6 +518,164 @@ def test_render_markdown_report_shows_suppressed_findings() -> None:
     assert "known issue" in report
     assert "Active flagged results: **0**" in report
     assert "Suppressed flagged results: **1**" in report
+
+
+def test_execute_attack_suite_profiles_flags_anonymous_access(monkeypatch) -> None:
+    def _handler(request: dict[str, object]) -> httpx.Response:
+        authorization = (request.get("headers") or {}).get("Authorization")
+        if authorization is None:
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(403, json={"detail": "forbidden"})
+
+    _install_client_sequence(
+        monkeypatch,
+        [
+            _HandlerClient(_handler),
+            _HandlerClient(_handler),
+            _HandlerClient(_handler),
+        ],
+    )
+
+    suite = AttackSuite(
+        source="unit",
+        attacks=[
+            AttackCase(
+                id="atk_secret",
+                name="Secret lookup",
+                kind="missing_auth",
+                operation_id="getSecret",
+                method="GET",
+                path="/secrets",
+                auth_required=True,
+                description="Secret lookup",
+            )
+        ],
+    )
+
+    results = execute_attack_suite_profiles(
+        suite,
+        base_url="https://example.com",
+        profiles=[
+            AuthProfile(name="anonymous", anonymous=True, level=0),
+            AuthProfile(name="user", level=10, headers={"Authorization": "Bearer user"}),
+            AuthProfile(name="admin", level=20, headers={"Authorization": "Bearer admin"}),
+        ],
+    )
+
+    issues = [result.issue for result in results.results if result.flagged]
+
+    assert results.profiles == ["anonymous", "user", "admin"]
+    assert issues == ["unexpected_success", "anonymous_access"]
+    auth_result = results.results[1]
+    assert auth_result.profile_results is not None
+    assert [profile.profile for profile in auth_result.profile_results] == [
+        "anonymous",
+        "user",
+        "admin",
+    ]
+
+
+def test_execute_attack_suite_profiles_flags_authorization_inversion(monkeypatch) -> None:
+    def _handler(request: dict[str, object]) -> httpx.Response:
+        authorization = (request.get("headers") or {}).get("Authorization")
+        if authorization == "Bearer user":
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(403, json={"detail": "forbidden"})
+
+    _install_client_sequence(
+        monkeypatch,
+        [
+            _HandlerClient(_handler),
+            _HandlerClient(_handler),
+        ],
+    )
+
+    suite = AttackSuite(
+        source="unit",
+        attacks=[
+            AttackCase(
+                id="atk_admin",
+                name="Admin-only lookup",
+                kind="wrong_type_param",
+                operation_id="getAdminSecret",
+                method="GET",
+                path="/admin/secrets",
+                auth_required=True,
+                description="Admin-only lookup",
+            )
+        ],
+    )
+
+    results = execute_attack_suite_profiles(
+        suite,
+        base_url="https://example.com",
+        profiles=[
+            AuthProfile(name="user", level=10, headers={"Authorization": "Bearer user"}),
+            AuthProfile(name="admin", level=20, headers={"Authorization": "Bearer admin"}),
+        ],
+    )
+
+    issues = [result.issue for result in results.results if result.flagged]
+
+    assert issues == ["unexpected_success", "authorization_inversion"]
+    inversion = results.results[1]
+    assert inversion.error is not None
+    assert "higher-trust profile 'admin'" in inversion.error
+
+
+def test_render_markdown_report_shows_profile_outcomes() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        profiles=["anonymous", "user", "admin"],
+        results=[
+            AttackResult(
+                attack_id="atk_secret",
+                operation_id="getSecret",
+                kind="missing_auth",
+                name="Secret lookup",
+                method="GET",
+                path="/secrets",
+                url="https://example.com/secrets",
+                status_code=200,
+                flagged=True,
+                issue="anonymous_access",
+                severity="high",
+                confidence="high",
+                profile_results=[
+                    ProfileAttackResult(
+                        profile="anonymous",
+                        level=0,
+                        anonymous=True,
+                        url="https://example.com/secrets",
+                        status_code=200,
+                        flagged=True,
+                        issue="unexpected_success",
+                        severity="high",
+                        confidence="medium",
+                    ),
+                    ProfileAttackResult(
+                        profile="user",
+                        level=10,
+                        url="https://example.com/secrets",
+                        status_code=403,
+                    ),
+                    ProfileAttackResult(
+                        profile="admin",
+                        level=20,
+                        url="https://example.com/secrets",
+                        status_code=403,
+                    ),
+                ],
+            )
+        ],
+    )
+
+    report = render_markdown_report(results)
+
+    assert "- Profiles: **3**" in report
+    assert "anonymous (anonymous)" in report
+    assert "| user | 10 | 403 | ok | - | `https://example.com/secrets` |" in report
 
 
 def test_execute_attack_suite_removes_only_declared_auth_header(monkeypatch) -> None:

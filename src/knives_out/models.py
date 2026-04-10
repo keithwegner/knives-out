@@ -51,6 +51,31 @@ class LoadedOperations(BaseModel):
     warnings: list[PreflightWarning] = Field(default_factory=list)
 
 
+class AuthProfile(BaseModel):
+    name: str
+    level: int = 0
+    anonymous: bool = False
+    description: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    query: dict[str, Any] = Field(default_factory=dict)
+    auth_plugins: list[str] = Field(default_factory=list)
+    auth_plugin_modules: list[str] = Field(default_factory=list)
+
+
+class AuthProfilesFile(BaseModel):
+    profiles: list[AuthProfile] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_unique_names(self) -> AuthProfilesFile:
+        seen: set[str] = set()
+        for profile in self.profiles:
+            normalized = profile.name.casefold()
+            if normalized in seen:
+                raise ValueError(f"Duplicate auth profile name {profile.name!r}.")
+            seen.add(normalized)
+        return self
+
+
 class AttackCase(BaseModel):
     type: Literal["request"] = "request"
     id: str
@@ -60,6 +85,7 @@ class AttackCase(BaseModel):
     method: str
     path: str
     tags: list[str] = Field(default_factory=list)
+    auth_required: bool = False
     description: str
     path_params: dict[str, Any] = Field(default_factory=dict)
     query: dict[str, Any] = Field(default_factory=dict)
@@ -107,6 +133,7 @@ class WorkflowAttackCase(BaseModel):
     method: str
     path: str
     tags: list[str] = Field(default_factory=list)
+    auth_required: bool = False
     description: str
     setup_steps: list[WorkflowStep] = Field(default_factory=list)
     terminal_attack: AttackCase
@@ -163,6 +190,25 @@ class WorkflowStepResult(BaseModel):
     response_excerpt: str | None = None
 
 
+class ProfileAttackResult(BaseModel):
+    profile: str
+    level: int = 0
+    anonymous: bool = False
+    url: str
+    status_code: int | None = None
+    error: str | None = None
+    duration_ms: float | None = None
+    flagged: bool = False
+    issue: str | None = None
+    severity: SeverityLevel = "none"
+    confidence: ConfidenceLevel = "none"
+    response_excerpt: str | None = None
+    response_schema_status: str | None = None
+    response_schema_valid: bool | None = None
+    response_schema_error: str | None = None
+    workflow_steps: list[WorkflowStepResult] | None = None
+
+
 class AttackResult(BaseModel):
     type: AttackType = "request"
     attack_id: str
@@ -185,12 +231,14 @@ class AttackResult(BaseModel):
     response_schema_valid: bool | None = None
     response_schema_error: str | None = None
     workflow_steps: list[WorkflowStepResult] | None = None
+    profile_results: list[ProfileAttackResult] | None = None
 
 
 class AttackResults(BaseModel):
     source: str
     base_url: str
     executed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    profiles: list[str] = Field(default_factory=list)
     results: list[AttackResult] = Field(default_factory=list)
 
     @model_validator(mode="before")

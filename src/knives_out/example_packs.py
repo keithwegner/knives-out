@@ -20,6 +20,7 @@ def generate_unexpected_header_attack(operation: OperationSpec) -> list[AttackCa
             method=operation.method,
             path=operation.path,
             tags=list(operation.tags),
+            auth_required=operation.auth_required,
             description="Adds an unexpected header to probe strict header handling.",
             path_params=path_params,
             query=query,
