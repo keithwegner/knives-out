@@ -315,8 +315,10 @@ class BuiltInAuthPlugin(RuntimePlugin):
             return
         if bundle.get("retry_in_progress"):
             return
-        if bundle.get("last_error") and bundle.get("token") is None and not bundle.get(
-            "session_ready"
+        if (
+            bundle.get("last_error")
+            and bundle.get("token") is None
+            and not bundle.get("session_ready")
         ):
             return
 
