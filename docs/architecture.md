@@ -23,6 +23,8 @@ src/knives_out/
   generator.py       # Request and workflow attack generation
   filtering.py       # Tag and path filtering helpers
   runner.py          # HTTP execution, workflows, profiles, and auth runtime
+  auth_config.py     # Built-in auth config loading and profile helpers
+  builtin_auth.py    # Built-in bearer/session acquisition and refresh runtime
   auth_plugins.py    # Auth/session plugin helpers
   profiles.py        # Multi-profile loading and comparison inputs
   reporting.py       # Markdown and HTML report rendering
@@ -51,14 +53,15 @@ That JSON should become the contract between future generators and future runner
 ### 3. Execute suite
 
 `runner.py` executes the saved suite against a concrete base URL. Runtime auth, query values,
-profile-specific defaults, and workflow state are merged at this phase rather than baked into
-generation. For GraphQL attacks, a `200` response with an `errors` array is treated as an
-expected validation failure instead of an unexpected success.
+profile-specific defaults, built-in auth acquisition/refresh, and workflow state are merged at
+this phase rather than baked into generation. For GraphQL attacks, a `200` response with an `errors`
+array is treated as an expected validation failure instead of an unexpected success.
 
 ### 4. Report findings
 
 `reporting.py` reduces the results into Markdown or HTML. `verification.py`, `promotion.py`, and
-`suppressions.py` then build CI and triage workflows on the same result model.
+`suppressions.py` then build CI and triage workflows on the same result model, while auth setup
+and refresh diagnostics stay visible without becoming attack findings by themselves.
 
 Today, a result is typically flagged when it produces:
 
@@ -84,11 +87,11 @@ It gives the project:
 
 The next milestone work should extend the current architecture in two directions:
 
-1. first-class auth/session profile strategies for common OAuth and session-login flows
-2. clearer auth setup diagnostics in reports and CI flows
-3. protocol-aware filtering that still shares the current run/report/verify pipeline
-4. stronger GraphQL response-shape validation, federation awareness, and staged subscription
-   support on top of the new protocol loader
+1. stronger GraphQL response-shape validation, federation awareness, and staged subscription
+   support on top of the protocol loader
+2. clearer CI and artifact navigation for large regression suites
+3. richer report ergonomics around suppressions, baselines, and auth diagnostics
+4. browser-free auth acquisition can keep expanding, but redirect-driven OAuth stays out of scope
 
 ## Things intentionally deferred
 

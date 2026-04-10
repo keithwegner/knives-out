@@ -5,7 +5,7 @@ from collections import Counter
 from html import escape
 from pathlib import Path
 
-from knives_out.models import AttackResults, ProfileAttackResult
+from knives_out.models import AttackResults, AuthEvent, ProfileAttackResult
 from knives_out.suppressions import SuppressedFinding, SuppressionRule
 from knives_out.verification import (
     ComparedFinding,
@@ -62,6 +62,28 @@ def _profile_table_rows(profile_results: list[ProfileAttackResult]) -> list[str]
     return rows
 
 
+def _auth_event_sort_key(event: AuthEvent) -> tuple[str, str, str, str]:
+    return (
+        (event.profile or "").casefold(),
+        event.name.casefold(),
+        event.phase,
+        event.trigger or "",
+    )
+
+
+def _auth_event_table_rows(events: list[AuthEvent]) -> list[str]:
+    rows: list[str] = []
+    for event in sorted(events, key=_auth_event_sort_key):
+        profile = event.profile or "-"
+        status = str(event.status_code) if event.status_code is not None else "-"
+        outcome = "ok" if event.success else "failed"
+        rows.append(
+            f"| {profile} | {event.name} | {event.strategy} | {event.phase} | "
+            f"{event.trigger or '-'} | {outcome} | {status} | {event.error or '-'} |"
+        )
+    return rows
+
+
 def _workflow_phase(result) -> str:
     if result.type != "workflow":
         return "request"
@@ -81,6 +103,7 @@ def render_markdown_report(
     total = len(results.results)
     flagged = len(comparison.current_findings)
     suppressed_flagged = len(comparison.suppressed_current_findings)
+    auth_failures = sum(1 for event in results.auth_events if not event.success)
     response_schema_mismatches = sum(
         1 for result in results.results if result.response_schema_valid is False
     )
@@ -98,6 +121,7 @@ def render_markdown_report(
         lines.append(f"- Profile names: `{', '.join(results.profiles)}`")
     lines.append(f"- Active flagged results: **{flagged}**")
     lines.append(f"- Suppressed flagged results: **{suppressed_flagged}**")
+    lines.append(f"- Auth setup/refresh failures: **{auth_failures}**")
     lines.append(f"- Response schema mismatches: **{response_schema_mismatches}**")
     lines.append("")
     lines.append("## Outcome summary")
@@ -135,6 +159,17 @@ def render_markdown_report(
     lines.extend(_suppressed_table_rows(comparison.suppressed_current_findings))
     if not comparison.suppressed_current_findings:
         lines.append("| None | - | - | - | - |")
+
+    lines.append("")
+    lines.append("## Auth diagnostics")
+    lines.append("")
+    lines.append(
+        "| Profile | Auth config | Strategy | Phase | Trigger | Outcome | Status | Error |"
+    )
+    lines.append("| --- | --- | --- | --- | --- | --- | ---: | --- |")
+    lines.extend(_auth_event_table_rows(results.auth_events))
+    if not results.auth_events:
+        lines.append("| None | - | - | - | - | - | - | - |")
 
     if baseline is not None:
         lines.append("")
@@ -312,6 +347,24 @@ def _suppressed_finding_row_html(finding: SuppressedFinding) -> str:
     )
 
 
+def _auth_event_row_html(event: AuthEvent) -> str:
+    profile = event.profile or "-"
+    status = str(event.status_code) if event.status_code is not None else "-"
+    outcome = "ok" if event.success else "failed"
+    return (
+        "<tr>"
+        f"<td>{escape(profile)}</td>"
+        f"<td>{escape(event.name)}</td>"
+        f"<td>{escape(event.strategy)}</td>"
+        f"<td>{escape(event.phase)}</td>"
+        f"<td>{escape(event.trigger or '-')}</td>"
+        f"<td>{escape(outcome)}</td>"
+        f"<td>{escape(status)}</td>"
+        f"<td>{escape(event.error or '-')}</td>"
+        "</tr>"
+    )
+
+
 def _result_card_html(result, *, artifact_root: Path | None) -> str:
     status = str(result.status_code) if result.status_code is not None else "-"
     issue = result.issue or "ok"
@@ -427,6 +480,7 @@ def render_html_report(
         ("Total results", str(len(results.results))),
         ("Active flagged", str(len(comparison.current_findings))),
         ("Suppressed", str(len(comparison.suppressed_current_findings))),
+        ("Auth failures", str(sum(1 for event in results.auth_events if not event.success))),
         (
             "Profiles",
             str(len(results.profiles)) if results.profiles else "single",
@@ -460,6 +514,13 @@ def render_html_report(
             for finding in comparison.suppressed_current_findings
         )
         or "<tr><td colspan='5' class='muted'>No suppressed findings.</td></tr>"
+    )
+    auth_event_rows = (
+        "".join(
+            _auth_event_row_html(event)
+            for event in sorted(results.auth_events, key=_auth_event_sort_key)
+        )
+        or "<tr><td colspan='8' class='muted'>No auth diagnostics recorded.</td></tr>"
     )
 
     outcome_rows = "".join(
@@ -705,6 +766,19 @@ def render_html_report(
         <table>
           <thead><tr><th>Attack</th><th>Issue</th><th>Reason</th><th>Owner</th><th>Expires</th></tr></thead>
           <tbody>{suppressed_rows}</tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Auth diagnostics</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Profile</th><th>Auth config</th><th>Strategy</th><th>Phase</th>
+              <th>Trigger</th><th>Outcome</th><th>Status</th><th>Error</th>
+            </tr>
+          </thead>
+          <tbody>{auth_event_rows}</tbody>
         </table>
       </section>
 

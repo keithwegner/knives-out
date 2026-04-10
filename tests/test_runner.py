@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 
+from knives_out.auth_config import BuiltInAuthConfig
 from knives_out.auth_plugins import RuntimePlugin
 from knives_out.models import (
     AttackCase,
@@ -519,6 +520,169 @@ def test_render_markdown_report_shows_suppressed_findings() -> None:
     assert "known issue" in report
     assert "Active flagged results: **0**" in report
     assert "Suppressed flagged results: **1**" in report
+
+
+def test_render_markdown_report_shows_auth_diagnostics() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        auth_events=[
+            {
+                "name": "user",
+                "strategy": "client_credentials",
+                "phase": "acquire",
+                "success": False,
+                "trigger": "suite",
+                "endpoint": "/oauth/token",
+                "error": "invalid client credentials",
+            }
+        ],
+        results=[],
+    )
+
+    report = render_markdown_report(results)
+
+    assert "## Auth diagnostics" in report
+    assert "client_credentials" in report
+    assert "invalid client credentials" in report
+
+
+def test_execute_attack_suite_applies_static_bearer_auth_config(monkeypatch) -> None:
+    response = httpx.Response(422, text="invalid input")
+    client = _install_recording_client(monkeypatch, response)
+    suite = AttackSuite(source="unit", attacks=[_attack_case(response_schemas={})])
+
+    results = execute_attack_suite(
+        suite,
+        base_url="https://example.com",
+        built_in_auth_configs=[
+            BuiltInAuthConfig(
+                name="user",
+                strategy="static_bearer",
+                token="dev-token",
+            )
+        ],
+    )
+
+    assert client.requests[0]["headers"]["Authorization"] == "Bearer dev-token"
+    assert len(results.auth_events) == 1
+    assert results.auth_events[0].success is True
+    assert results.auth_events[0].name == "user"
+
+
+def test_execute_attack_suite_refreshes_bearer_token_on_401(monkeypatch) -> None:
+    tokens = ["expired-token", "fresh-token"]
+
+    def _handler(request: dict[str, object]) -> httpx.Response:
+        if request["url"] == "https://example.com/oauth/token":
+            return httpx.Response(
+                200,
+                json={"access_token": tokens.pop(0), "expires_in": 3600},
+            )
+        authorization = (request.get("headers") or {}).get("Authorization")
+        if authorization == "Bearer expired-token":
+            return httpx.Response(401, json={"detail": "expired"})
+        if authorization == "Bearer fresh-token":
+            return httpx.Response(422, json={"detail": "invalid payload"})
+        return httpx.Response(500, json={"detail": "unexpected"})
+
+    client = _HandlerClient(_handler)
+    _install_client_sequence(monkeypatch, [client])
+
+    suite = AttackSuite(source="unit", attacks=[_attack_case(response_schemas={})])
+    results = execute_attack_suite(
+        suite,
+        base_url="https://example.com",
+        built_in_auth_configs=[
+            BuiltInAuthConfig(
+                name="service",
+                strategy="client_credentials",
+                endpoint="/oauth/token",
+                request_form={
+                    "grant_type": "client_credentials",
+                    "client_id": "client",
+                    "client_secret": "secret",
+                },
+                token_pointer="/access_token",
+                expires_in_pointer="/expires_in",
+            )
+        ],
+    )
+
+    assert [request["url"] for request in client.requests] == [
+        "https://example.com/oauth/token",
+        "https://example.com/pets",
+        "https://example.com/oauth/token",
+        "https://example.com/pets",
+    ]
+    assert client.requests[1]["headers"]["Authorization"] == "Bearer expired-token"
+    assert client.requests[3]["headers"]["Authorization"] == "Bearer fresh-token"
+    assert results.results[0].status_code == 422
+    assert results.results[0].flagged is False
+    assert [event.phase for event in results.auth_events] == ["acquire", "refresh"]
+
+
+def test_execute_attack_suite_records_auth_failures_separately(monkeypatch) -> None:
+    def _handler(request: dict[str, object]) -> httpx.Response:
+        if request["url"] == "https://example.com/login":
+            return httpx.Response(500, json={"detail": "boom"})
+        return httpx.Response(401, json={"detail": "unauthorized"})
+
+    _install_client_sequence(monkeypatch, [_HandlerClient(_handler)])
+    suite = AttackSuite(source="unit", attacks=[_attack_case(response_schemas={})])
+
+    results = execute_attack_suite(
+        suite,
+        base_url="https://example.com",
+        built_in_auth_configs=[
+            BuiltInAuthConfig(
+                name="user",
+                strategy="login_json_bearer",
+                endpoint="/login",
+                request_json={"username": "demo", "password": "pw"},
+                token_pointer="/token",
+            )
+        ],
+    )
+
+    assert len(results.auth_events) == 1
+    assert results.auth_events[0].success is False
+    assert results.auth_events[0].status_code is None
+    assert "status 500" in (results.auth_events[0].error or "")
+    assert results.results[0].status_code == 401
+    assert results.results[0].flagged is False
+
+
+def test_execute_attack_suite_establishes_cookie_session_with_form_login(monkeypatch) -> None:
+    def _handler(request: dict[str, object]) -> httpx.Response:
+        if request["url"] == "https://example.com/login":
+            return httpx.Response(200, headers={"set-cookie": "session=abc123; Path=/"})
+        cookie = (request.get("headers") or {}).get("Cookie")
+        if cookie == "session=abc123":
+            return httpx.Response(422, json={"detail": "invalid payload"})
+        return httpx.Response(401, json={"detail": "unauthorized"})
+
+    client = _HandlerClient(_handler)
+    _install_client_sequence(monkeypatch, [client])
+    suite = AttackSuite(source="unit", attacks=[_attack_case(response_schemas={})])
+
+    results = execute_attack_suite(
+        suite,
+        base_url="https://example.com",
+        built_in_auth_configs=[
+            BuiltInAuthConfig(
+                name="session-user",
+                strategy="login_form_cookie",
+                endpoint="/login",
+                request_form={"username": "demo", "password": "pw"},
+            )
+        ],
+    )
+
+    assert client.requests[0]["url"] == "https://example.com/login"
+    assert client.requests[1]["headers"]["Cookie"] == "session=abc123"
+    assert results.results[0].status_code == 422
+    assert results.results[0].flagged is False
 
 
 def test_execute_attack_suite_profiles_flags_anonymous_access(monkeypatch) -> None:

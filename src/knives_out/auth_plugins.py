@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from knives_out.models import WorkflowAttackCase
+from knives_out.models import AuthEvent, WorkflowAttackCase
 
 ENTRY_POINT_GROUP = "knives_out.auth_plugins"
 
@@ -22,6 +22,7 @@ class RuntimeContext:
     scope: str
     state: dict[str, Any] = field(default_factory=dict)
     extracted_values: dict[str, Any] = field(default_factory=dict)
+    auth_events: list[AuthEvent] = field(default_factory=list)
     workflow_id: str | None = None
     profile_name: str | None = None
     profile_level: int = 0
@@ -63,6 +64,7 @@ class RequestExecution:
     error: str | None
     duration_ms: float
     resolution_error: bool = False
+    retry_requested: bool = False
 
 
 class PluginRuntimeError(RuntimeError):

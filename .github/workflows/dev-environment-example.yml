@@ -48,6 +48,11 @@ jobs:
           KNIVES_OUT_BASE_URL: ${{ secrets.KNIVES_OUT_BASE_URL }}
           KNIVES_OUT_AUTH_HEADER: ${{ secrets.KNIVES_OUT_AUTH_HEADER }}
           KNIVES_OUT_AUTH_QUERY: ${{ secrets.KNIVES_OUT_AUTH_QUERY }}
+          KNIVES_OUT_USER_TOKEN: ${{ secrets.KNIVES_OUT_USER_TOKEN }}
+          KNIVES_OUT_ADMIN_TOKEN: ${{ secrets.KNIVES_OUT_ADMIN_TOKEN }}
+          KNIVES_OUT_CLIENT_ID: ${{ secrets.KNIVES_OUT_CLIENT_ID }}
+          KNIVES_OUT_CLIENT_SECRET: ${{ secrets.KNIVES_OUT_CLIENT_SECRET }}
+          KNIVES_OUT_CLIENT_AUDIENCE: ${{ secrets.KNIVES_OUT_CLIENT_AUDIENCE }}
           KNIVES_OUT_LOGIN_USERNAME: ${{ secrets.KNIVES_OUT_LOGIN_USERNAME }}
           KNIVES_OUT_LOGIN_PASSWORD: ${{ secrets.KNIVES_OUT_LOGIN_PASSWORD }}
         run: |
@@ -71,6 +76,14 @@ jobs:
             args+=(--query "${KNIVES_OUT_AUTH_QUERY}")
           fi
 
+          # For built-in bearer or session flows, use a checked-in auth config:
+          # args+=(--auth-config examples/auth_configs/client-credentials.yml)
+          # Or execute the checked-in named user/admin configs:
+          # args+=(
+          #   --auth-config examples/auth_configs/user-admin.yml
+          #   --auth-profile user
+          #   --auth-profile admin
+          # )
           # For login/session auth, load a plugin module instead of static header/query credentials:
           # args+=(--auth-plugin-module examples/auth_plugins/login_bearer.py)
           # For identity-aware authorization coverage, use a checked-in profile file instead:

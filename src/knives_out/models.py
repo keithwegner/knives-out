@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 SeverityLevel = Literal["none", "low", "medium", "high", "critical"]
 ConfidenceLevel = Literal["none", "low", "medium", "high"]
 AttackType = Literal["request", "workflow"]
+AuthEventPhase = Literal["acquire", "refresh"]
 
 
 class ParameterSpec(BaseModel):
@@ -62,6 +63,7 @@ class AuthProfile(BaseModel):
     description: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     query: dict[str, Any] = Field(default_factory=dict)
+    auth_config: str | None = None
     auth_plugins: list[str] = Field(default_factory=list)
     auth_plugin_modules: list[str] = Field(default_factory=list)
 
@@ -194,6 +196,18 @@ class WorkflowStepResult(BaseModel):
     response_excerpt: str | None = None
 
 
+class AuthEvent(BaseModel):
+    name: str
+    strategy: str
+    phase: AuthEventPhase
+    success: bool = True
+    profile: str | None = None
+    trigger: str | None = None
+    endpoint: str | None = None
+    status_code: int | None = None
+    error: str | None = None
+
+
 class ProfileAttackResult(BaseModel):
     profile: str
     level: int = 0
@@ -243,6 +257,7 @@ class AttackResults(BaseModel):
     base_url: str
     executed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     profiles: list[str] = Field(default_factory=list)
+    auth_events: list[AuthEvent] = Field(default_factory=list)
     results: list[AttackResult] = Field(default_factory=list)
 
     @model_validator(mode="before")

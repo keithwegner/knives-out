@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from knives_out.attack_packs import load_module_attack_packs
+from knives_out.auth_config import load_auth_configs
 from knives_out.auth_plugins import load_module_auth_plugins
 from knives_out.generator import generate_attack_suite
 from knives_out.profiles import load_auth_profiles
@@ -17,6 +18,8 @@ ATTACK_PACK_MODULE = ROOT / "examples" / "custom_packs" / "unexpected_header.py"
 WORKFLOW_PACK_MODULE = ROOT / "examples" / "workflow_packs" / "listed_pet_lookup.py"
 AUTH_PLUGIN_MODULE = ROOT / "examples" / "auth_plugins" / "login_bearer.py"
 AUTH_PROFILE_FILE = ROOT / "examples" / "auth_profiles" / "anonymous-user-admin.yml"
+AUTH_CONFIG_FILE = ROOT / "examples" / "auth_configs" / "user-admin.yml"
+CLIENT_CREDENTIALS_CONFIG_FILE = ROOT / "examples" / "auth_configs" / "client-credentials.yml"
 
 
 def test_checked_in_openapi_examples_load() -> None:
@@ -79,3 +82,11 @@ def test_checked_in_auth_profile_example_loads() -> None:
         "user",
         "admin",
     ]
+
+
+def test_checked_in_auth_config_examples_load() -> None:
+    auth_file = load_auth_configs(AUTH_CONFIG_FILE)
+    client_credentials = load_auth_configs(CLIENT_CREDENTIALS_CONFIG_FILE)
+
+    assert [config.name for config in auth_file.auth] == ["user", "admin"]
+    assert client_credentials.auth[0].strategy == "client_credentials"

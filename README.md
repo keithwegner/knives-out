@@ -19,6 +19,7 @@ Given an OpenAPI or GraphQL schema, `knives-out` can:
 - generate schema-aware mutation attacks from declared constraints
 - optionally chain setup requests into replayable workflow attacks
 - generate GraphQL query and mutation attacks from SDL or introspection output
+- load built-in auth configs for common bearer-token and session-cookie flows
 - load auth/session plugins for bearer tokens, login flows, and shared sessions
 - execute the same suite across named auth profiles and compare their outcomes
 - run those attacks against a live base URL
@@ -124,7 +125,17 @@ knives-out run attacks.json \
   --out results.json
 ```
 
-Or load an auth/session plugin when static headers are not enough:
+Or use a built-in auth config when static headers are not enough:
+
+```bash
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --auth-config examples/auth_configs/user-admin.yml \
+  --auth-profile user \
+  --out results.json
+```
+
+Or move up to a custom plugin when the built-in config strategies are not enough:
 
 ```bash
 knives-out run attacks.json \
@@ -191,6 +202,9 @@ It uses repository secrets instead of hard-coded targets:
 - `KNIVES_OUT_BASE_URL` for the dev or staging base URL
 - `KNIVES_OUT_AUTH_HEADER` for an optional header like `Authorization: Bearer ...`
 - `KNIVES_OUT_AUTH_QUERY` for an optional query credential like `api_key=...`
+- `KNIVES_OUT_USER_TOKEN` / `KNIVES_OUT_ADMIN_TOKEN` when you use `examples/auth_configs/user-admin.yml`
+- `KNIVES_OUT_CLIENT_ID` / `KNIVES_OUT_CLIENT_SECRET` / `KNIVES_OUT_CLIENT_AUDIENCE` when you use
+  `examples/auth_configs/client-credentials.yml`
 - plugin-specific login or bearer env vars when you use `--auth-plugin` or `--auth-plugin-module`
 
 `knives-out run` currently exits with status `0` when the suite executes successfully, even if
@@ -205,8 +219,10 @@ When you want stateful coverage, generate with `--auto-workflows` first, then ad
 `--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py` or your own custom pack as
 you move from generic coverage to app-specific journeys. For protected APIs, keep simple static
 credentials on `--header` or `--query`, or move up to
-`--auth-plugin-module examples/auth_plugins/login_bearer.py` for login/session flows. When you want
-to keep only the highest-signal regressions around, follow `verify` with
+`--auth-config examples/auth_configs/user-admin.yml` or
+`--auth-config examples/auth_configs/client-credentials.yml` for common bearer/session flows.
+Custom logic can still use `--auth-plugin-module examples/auth_plugins/login_bearer.py`. When you
+want to keep only the highest-signal regressions around, follow `verify` with
 `knives-out promote results.json --attacks attacks.json`. See `docs/ci.md` for the sample
 workflow, secret setup, filtering patterns, baseline-aware CI flows, and checked-in suppressions.
 GraphQL schemas follow the same `inspect` / `generate` / `run` / `report` / `verify` flow, with
@@ -310,7 +326,16 @@ knives-out run attacks.json \
   --out results.json
 ```
 
-You can also load auth/session plugins from entry points or local modules:
+You can also use a built-in auth config for common bearer/session flows:
+
+```bash
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --auth-config examples/auth_configs/client-credentials.yml \
+  --out results.json
+```
+
+Or load a custom auth/session plugin from entry points or local modules:
 
 ```bash
 knives-out run attacks.json \
@@ -332,9 +357,10 @@ knives-out run attacks.json \
 ```
 
 Each profile can contribute its own headers, query params, entry-point plugins, or local
-`auth_plugin_modules`. Multi-profile runs aggregate per-profile outcomes into one `results.json`
-and add auth comparison findings such as `anonymous_access` and `authorization_inversion` when
-those differences are strong enough to infer safely.
+`auth_plugin_modules`, and can optionally reference a named built-in auth config with
+`auth_config`. Multi-profile runs aggregate per-profile outcomes into one `results.json` and add
+auth comparison findings such as `anonymous_access` and `authorization_inversion` when those
+differences are strong enough to infer safely.
 
 Run-time filters match the same exact tag/path semantics:
 
@@ -578,6 +604,46 @@ knives-out generate examples/openapi/petstore.yaml \
   --out attacks.json
 ```
 
+## Built-in auth configs
+
+Built-in auth configs cover the common cases where you want realistic auth without writing Python.
+
+Supported strategies:
+
+- `static_bearer`
+- `client_credentials`
+- `password_json`
+- `login_json_bearer`
+- `login_form_cookie`
+
+The repo includes checked-in examples at:
+
+- `examples/auth_configs/user-admin.yml`
+- `examples/auth_configs/client-credentials.yml`
+
+Single-profile example:
+
+```bash
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --auth-config examples/auth_configs/client-credentials.yml \
+  --out results.json
+```
+
+Named auth-config profiles:
+
+```bash
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --auth-config examples/auth_configs/user-admin.yml \
+  --auth-profile user \
+  --auth-profile admin \
+  --out results.json
+```
+
+Built-in auth events are recorded in `results.json` and rendered separately in reports, so auth
+bootstrap or refresh failures do not masquerade as attack findings.
+
 ## Auth/session plugins
 
 Auth/session plugins run at execution time and can mutate outgoing requests or establish shared
@@ -625,11 +691,11 @@ knives-out run attacks.json \
 
 ## Roadmap
 
-The next two milestones are:
+The built-in auth/config milestone is now shipped. The next likely milestone is:
 
-- **v0.9:** first-class auth and session realism through built-in OAuth and session profile config
 - **v0.10:** deeper GraphQL coverage with response validation, federation awareness, and
   subscription support as staged scope
 
+After that, the likely follow-on is richer CI and report navigation for large regression programs.
 LLM application testing stays deferred until after that API-focused expansion. See
-`docs/architecture.md` and `docs/roadmap.md` for the detailed milestone breakdown.
+`docs/architecture.md` and `docs/roadmap.md` for the current milestone notes.

@@ -10,6 +10,12 @@ from rich.console import Console
 from rich.table import Table
 
 from knives_out.attack_packs import load_attack_packs
+from knives_out.auth_config import (
+    auth_config_map,
+    auth_profiles_from_configs,
+    load_auth_configs,
+    select_auth_configs,
+)
 from knives_out.auth_plugins import PluginRuntimeError, load_auth_plugins
 from knives_out.filtering import filter_attack_suite, filter_operations
 from knives_out.generator import generate_attack_suite
@@ -152,6 +158,27 @@ def _load_auth_profiles_or_error(
         return resolve_auth_profile_modules(selected_profiles, relative_to=path)
     except (OSError, ValueError) as exc:
         raise typer.BadParameter(f"Could not read auth profile file '{path}': {exc}") from exc
+
+
+def _load_auth_configs_or_error(
+    path: Path | None,
+    *,
+    include_names: list[str] | None = None,
+):
+    if path is None:
+        if include_names:
+            raise typer.BadParameter("--auth-profile requires --auth-config.")
+        return []
+
+    try:
+        auth_file = load_auth_configs(path)
+        selected_configs = select_auth_configs(auth_file, include_names=include_names)
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(f"Could not read auth config file '{path}': {exc}") from exc
+
+    if not selected_configs:
+        raise typer.BadParameter(f"Auth config file '{path}' did not define any auth entries.")
+    return selected_configs
 
 
 def _print_suppression_summary(
@@ -400,6 +427,14 @@ def run(
         list[Path] | None,
         typer.Option(help="Load auth/session plugins from local Python module paths. Repeatable."),
     ] = None,
+    auth_config: Annotated[
+        Path | None,
+        typer.Option(help="Optional built-in auth config YAML file."),
+    ] = None,
+    auth_profile: Annotated[
+        list[str] | None,
+        typer.Option(help="Only execute these named auth configs from --auth-config. Repeatable."),
+    ] = None,
     profile_file: Annotated[
         Path | None,
         typer.Option(help="Optional auth profile YAML file for multi-profile execution."),
@@ -470,9 +505,13 @@ def run(
     default_headers = _parse_key_value(header, separator=":")
     default_query = _parse_key_value(query, separator="=")
     auth_profiles = _load_auth_profiles_or_error(profile_file, include_names=profile)
+    built_in_auth_configs = _load_auth_configs_or_error(auth_config, include_names=auth_profile)
+    built_in_auth_by_name = auth_config_map(built_in_auth_configs)
     global_auth_plugin_modules = [str(path.resolve()) for path in auth_plugin_module or []]
 
-    if auth_profiles:
+    if auth_profiles or built_in_auth_configs:
+        if not auth_profiles:
+            auth_profiles = auth_profiles_from_configs(built_in_auth_configs)
         auth_profiles = [
             auth_profile.model_copy(
                 update={
@@ -505,6 +544,7 @@ def run(
                 default_query=default_query,
                 timeout_seconds=timeout,
                 artifact_dir=artifact_dir,
+                built_in_auth_configs=built_in_auth_by_name,
             )
         else:
             results = execute_attack_suite(
@@ -515,6 +555,7 @@ def run(
                 timeout_seconds=timeout,
                 artifact_dir=artifact_dir,
                 auth_plugins=auth_plugins,
+                built_in_auth_configs=built_in_auth_configs,
             )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -524,16 +565,19 @@ def run(
     out.write_text(results.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
 
     flagged = sum(1 for result in results.results if result.flagged)
+    auth_failures = sum(1 for event in results.auth_events if not event.success)
     if results.profiles:
         console.print(
             f"Executed {len(suite.attacks)} attacks across {len(results.profiles)} profile(s) "
             f"against [bold]{base_url}[/bold] and produced {len(results.results)} result(s). "
-            f"Flagged {flagged} result(s)."
+            f"Flagged {flagged} result(s). "
+            f"Recorded {auth_failures} auth failure(s)."
         )
     else:
         console.print(
             f"Executed {len(results.results)} attacks against [bold]{base_url}[/bold]. "
-            f"Flagged {flagged} result(s)."
+            f"Flagged {flagged} result(s). "
+            f"Recorded {auth_failures} auth failure(s)."
         )
     console.print(f"Wrote results to [bold]{out}[/bold].")
 

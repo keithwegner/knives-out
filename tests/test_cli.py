@@ -313,11 +313,12 @@ def test_run_command_passes_artifact_dir(tmp_path: Path, monkeypatch) -> None:
         artifact_dir: Path | None,
         auth_plugins=None,
         workflow_hooks=None,
+        built_in_auth_configs=None,
         profile_name=None,
         profile_level=0,
         profile_anonymous=False,
     ) -> AttackResults:
-        del profile_name, profile_level, profile_anonymous
+        del built_in_auth_configs, profile_name, profile_level, profile_anonymous
         captured["suite_source"] = suite.source
         captured["base_url"] = base_url
         captured["artifact_dir"] = artifact_dir
@@ -1130,12 +1131,13 @@ def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatc
         artifact_dir: Path | None,
         auth_plugins=None,
         workflow_hooks=None,
+        built_in_auth_configs=None,
         profile_name=None,
         profile_level=0,
         profile_anonymous=False,
     ) -> AttackResults:
         del default_headers, default_query, timeout_seconds, artifact_dir
-        del workflow_hooks, profile_name, profile_level, profile_anonymous
+        del workflow_hooks, built_in_auth_configs, profile_name, profile_level, profile_anonymous
         captured["attack_ids"] = [attack.id for attack in suite.attacks]
         captured["auth_plugins"] = auth_plugins
         return AttackResults(source=suite.source, base_url=base_url, results=[])
@@ -1205,6 +1207,7 @@ def test_run_command_filters_attacks_by_path_before_execution(tmp_path: Path, mo
         artifact_dir: Path | None,
         auth_plugins=None,
         workflow_hooks=None,
+        built_in_auth_configs=None,
         profile_name=None,
         profile_level=0,
         profile_anonymous=False,
@@ -1217,6 +1220,7 @@ def test_run_command_filters_attacks_by_path_before_execution(tmp_path: Path, mo
             artifact_dir,
             auth_plugins,
             workflow_hooks,
+            built_in_auth_configs,
             profile_name,
             profile_level,
             profile_anonymous,
@@ -1278,6 +1282,7 @@ def test_run_command_loads_local_auth_plugin(tmp_path: Path, monkeypatch) -> Non
         artifact_dir: Path | None,
         auth_plugins=None,
         workflow_hooks=None,
+        built_in_auth_configs=None,
         profile_name=None,
         profile_level=0,
         profile_anonymous=False,
@@ -1288,6 +1293,7 @@ def test_run_command_loads_local_auth_plugin(tmp_path: Path, monkeypatch) -> Non
             timeout_seconds,
             artifact_dir,
             workflow_hooks,
+            built_in_auth_configs,
             profile_name,
             profile_level,
             profile_anonymous,
@@ -1363,11 +1369,13 @@ def test_run_command_executes_selected_auth_profiles(tmp_path: Path, monkeypatch
         default_query: dict[str, str],
         timeout_seconds: float,
         artifact_dir: Path | None,
+        built_in_auth_configs=None,
     ) -> AttackResults:
         del default_headers, default_query, timeout_seconds, artifact_dir
         captured["suite_source"] = suite.source
         captured["base_url"] = base_url
         captured["profile_names"] = [profile.name for profile in profiles]
+        captured["built_in_auth_configs"] = built_in_auth_configs
         return AttackResults(
             source=suite.source,
             base_url=base_url,
@@ -1410,9 +1418,180 @@ def test_run_command_executes_selected_auth_profiles(tmp_path: Path, monkeypatch
     assert captured["suite_source"] == "unit"
     assert captured["base_url"] == "https://example.com"
     assert captured["profile_names"] == ["user"]
+    assert captured["built_in_auth_configs"] == {}
     assert "Executed 1 attacks across 1 profile(s)" in _normalized_output(result.stdout)
     saved = AttackResults.model_validate_json(out_path.read_text(encoding="utf-8"))
     assert saved.profiles == ["user"]
+
+
+def test_run_command_combines_profile_file_with_built_in_auth_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    attacks_path = tmp_path / "attacks.json"
+    out_path = tmp_path / "results.json"
+    profile_path = tmp_path / "profiles.yml"
+    auth_config_path = tmp_path / "auth.yml"
+    attacks_path.write_text(
+        AttackSuite(source="unit", attacks=[]).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    profile_path.write_text(
+        "profiles:\n  - name: user\n    level: 10\n    auth_config: user\n",
+        encoding="utf-8",
+    )
+    auth_config_path.write_text(
+        "auth:\n"
+        "  - name: user\n"
+        "    strategy: static_bearer\n"
+        "    token: user-token\n"
+        "    level: 10\n",
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_execute_attack_suite_profiles(
+        suite: AttackSuite,
+        *,
+        base_url: str,
+        profiles,
+        default_headers: dict[str, str],
+        default_query: dict[str, str],
+        timeout_seconds: float,
+        artifact_dir: Path | None,
+        built_in_auth_configs=None,
+    ) -> AttackResults:
+        del suite, base_url, default_headers, default_query, timeout_seconds, artifact_dir
+        captured["profile_auth_configs"] = [profile.auth_config for profile in profiles]
+        captured["built_in_auth_configs"] = sorted((built_in_auth_configs or {}).keys())
+        return AttackResults(
+            source="unit",
+            base_url="https://example.com",
+            profiles=[profile.name for profile in profiles],
+            results=[],
+        )
+
+    monkeypatch.setattr(
+        "knives_out.cli.execute_attack_suite_profiles",
+        _fake_execute_attack_suite_profiles,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(attacks_path),
+            "--base-url",
+            "https://example.com",
+            "--profile-file",
+            str(profile_path),
+            "--auth-config",
+            str(auth_config_path),
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["profile_auth_configs"] == ["user"]
+    assert captured["built_in_auth_configs"] == ["user"]
+
+
+def test_run_command_supports_built_in_auth_config_profiles(tmp_path: Path, monkeypatch) -> None:
+    attacks_path = tmp_path / "attacks.json"
+    out_path = tmp_path / "results.json"
+    auth_config_path = tmp_path / "auth.yml"
+    attacks_path.write_text(
+        AttackSuite(source="unit", attacks=[]).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    auth_config_path.write_text(
+        "auth:\n"
+        "  - name: user\n"
+        "    strategy: static_bearer\n"
+        "    token: user-token\n"
+        "    level: 10\n"
+        "  - name: admin\n"
+        "    strategy: static_bearer\n"
+        "    token: admin-token\n"
+        "    level: 20\n",
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_execute_attack_suite_profiles(
+        suite: AttackSuite,
+        *,
+        base_url: str,
+        profiles,
+        default_headers: dict[str, str],
+        default_query: dict[str, str],
+        timeout_seconds: float,
+        artifact_dir: Path | None,
+        built_in_auth_configs=None,
+    ) -> AttackResults:
+        del suite, default_headers, default_query, timeout_seconds, artifact_dir
+        captured["base_url"] = base_url
+        captured["profile_names"] = [profile.name for profile in profiles]
+        captured["profile_auth_configs"] = [profile.auth_config for profile in profiles]
+        captured["built_in_auth_configs"] = sorted((built_in_auth_configs or {}).keys())
+        return AttackResults(
+            source="unit",
+            base_url=base_url,
+            profiles=[profile.name for profile in profiles],
+            results=[],
+        )
+
+    monkeypatch.setattr(
+        "knives_out.cli.execute_attack_suite_profiles",
+        _fake_execute_attack_suite_profiles,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(attacks_path),
+            "--base-url",
+            "https://example.com",
+            "--auth-config",
+            str(auth_config_path),
+            "--auth-profile",
+            "admin",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["base_url"] == "https://example.com"
+    assert captured["profile_names"] == ["admin"]
+    assert captured["profile_auth_configs"] == ["admin"]
+    assert captured["built_in_auth_configs"] == ["admin"]
+
+
+def test_run_command_requires_auth_config_for_auth_profile_name(tmp_path: Path) -> None:
+    attacks_path = tmp_path / "attacks.json"
+    attacks_path.write_text(
+        AttackSuite(source="unit", attacks=[]).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(attacks_path),
+            "--base-url",
+            "https://example.com",
+            "--auth-profile",
+            "admin",
+        ],
+    )
+
+    assert result.exit_code == 2
 
 
 def test_run_command_requires_profile_file_for_profile_name(tmp_path: Path) -> None:
@@ -1454,6 +1633,7 @@ def test_run_command_reports_auth_plugin_runtime_error(tmp_path: Path, monkeypat
         artifact_dir: Path | None,
         auth_plugins=None,
         workflow_hooks=None,
+        built_in_auth_configs=None,
         profile_name=None,
         profile_level=0,
         profile_anonymous=False,
@@ -1467,6 +1647,7 @@ def test_run_command_reports_auth_plugin_runtime_error(tmp_path: Path, monkeypat
             artifact_dir,
             auth_plugins,
             workflow_hooks,
+            built_in_auth_configs,
             profile_name,
             profile_level,
             profile_anonymous,
