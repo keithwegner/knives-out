@@ -2,6 +2,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from knives_out.generator import generate_attack_suite, sample_value
+from knives_out.models import WorkflowAttackCase
 from knives_out.openapi_loader import load_operations
 
 EXAMPLE_SPEC = Path(__file__).resolve().parents[1] / "examples" / "openapi" / "petstore.yaml"
@@ -227,3 +228,100 @@ def test_generate_missing_auth_attacks_target_only_api_key_credentials(tmp_path)
     assert query_attack.query == {"limit": 1}
     assert query_attack.omit_header_names == []
     assert query_attack.omit_query_names == ["api_key"]
+
+
+def test_generate_attack_suite_keeps_request_only_default() -> None:
+    operations = load_operations(EXAMPLE_SPEC)
+
+    suite = generate_attack_suite(operations, source=str(EXAMPLE_SPEC))
+
+    assert suite.attacks
+    assert all(attack.type == "request" for attack in suite.attacks)
+
+
+def test_generate_attack_suite_can_emit_built_in_workflows() -> None:
+    operations = load_operations(EXAMPLE_SPEC)
+
+    suite = generate_attack_suite(
+        operations,
+        source=str(EXAMPLE_SPEC),
+        auto_workflows=True,
+    )
+
+    workflows = [attack for attack in suite.attacks if isinstance(attack, WorkflowAttackCase)]
+    assert workflows
+    get_pet_workflow = next(workflow for workflow in workflows if workflow.operation_id == "getPet")
+    assert get_pet_workflow.kind == "wrong_type_param"
+    assert get_pet_workflow.setup_steps[0].operation_id == "listPets"
+    assert get_pet_workflow.setup_steps[0].extracts[0].json_pointer == "/0/id"
+    assert get_pet_workflow.terminal_attack.path_params["petId"] == "{{id}}"
+
+
+def test_generate_attack_suite_skips_ambiguous_workflow_producers(tmp_path: Path) -> None:
+    spec = tmp_path / "ambiguous-workflows.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Ambiguous workflow spec
+              version: 1.0.0
+            paths:
+              /pets:
+                get:
+                  operationId: listPets
+                  responses:
+                    '200':
+                      description: Pets
+                      content:
+                        application/json:
+                          schema:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: integer
+              /archived-pets:
+                get:
+                  operationId: listArchivedPets
+                  responses:
+                    '200':
+                      description: Archived pets
+                      content:
+                        application/json:
+                          schema:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: integer
+              /pets/{petId}:
+                get:
+                  operationId: getPet
+                  parameters:
+                    - name: petId
+                      in: path
+                      required: true
+                      schema:
+                        type: integer
+                  responses:
+                    '200':
+                      description: Pet
+                      content:
+                        application/json:
+                          schema:
+                            type: object
+                            properties:
+                              id:
+                                type: integer
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    operations = load_operations(spec)
+    suite = generate_attack_suite(operations, source=str(spec), auto_workflows=True)
+
+    assert all(attack.type == "request" for attack in suite.attacks)

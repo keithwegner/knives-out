@@ -3,10 +3,11 @@
 `knives-out` is designed to fit a normal CI workflow:
 
 1. generate a replayable attack suite from a checked-in OpenAPI spec
-2. run that suite against a dev or staging deployment
-3. render a Markdown report for review
-4. verify the results against a CI policy
-5. publish the JSON results, Markdown report, and per-attack artifacts
+2. optionally opt in to workflow generation for stateful coverage
+3. run that suite against a dev or staging deployment
+4. render a Markdown report for review
+5. verify the results against a CI policy
+6. publish the JSON results, Markdown report, and per-attack artifacts
 
 The repository includes a ready-to-adapt GitHub Actions example at
 `.github/workflows/dev-environment-example.yml`.
@@ -73,6 +74,33 @@ findings:
 
 The tool does not fetch that baseline for you. Your workflow is responsible for placing
 `previous-results.json` in the workspace before this step.
+
+## Optional: stateful workflow coverage
+
+Start simple with request-only generation:
+
+```yaml
+- name: Generate request attacks
+  run: knives-out generate "$SPEC_PATH" --out attacks.json
+```
+
+When you want stateful setup-plus-terminal coverage, opt in:
+
+```yaml
+- name: Generate attacks with built-in workflows
+  run: knives-out generate "$SPEC_PATH" --auto-workflows --out attacks.json
+```
+
+You can add app-specific journeys by loading a workflow pack module or entry point:
+
+```yaml
+- name: Generate attacks with custom workflows
+  run: |
+    knives-out generate "$SPEC_PATH" \
+      --auto-workflows \
+      --workflow-pack-module examples/workflow_packs/listed_pet_lookup.py \
+      --out attacks.json
+```
 
 ## Optional: baseline-aware report
 

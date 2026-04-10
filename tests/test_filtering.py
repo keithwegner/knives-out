@@ -1,5 +1,5 @@
 from knives_out.filtering import filter_attack_suite
-from knives_out.models import AttackCase, AttackSuite
+from knives_out.models import AttackCase, AttackSuite, WorkflowAttackCase
 
 
 def _suite() -> AttackSuite:
@@ -64,3 +64,38 @@ def test_filter_attack_suite_combines_include_and_exclude_filters() -> None:
     )
 
     assert [attack.id for attack in suite.attacks] == ["atk_post_auth"]
+
+
+def test_filter_attack_suite_matches_workflow_terminal_metadata() -> None:
+    suite = AttackSuite(
+        source="unit",
+        attacks=[
+            WorkflowAttackCase(
+                id="wf_post_auth",
+                name="Workflow missing auth",
+                kind="missing_auth",
+                operation_id="createPet",
+                method="POST",
+                path="/pets",
+                description="Workflow missing auth",
+                terminal_attack=AttackCase(
+                    id="atk_post_auth",
+                    name="POST missing auth",
+                    kind="missing_auth",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                    description="POST missing auth",
+                ),
+            )
+        ],
+    )
+
+    filtered = filter_attack_suite(
+        suite,
+        include_operations=["createPet"],
+        include_methods=["post"],
+        include_kinds=["missing_auth"],
+    )
+
+    assert [attack.id for attack in filtered.attacks] == ["wf_post_auth"]

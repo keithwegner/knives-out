@@ -17,6 +17,7 @@ from knives_out.openapi_loader import load_operations_with_warnings
 from knives_out.reporting import load_attack_results, render_markdown_report
 from knives_out.runner import execute_attack_suite, load_attack_suite
 from knives_out.verification import ComparedFinding, evaluate_verification
+from knives_out.workflow_packs import load_workflow_packs
 
 app = typer.Typer(no_args_is_help=True, help="Adversarial API testing from OpenAPI specs.")
 console = Console()
@@ -173,6 +174,23 @@ def generate(
         list[Path] | None,
         typer.Option(help="Load custom attack packs from local Python module paths. Repeatable."),
     ] = None,
+    auto_workflows: Annotated[
+        bool,
+        typer.Option(
+            "--auto-workflows/--no-auto-workflows",
+            help="Opt in to built-in setup+terminal workflow generation.",
+        ),
+    ] = False,
+    workflow_pack: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="Load custom workflow packs from installed entry point names. Repeatable."
+        ),
+    ] = None,
+    workflow_pack_module: Annotated[
+        list[Path] | None,
+        typer.Option(help="Load custom workflow packs from local Python module paths. Repeatable."),
+    ] = None,
 ) -> None:
     """Generate a replayable attack suite from an OpenAPI spec.
 
@@ -181,7 +199,17 @@ def generate(
     loaded = load_operations_with_warnings(spec)
     operations = loaded.operations
     attack_packs = load_attack_packs(entry_point_names=pack, module_paths=pack_module)
-    suite = generate_attack_suite(operations, source=str(spec), extra_packs=attack_packs)
+    workflow_packs = load_workflow_packs(
+        entry_point_names=workflow_pack,
+        module_paths=workflow_pack_module,
+    )
+    suite = generate_attack_suite(
+        operations,
+        source=str(spec),
+        extra_packs=attack_packs,
+        auto_workflows=auto_workflows,
+        workflow_packs=workflow_packs,
+    )
     suite = filter_attack_suite(
         suite,
         include_operations=operation,
@@ -192,7 +220,12 @@ def generate(
         exclude_kinds=exclude_kind,
     )
     out.write_text(suite.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
-    console.print(f"Wrote {len(suite.attacks)} attacks to [bold]{out}[/bold].")
+    workflow_count = sum(1 for attack in suite.attacks if attack.type == "workflow")
+    request_count = len(suite.attacks) - workflow_count
+    console.print(
+        f"Wrote {len(suite.attacks)} attack entries to [bold]{out}[/bold]. "
+        f"({request_count} request attacks, {workflow_count} workflows)"
+    )
     _print_preflight_warnings(loaded.warnings)
 
 

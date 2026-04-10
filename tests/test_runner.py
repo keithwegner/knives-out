@@ -4,7 +4,16 @@ import json
 
 import httpx
 
-from knives_out.models import AttackCase, AttackResult, AttackResults, AttackSuite
+from knives_out.models import (
+    AttackCase,
+    AttackResult,
+    AttackResults,
+    AttackSuite,
+    ExtractRule,
+    WorkflowAttackCase,
+    WorkflowStep,
+    WorkflowStepResult,
+)
 from knives_out.reporting import render_markdown_report
 from knives_out.runner import execute_attack_suite
 
@@ -46,6 +55,52 @@ class _RecordingClient:
         return self._response
 
 
+class _NoopClient:
+    def __enter__(self) -> _NoopClient:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def request(self, *_: object, **__: object) -> httpx.Response:
+        raise AssertionError("This client should not have been used.")
+
+
+class _HandlerClient:
+    def __init__(self, handler) -> None:
+        self._handler = handler
+        self.requests: list[dict[str, object]] = []
+        self.cookies: dict[str, str] = {}
+
+    def __enter__(self) -> _HandlerClient:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+        headers = dict(kwargs.get("headers") or {})
+        if self.cookies and "Cookie" not in headers:
+            headers["Cookie"] = "; ".join(f"{name}={value}" for name, value in self.cookies.items())
+
+        request = {
+            "method": method,
+            "url": url,
+            "params": kwargs.get("params"),
+            "headers": headers,
+            "json": kwargs.get("json"),
+            "content": kwargs.get("content"),
+        }
+        self.requests.append(request)
+        response = self._handler(request)
+
+        set_cookie = response.headers.get("set-cookie")
+        if set_cookie:
+            cookie_name, cookie_value = set_cookie.split(";", 1)[0].split("=", 1)
+            self.cookies[cookie_name] = cookie_value
+        return response
+
+
 def _install_stub_response(monkeypatch, response: httpx.Response) -> None:
     monkeypatch.setattr(
         "knives_out.runner.httpx.Client",
@@ -62,6 +117,17 @@ def _install_recording_client(monkeypatch, response: httpx.Response) -> _Recordi
     return client
 
 
+def _install_client_sequence(monkeypatch, clients: list[object]) -> None:
+    remaining = list(clients)
+
+    def _client_factory(**_: object):
+        if not remaining:
+            raise AssertionError("No more fake clients were configured.")
+        return remaining.pop(0)
+
+    monkeypatch.setattr("knives_out.runner.httpx.Client", _client_factory)
+
+
 def _attack_case(*, response_schemas: dict[str, dict[str, object]]) -> AttackCase:
     return AttackCase(
         id="atk_test",
@@ -72,6 +138,43 @@ def _attack_case(*, response_schemas: dict[str, dict[str, object]]) -> AttackCas
         path="/pets",
         description="Test attack",
         response_schemas=response_schemas,
+    )
+
+
+def _workflow_attack(
+    *,
+    extracts: list[ExtractRule] | None = None,
+    terminal_path_param: object = "{{id}}",
+    setup_path: str = "/pets",
+    terminal_path: str = "/pets/{petId}",
+) -> WorkflowAttackCase:
+    return WorkflowAttackCase(
+        id="wf_lookup",
+        name="Workflow lookup",
+        kind="wrong_type_param",
+        operation_id="getPet",
+        method="GET",
+        path=terminal_path,
+        description="Workflow lookup",
+        setup_steps=[
+            WorkflowStep(
+                name="List pets",
+                operation_id="listPets",
+                method="GET",
+                path=setup_path,
+                extracts=extracts or [ExtractRule(name="id", json_pointer="/0/id")],
+            )
+        ],
+        terminal_attack=AttackCase(
+            id="atk_terminal",
+            name="Terminal attack",
+            kind="wrong_type_param",
+            operation_id="getPet",
+            method="GET",
+            path=terminal_path,
+            description="Terminal attack",
+            path_params={"petId": terminal_path_param},
+        ),
     )
 
 
@@ -490,3 +593,241 @@ def test_execute_attack_suite_writes_artifacts(tmp_path, monkeypatch) -> None:
     }
     assert artifact["response"]["status_code"] == 422
     assert artifact["response"]["body_excerpt"] == "invalid input from server"
+
+
+def test_attack_suite_supports_mixed_request_and_workflow_round_trip() -> None:
+    suite = AttackSuite(
+        source="unit",
+        attacks=[
+            AttackCase(
+                id="atk_request",
+                name="Request attack",
+                kind="missing_auth",
+                operation_id="listPets",
+                method="GET",
+                path="/pets",
+                description="Request attack",
+            ),
+            _workflow_attack(),
+        ],
+    )
+
+    loaded = AttackSuite.model_validate_json(suite.model_dump_json(indent=2))
+
+    assert loaded.attacks[0].type == "request"
+    assert loaded.attacks[1].type == "workflow"
+
+
+def test_attack_results_support_workflow_round_trip() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                type="workflow",
+                attack_id="wf_lookup",
+                operation_id="getPet",
+                kind="wrong_type_param",
+                name="Workflow lookup",
+                method="GET",
+                url="https://example.com/pets/42",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+                workflow_steps=[
+                    WorkflowStepResult(
+                        name="List pets",
+                        operation_id="listPets",
+                        method="GET",
+                        url="https://example.com/pets",
+                        status_code=200,
+                    )
+                ],
+            )
+        ],
+    )
+
+    loaded = AttackResults.model_validate_json(results.model_dump_json(indent=2))
+
+    assert loaded.results[0].type == "workflow"
+    assert loaded.results[0].workflow_steps
+    assert loaded.results[0].workflow_steps[0].name == "List pets"
+
+
+def test_execute_attack_suite_runs_workflow_setup_then_terminal_attack(monkeypatch) -> None:
+    workflow_client = _HandlerClient(
+        lambda request: (
+            httpx.Response(
+                200,
+                headers={"Content-Type": "application/json"},
+                json=[{"id": 42}],
+            )
+            if request["url"] == "https://example.com/pets"
+            else httpx.Response(500, text="boom")
+        )
+    )
+    _install_client_sequence(monkeypatch, [_NoopClient(), workflow_client])
+
+    suite = AttackSuite(source="unit", attacks=[_workflow_attack()])
+
+    results = execute_attack_suite(suite, base_url="https://example.com")
+
+    result = results.results[0]
+    assert result.type == "workflow"
+    assert result.flagged is True
+    assert result.issue == "server_error"
+    assert result.url == "https://example.com/pets/42"
+    assert result.workflow_steps and len(result.workflow_steps) == 1
+    assert [request["url"] for request in workflow_client.requests] == [
+        "https://example.com/pets",
+        "https://example.com/pets/42",
+    ]
+
+
+def test_execute_attack_suite_writes_workflow_artifacts(tmp_path, monkeypatch) -> None:
+    workflow_client = _HandlerClient(
+        lambda request: (
+            httpx.Response(
+                200,
+                headers={"Content-Type": "application/json"},
+                json=[{"id": 42}],
+            )
+            if request["url"] == "https://example.com/pets"
+            else httpx.Response(422, text="invalid")
+        )
+    )
+    _install_client_sequence(monkeypatch, [_NoopClient(), workflow_client])
+
+    artifact_dir = tmp_path / "artifacts"
+    execute_attack_suite(
+        AttackSuite(source="unit", attacks=[_workflow_attack()]),
+        base_url="https://example.com",
+        artifact_dir=artifact_dir,
+    )
+
+    assert (artifact_dir / "wf_lookup-step-01.json").exists()
+    assert (artifact_dir / "wf_lookup.json").exists()
+
+
+def test_execute_attack_suite_persists_cookies_across_workflow_steps(monkeypatch) -> None:
+    workflow = _workflow_attack(extracts=[], terminal_path_param=42)
+    workflow.terminal_attack.path = "/profile"
+    workflow.path = "/profile"
+    workflow.terminal_attack.path_params = {}
+    workflow.terminal_attack.operation_id = "getProfile"
+
+    workflow_client = _HandlerClient(
+        lambda request: (
+            httpx.Response(200, headers={"set-cookie": "session=abc123; Path=/"})
+            if request["url"] == "https://example.com/pets"
+            else httpx.Response(403, text="forbidden")
+        )
+    )
+    _install_client_sequence(monkeypatch, [_NoopClient(), workflow_client])
+
+    execute_attack_suite(
+        AttackSuite(source="unit", attacks=[workflow]),
+        base_url="https://example.com",
+    )
+
+    assert workflow_client.requests[1]["headers"]["Cookie"] == "session=abc123"
+
+
+def test_execute_attack_suite_returns_non_flagged_result_when_required_extract_is_missing(
+    monkeypatch,
+) -> None:
+    workflow_client = _HandlerClient(
+        lambda request: httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            json=[{"name": "Milo"}],
+        )
+    )
+    _install_client_sequence(monkeypatch, [_NoopClient(), workflow_client])
+
+    results = execute_attack_suite(
+        AttackSuite(source="unit", attacks=[_workflow_attack()]),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.type == "workflow"
+    assert result.flagged is False
+    assert "Workflow setup failed during 'List pets'" in (result.error or "")
+    assert len(workflow_client.requests) == 1
+
+
+def test_execute_attack_suite_returns_non_flagged_result_for_unresolved_terminal_placeholder(
+    monkeypatch,
+) -> None:
+    workflow_client = _HandlerClient(lambda request: httpx.Response(200, json={"ok": True}))
+    _install_client_sequence(monkeypatch, [_NoopClient(), workflow_client])
+
+    workflow = _workflow_attack(extracts=[])
+    results = execute_attack_suite(
+        AttackSuite(source="unit", attacks=[workflow]),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is False
+    assert "before terminal step" in (result.error or "")
+    assert len(workflow_client.requests) == 1
+
+
+def test_execute_attack_suite_requires_json_for_setup_extractions(monkeypatch) -> None:
+    workflow_client = _HandlerClient(
+        lambda request: httpx.Response(200, text="<html>not json</html>")
+    )
+    _install_client_sequence(monkeypatch, [_NoopClient(), workflow_client])
+
+    results = execute_attack_suite(
+        AttackSuite(source="unit", attacks=[_workflow_attack()]),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is False
+    assert "response body was not JSON" in (result.error or "")
+
+
+def test_render_markdown_report_shows_workflow_sections() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                type="workflow",
+                attack_id="wf_lookup",
+                operation_id="getPet",
+                kind="wrong_type_param",
+                name="Workflow lookup",
+                method="GET",
+                url="https://example.com/pets/42",
+                status_code=500,
+                flagged=False,
+                severity="none",
+                confidence="none",
+                error="Workflow setup failed during 'List pets': unexpected status 500",
+                workflow_steps=[
+                    WorkflowStepResult(
+                        name="List pets",
+                        operation_id="listPets",
+                        method="GET",
+                        url="https://example.com/pets",
+                        status_code=500,
+                        error="upstream unavailable",
+                    )
+                ],
+            )
+        ],
+    )
+
+    report = render_markdown_report(results)
+
+    assert "- Type: `workflow`" in report
+    assert "- Workflow phase: `setup`" in report
+    assert "| Step | Operation | Method | Status | URL |" in report
+    assert "List pets" in report

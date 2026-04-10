@@ -32,6 +32,9 @@ knives-out = "knives_out.cli:main"
 [project.entry-points."knives_out.attack_packs"]
 unexpected-header = "knives_out.example_packs:attack_pack"
 
+[project.entry-points."knives_out.workflow_packs"]
+listed-id-lookup = "knives_out.example_workflow_packs:workflow_pack"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/knives_out"]
 

@@ -67,8 +67,28 @@ def test_generate_command_writes_attack_suite(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert out_path.exists()
-    raw = out_path.read_text(encoding="utf-8")
-    assert '"attacks"' in raw
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert suite.attacks
+    assert all(attack.type == "request" for attack in suite.attacks)
+
+
+def test_generate_command_supports_auto_workflows(tmp_path: Path) -> None:
+    out_path = tmp_path / "attacks.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            str(EXAMPLE_SPEC),
+            "--auto-workflows",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert any(attack.type == "workflow" for attack in suite.attacks)
 
 
 def test_report_command_supports_baseline(tmp_path: Path) -> None:
@@ -178,6 +198,7 @@ def test_run_command_passes_artifact_dir(tmp_path: Path, monkeypatch) -> None:
         default_query: dict[str, str],
         timeout_seconds: float,
         artifact_dir: Path | None,
+        workflow_hooks=None,
     ) -> AttackResults:
         captured["suite_source"] = suite.source
         captured["base_url"] = base_url
@@ -391,28 +412,30 @@ def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "knives_out.cli.generate_attack_suite",
-        lambda operations, source, extra_packs=None: AttackSuite(
-            source=source,
-            attacks=[
-                AttackCase(
-                    id="atk_get",
-                    name="GET attack",
-                    kind="missing_auth",
-                    operation_id="listPets",
-                    method="GET",
-                    path="/pets",
-                    description="GET attack",
-                ),
-                AttackCase(
-                    id="atk_post",
-                    name="POST attack",
-                    kind="missing_request_body",
-                    operation_id="createPet",
-                    method="POST",
-                    path="/pets",
-                    description="POST attack",
-                ),
-            ],
+        lambda operations, source, extra_packs=None, auto_workflows=False, workflow_packs=None: (
+            AttackSuite(
+                source=source,
+                attacks=[
+                    AttackCase(
+                        id="atk_get",
+                        name="GET attack",
+                        kind="missing_auth",
+                        operation_id="listPets",
+                        method="GET",
+                        path="/pets",
+                        description="GET attack",
+                    ),
+                    AttackCase(
+                        id="atk_post",
+                        name="POST attack",
+                        kind="missing_request_body",
+                        operation_id="createPet",
+                        method="POST",
+                        path="/pets",
+                        description="POST attack",
+                    ),
+                ],
+            )
         ),
     )
 
@@ -456,7 +479,12 @@ def test_generate_command_echoes_preflight_warnings(tmp_path: Path, monkeypatch)
     )
     monkeypatch.setattr(
         "knives_out.cli.generate_attack_suite",
-        lambda operations, source, extra_packs=None: AttackSuite(source=source, attacks=[]),
+        lambda operations, source, extra_packs=None, auto_workflows=False, workflow_packs=None: (
+            AttackSuite(
+                source=source,
+                attacks=[],
+            )
+        ),
     )
 
     result = runner.invoke(app, ["generate", str(EXAMPLE_SPEC), "--out", str(out_path)])
@@ -506,6 +534,7 @@ def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatc
         default_query: dict[str, str],
         timeout_seconds: float,
         artifact_dir: Path | None,
+        workflow_hooks=None,
     ) -> AttackResults:
         captured["attack_ids"] = [attack.id for attack in suite.attacks]
         return AttackResults(source=suite.source, base_url=base_url, results=[])
@@ -590,3 +619,63 @@ def test_generate_command_loads_local_attack_pack(tmp_path: Path) -> None:
     assert result.exit_code == 0
     suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
     assert any(attack.kind == "custom_probe" for attack in suite.attacks)
+
+
+def test_generate_command_loads_local_workflow_pack(tmp_path: Path) -> None:
+    module_path = tmp_path / "custom_workflow_pack.py"
+    module_path.write_text(
+        dedent(
+            """
+            from knives_out.models import ExtractRule, WorkflowAttackCase, WorkflowStep
+            from knives_out.workflow_packs import make_workflow_pack
+
+            def generate(operations, request_attacks):
+                attack = next(
+                    attack for attack in request_attacks if attack.operation_id == "getPet"
+                )
+                terminal_attack = attack.model_copy(deep=True)
+                terminal_attack.path_params["petId"] = "{{id}}"
+                return [
+                    WorkflowAttackCase(
+                        id="wf_custom",
+                        name="Custom workflow",
+                        kind=attack.kind,
+                        operation_id=attack.operation_id,
+                        method=attack.method,
+                        path=attack.path,
+                        description="Custom workflow",
+                        setup_steps=[
+                            WorkflowStep(
+                                name="List pets",
+                                operation_id="listPets",
+                                method="GET",
+                                path="/pets",
+                                extracts=[ExtractRule(name="id", json_pointer="/0/id")],
+                            )
+                        ],
+                        terminal_attack=terminal_attack,
+                    )
+                ]
+
+            workflow_pack = make_workflow_pack("custom-workflow-pack", generate)
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out_path = tmp_path / "attacks.json"
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            str(EXAMPLE_SPEC),
+            "--workflow-pack-module",
+            str(module_path),
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert any(attack.type == "workflow" for attack in suite.attacks)
