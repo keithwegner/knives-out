@@ -9,6 +9,7 @@ import yaml
 from knives_out.models import OperationSpec, ParameterSpec
 
 HTTP_METHODS = ["get", "post", "put", "patch", "delete", "head", "options"]
+PARAMETER_LOCATION_ORDER = {"path": 0, "query": 1, "header": 2, "cookie": 3}
 
 
 def load_openapi_document(path: str | Path) -> dict[str, Any]:
@@ -57,7 +58,13 @@ def _merge_parameters(
     for parameter in path_parameters + operation_parameters:
         resolved = resolve_refs(parameter, root)
         merged[(resolved["name"], resolved["in"])] = resolved
-    return list(merged.values())
+    return sorted(
+        merged.values(),
+        key=lambda parameter: (
+            PARAMETER_LOCATION_ORDER.get(parameter["in"], len(PARAMETER_LOCATION_ORDER)),
+            parameter["name"].casefold(),
+        ),
+    )
 
 
 def _extract_request_body(operation: dict[str, Any], root: dict[str, Any]) -> tuple[bool, dict[str, Any] | None, str | None]:
