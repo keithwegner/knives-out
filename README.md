@@ -85,13 +85,22 @@ Create a Markdown report:
 knives-out report results.json --out report.md
 ```
 
+Verify findings against the default CI policy:
+
+```bash
+knives-out verify results.json
+```
+
 ## CI usage
 
-`knives-out` works well in CI when you split the flow into the same three phases:
+`knives-out` works well in CI when you follow the same generate/run/report flow and add a final
+verification step:
 
 1. generate attacks from a checked-in OpenAPI spec
 2. run them against a dev or staging environment
-3. upload the JSON results, request artifacts, and Markdown report for review
+3. render a Markdown report for review
+4. verify the results against a CI policy
+5. upload the JSON results, request artifacts, and Markdown report for triage
 
 A ready-to-adapt GitHub Actions example lives at `.github/workflows/dev-environment-example.yml`.
 It uses repository secrets instead of hard-coded targets:
@@ -101,12 +110,12 @@ It uses repository secrets instead of hard-coded targets:
 - `KNIVES_OUT_AUTH_QUERY` for an optional query credential like `api_key=...`
 
 `knives-out run` currently exits with status `0` when the suite executes successfully, even if
-some findings are flagged in `results.json`. That makes the default workflow review-friendly:
+some findings are flagged in `results.json`. That keeps execution review-friendly:
 teams can always upload `results.json`, `report.md`, and per-attack artifacts for triage.
 
-If you want the workflow to gate merges, add a follow-up step that reads `results.json` and fails
-when flagged results exceed your threshold. See `docs/ci.md` for the sample workflow, secret
-setup, and an optional gating snippet.
+For built-in gating, use `knives-out verify` after `run`. It can fail on qualifying findings in the
+current run, or only on new qualifying findings when you also pass `--baseline previous-results.json`.
+See `docs/ci.md` for the sample workflow, secret setup, and baseline-aware CI patterns.
 
 ## CLI
 
@@ -165,6 +174,30 @@ Renders Markdown from a results JSON file.
 
 ```bash
 knives-out report results.json --out report.md
+```
+
+You can include a prior `results.json` as a baseline to add regression sections for new, resolved,
+and persisting findings:
+
+```bash
+knives-out report results.json --baseline previous-results.json --out report.md
+```
+
+### `verify`
+
+Checks a results JSON file against a CI policy and exits non-zero when the policy fails.
+
+```bash
+knives-out verify results.json
+```
+
+To fail only on new high-signal regressions, compare against a prior results file:
+
+```bash
+knives-out verify results.json \
+  --baseline previous-results.json \
+  --min-severity high \
+  --min-confidence medium
 ```
 
 ## Development

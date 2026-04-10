@@ -52,6 +52,11 @@ jobs:
           knives-out run attacks.json "${args[@]}"
       - name: Render Markdown report
         run: knives-out report results.json --out report.md
+      - name: Verify findings against CI policy
+        run: |
+          knives-out verify results.json \
+            --min-severity high \
+            --min-confidence medium
       - name: Upload run artifacts
         if: always()
         uses: actions/upload-artifact@v6

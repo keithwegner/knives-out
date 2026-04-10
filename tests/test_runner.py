@@ -284,6 +284,83 @@ def test_render_markdown_report_sorts_flagged_findings_by_score() -> None:
     assert report.index("| Schema mismatch |") < report.index("| Transport error |")
 
 
+def test_render_markdown_report_with_baseline_shows_regression_sections() -> None:
+    current = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_new",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="New server failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            ),
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=200,
+                flagged=True,
+                issue="response_schema_mismatch",
+                severity="medium",
+                confidence="high",
+            ),
+        ],
+    )
+    baseline = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=200,
+                flagged=True,
+                issue="response_schema_mismatch",
+                severity="medium",
+                confidence="high",
+            ),
+            AttackResult(
+                attack_id="atk_resolved",
+                operation_id="listPets",
+                kind="missing_auth",
+                name="Resolved auth failure",
+                method="GET",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            ),
+        ],
+    )
+
+    report = render_markdown_report(current, baseline=baseline)
+
+    assert "## Verification summary" in report
+    assert "## New findings" in report
+    assert "## Resolved findings" in report
+    assert "## Persisting findings" in report
+    assert "New server failure" in report
+    assert "Resolved auth failure" in report
+    assert "Persisting mismatch" in report
+
+
 def test_execute_attack_suite_removes_only_declared_auth_header(monkeypatch) -> None:
     response = httpx.Response(401, text="missing api key")
     client = _install_recording_client(monkeypatch, response)
