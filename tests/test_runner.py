@@ -1117,6 +1117,72 @@ def test_execute_attack_suite_requires_json_for_setup_extractions(monkeypatch) -
     assert "response body was not JSON" in (result.error or "")
 
 
+def test_execute_attack_suite_treats_graphql_errors_as_expected_failures(monkeypatch) -> None:
+    _install_stub_response(monkeypatch, httpx.Response(200, json={"errors": [{"message": "bad"}]}))
+
+    results = execute_attack_suite(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                AttackCase(
+                    id="atk_graphql_error",
+                    name="Wrong-type GraphQL variable",
+                    kind="wrong_type_variable",
+                    operation_id="book",
+                    method="POST",
+                    path="/graphql",
+                    description="Wrong type for GraphQL variable.",
+                    body_json={
+                        "query": "query Book($id: ID!) { book(id: $id) { __typename } }",
+                        "variables": {"id": 123},
+                    },
+                    expected_outcomes=["graphql_error", "4xx"],
+                )
+            ],
+        ),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is False
+    assert result.issue is None
+    assert result.status_code == 200
+
+
+def test_execute_attack_suite_flags_graphql_success_without_errors(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(200, json={"data": {"book": {"__typename": "Book"}}}),
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                AttackCase(
+                    id="atk_graphql_success",
+                    name="Wrong-type GraphQL variable",
+                    kind="wrong_type_variable",
+                    operation_id="book",
+                    method="POST",
+                    path="/graphql",
+                    description="Wrong type for GraphQL variable.",
+                    body_json={
+                        "query": "query Book($id: ID!) { book(id: $id) { __typename } }",
+                        "variables": {"id": 123},
+                    },
+                    expected_outcomes=["graphql_error", "4xx"],
+                )
+            ],
+        ),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "unexpected_success"
+
+
 def test_render_markdown_report_shows_workflow_sections() -> None:
     results = AttackResults(
         source="unit",

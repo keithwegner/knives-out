@@ -24,6 +24,10 @@ jobs:
       - name: Generate attack suite
         run: |
           knives-out generate "$SPEC_PATH" --tag orders --out attacks.json
+          # For GraphQL SDL or introspection instead:
+          # knives-out generate examples/graphql/library.graphql \
+          #   --graphql-endpoint /graphql \
+          #   --out attacks.json
           # Path filters are exact matches against the OpenAPI path template:
           # knives-out generate "$SPEC_PATH" \
           #   --path /draft-orders/{draftId} \

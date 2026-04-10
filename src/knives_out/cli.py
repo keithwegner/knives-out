@@ -14,7 +14,6 @@ from knives_out.auth_plugins import PluginRuntimeError, load_auth_plugins
 from knives_out.filtering import filter_attack_suite, filter_operations
 from knives_out.generator import generate_attack_suite
 from knives_out.models import AttackResults, AuthProfile, PreflightWarning
-from knives_out.openapi_loader import load_operations_with_warnings
 from knives_out.profiles import (
     load_auth_profiles,
     resolve_auth_profile_modules,
@@ -31,6 +30,7 @@ from knives_out.runner import (
     execute_attack_suite_profiles,
     load_attack_suite,
 )
+from knives_out.spec_loader import load_operations_with_warnings
 from knives_out.suppressions import (
     DEFAULT_SUPPRESSIONS_PATH,
     SuppressionRule,
@@ -47,7 +47,10 @@ from knives_out.verification import (
 )
 from knives_out.workflow_packs import load_workflow_packs
 
-app = typer.Typer(no_args_is_help=True, help="Adversarial API testing from OpenAPI specs.")
+app = typer.Typer(
+    no_args_is_help=True,
+    help="Adversarial API testing from OpenAPI and GraphQL schemas.",
+)
 console = Console()
 
 
@@ -188,6 +191,10 @@ def _print_compared_findings(title: str, findings: list[ComparedFinding]) -> Non
 @app.command()
 def inspect(
     spec: Path,
+    graphql_endpoint: Annotated[
+        str,
+        typer.Option(help="GraphQL endpoint path to use when inspecting GraphQL schemas."),
+    ] = "/graphql",
     tag: Annotated[
         list[str] | None,
         typer.Option(help="Only include operations with these tags. Repeatable."),
@@ -205,8 +212,8 @@ def inspect(
         typer.Option(help="Exclude operations for these exact OpenAPI paths. Repeatable."),
     ] = None,
 ) -> None:
-    """Show the operations discovered in an OpenAPI spec."""
-    loaded = load_operations_with_warnings(spec)
+    """Show the operations discovered in an OpenAPI or GraphQL schema."""
+    loaded = load_operations_with_warnings(spec, graphql_endpoint=graphql_endpoint)
     operations = filter_operations(
         loaded.operations,
         include_paths=path,
@@ -241,6 +248,10 @@ def inspect(
 @app.command()
 def generate(
     spec: Path,
+    graphql_endpoint: Annotated[
+        str,
+        typer.Option(help="GraphQL endpoint path to use when generating from GraphQL schemas."),
+    ] = "/graphql",
     out: Annotated[
         Path,
         typer.Option(help="Where to write the generated attack suite."),
@@ -311,11 +322,11 @@ def generate(
         typer.Option(help="Load custom workflow packs from local Python module paths. Repeatable."),
     ] = None,
 ) -> None:
-    """Generate a replayable attack suite from an OpenAPI spec.
+    """Generate a replayable attack suite from an OpenAPI or GraphQL schema.
 
     Filters are applied after attack generation and before the suite is written.
     """
-    loaded = load_operations_with_warnings(spec)
+    loaded = load_operations_with_warnings(spec, graphql_endpoint=graphql_endpoint)
     operations = loaded.operations
     attack_packs = load_attack_packs(entry_point_names=pack, module_paths=pack_module)
     workflow_packs = load_workflow_packs(

@@ -2,7 +2,7 @@
 
 `knives-out` is designed to fit a normal CI workflow:
 
-1. generate a replayable attack suite from a checked-in OpenAPI spec
+1. generate a replayable attack suite from a checked-in OpenAPI or GraphQL schema
 2. optionally opt in to workflow generation for stateful coverage
 3. run that suite against a dev or staging deployment
 4. render a Markdown report for review
@@ -41,6 +41,8 @@ If you want identity-aware authorization coverage, the repo also includes
 
 For richer checked-in examples, the repo now includes `examples/openapi/storefront.yaml`, which
 combines exact tags, path filters, schema constraints, and a producer/consumer workflow chain.
+For GraphQL, the repo includes `examples/graphql/library.graphql`, which demonstrates query and
+mutation variable attacks from SDL input.
 
 ## Expected exit behavior
 
@@ -165,6 +167,24 @@ You can add app-specific journeys by loading a workflow pack module or entry poi
       --auto-workflows \
       --workflow-pack-module examples/workflow_packs/listed_pet_lookup.py \
       --out attacks.json
+```
+
+## Optional: GraphQL schemas
+
+GraphQL SDL or introspection JSON follows the same generate/run/report/verify flow. The generated
+attacks target invalid variables, required-variable removal, and type coercion failures.
+
+```yaml
+- name: Inspect a GraphQL schema
+  run: knives-out inspect examples/graphql/library.graphql
+```
+
+```yaml
+- name: Generate GraphQL attacks
+  run: |
+    knives-out generate examples/graphql/library.graphql \
+      --graphql-endpoint /graphql \
+      --out graphql-attacks.json
 ```
 
 ## Optional: tag and path filtering

@@ -18,6 +18,9 @@ from knives_out.suppressions import load_suppressions
 
 runner = CliRunner()
 EXAMPLE_SPEC = Path(__file__).resolve().parents[1] / "examples" / "openapi" / "petstore.yaml"
+GRAPHQL_EXAMPLE_SPEC = (
+    Path(__file__).resolve().parents[1] / "examples" / "graphql" / "library.graphql"
+)
 
 
 def _write_results(path: Path, results: AttackResults) -> None:
@@ -46,7 +49,7 @@ def test_inspect_command_runs() -> None:
 def test_inspect_command_shows_preflight_warnings(monkeypatch) -> None:
     monkeypatch.setattr(
         "knives_out.cli.load_operations_with_warnings",
-        lambda spec: LoadedOperations(
+        lambda spec, **_: LoadedOperations(
             operations=[],
             warnings=[
                 PreflightWarning(
@@ -71,7 +74,7 @@ def test_inspect_command_shows_preflight_warnings(monkeypatch) -> None:
 def test_inspect_command_filters_operations_by_tag(monkeypatch) -> None:
     monkeypatch.setattr(
         "knives_out.cli.load_operations_with_warnings",
-        lambda spec: LoadedOperations(
+        lambda spec, **_: LoadedOperations(
             operations=[
                 {
                     "operation_id": "listPets",
@@ -98,6 +101,22 @@ def test_inspect_command_filters_operations_by_tag(monkeypatch) -> None:
     assert "Found 1 operations." in result.stdout
 
 
+def test_inspect_command_supports_graphql_schema(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "inspect",
+            str(GRAPHQL_EXAMPLE_SPEC),
+            "--graphql-endpoint",
+            "/api/graphql",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Found 4 operations." in result.stdout
+    assert "/api/graphql" in result.stdout
+
+
 def test_generate_command_writes_attack_suite(tmp_path: Path) -> None:
     out_path = tmp_path / "attacks.json"
     result = runner.invoke(app, ["generate", str(EXAMPLE_SPEC), "--out", str(out_path)])
@@ -107,6 +126,16 @@ def test_generate_command_writes_attack_suite(tmp_path: Path) -> None:
     suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
     assert suite.attacks
     assert all(attack.type == "request" for attack in suite.attacks)
+
+
+def test_generate_command_supports_graphql_schema(tmp_path: Path) -> None:
+    out_path = tmp_path / "graphql-attacks.json"
+    result = runner.invoke(app, ["generate", str(GRAPHQL_EXAMPLE_SPEC), "--out", str(out_path)])
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert any(attack.kind == "wrong_type_variable" for attack in suite.attacks)
+    assert all(attack.path == "/graphql" for attack in suite.attacks)
 
 
 def test_generate_command_supports_auto_workflows(tmp_path: Path) -> None:
@@ -914,7 +943,7 @@ def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(
         "knives_out.cli.load_operations_with_warnings",
-        lambda spec: LoadedOperations(operations=[], warnings=[]),
+        lambda spec, **_: LoadedOperations(operations=[], warnings=[]),
     )
     monkeypatch.setattr(
         "knives_out.cli.generate_attack_suite",
@@ -969,7 +998,7 @@ def test_generate_command_filters_attacks_by_tag(tmp_path: Path, monkeypatch) ->
 
     monkeypatch.setattr(
         "knives_out.cli.load_operations_with_warnings",
-        lambda spec: LoadedOperations(operations=[], warnings=[]),
+        lambda spec, **_: LoadedOperations(operations=[], warnings=[]),
     )
     monkeypatch.setattr(
         "knives_out.cli.generate_attack_suite",
@@ -1024,7 +1053,7 @@ def test_generate_command_echoes_preflight_warnings(tmp_path: Path, monkeypatch)
 
     monkeypatch.setattr(
         "knives_out.cli.load_operations_with_warnings",
-        lambda spec: LoadedOperations(
+        lambda spec, **_: LoadedOperations(
             operations=[],
             warnings=[
                 PreflightWarning(

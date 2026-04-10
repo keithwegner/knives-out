@@ -3,6 +3,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 CI_DOC = ROOT / "docs" / "ci.md"
+ARCHITECTURE_DOC = ROOT / "docs" / "architecture.md"
+ROADMAP_DOC = ROOT / "docs" / "roadmap.md"
 DEV_WORKFLOW = ROOT / ".github" / "workflows" / "dev-environment-example.yml"
 SYNC_WIKI_WORKFLOW = ROOT / ".github" / "workflows" / "sync-wiki.yml"
 
@@ -29,7 +31,12 @@ def test_readme_includes_ci_guidance() -> None:
     assert "--artifact-root artifacts" in readme
     assert "report.html" in readme
     assert "examples/openapi/storefront.yaml" in readme
+    assert "examples/graphql/library.graphql" in readme
+    assert "--graphql-endpoint /api/graphql" in readme
+    assert "graphql-attacks.json" in readme
     assert "examples/workflow_packs/listed_pet_lookup.py" in readme
+    assert "stronger built-in auth acquisition and refresh flows" in readme
+    assert "deeper GraphQL response validation" in readme
 
 
 def test_dev_environment_workflow_matches_current_cli_surface() -> None:
@@ -44,6 +51,8 @@ def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     assert "--path /draft-orders/{draftId}" in workflow
     assert "--auto-workflows" in workflow
     assert "--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py" in workflow
+    assert "examples/graphql/library.graphql" in workflow
+    assert "--graphql-endpoint /graphql" in workflow
     assert "--profile-file examples/auth_profiles/anonymous-user-admin.yml" in workflow
     assert "--profile anonymous" in workflow
     assert 'knives-out run attacks.json "${args[@]}"' in workflow
@@ -72,7 +81,9 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "Optional: checked-in suppressions" in ci_doc
     assert "Optional: multi-profile authorization runs" in ci_doc
     assert "Optional: HTML report and artifact index" in ci_doc
+    assert "Optional: GraphQL schemas" in ci_doc
     assert "examples/auth_profiles/anonymous-user-admin.yml" in ci_doc
+    assert "examples/graphql/library.graphql" in ci_doc
     assert "knives-out triage results.json --out .knives-out-ignore.yml" in ci_doc
     assert ".knives-out-ignore.yml" in ci_doc
     assert "--baseline previous-results.json" in ci_doc
@@ -97,3 +108,21 @@ def test_sync_wiki_workflow_uses_dedicated_secret_and_sync_script() -> None:
     assert "WIKI_PUSH_TOKEN" in workflow
     assert "python scripts/sync_wiki.py publish" in workflow
     assert "github.repository }}.wiki.git" in workflow
+
+
+def test_roadmap_and_architecture_describe_next_milestones() -> None:
+    roadmap = ROADMAP_DOC.read_text(encoding="utf-8")
+    architecture = ARCHITECTURE_DOC.read_text(encoding="utf-8")
+
+    assert "## Recently completed" in roadmap
+    assert "v0.8: GraphQL support" in roadmap
+    assert "## Next planning pass" in roadmap
+    assert "built-in auth acquisition and refresh flows" in roadmap
+    assert "GraphQL response validation" in roadmap
+    assert "LLM application and tool-misuse testing" in roadmap
+
+    assert "graphql_loader.py" in architecture
+    assert "spec_loader.py" in architecture
+    assert "GraphQL SDL or introspection JSON" in architecture
+    assert "200` response with an `errors` array" in architecture
+    assert "redirect-driven OAuth auth-code flows" in architecture

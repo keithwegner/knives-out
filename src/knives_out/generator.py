@@ -1024,7 +1024,228 @@ def generate_workflow_attacks(
     return workflows
 
 
+def _graphql_expected_outcomes() -> list[str]:
+    return ["graphql_error", "4xx"]
+
+
+def _graphql_sample_value(schema: dict[str, Any] | None) -> Any:
+    schema = _normalize_schema(schema)
+    if "default" in schema:
+        return schema["default"]
+    if "enum" in schema and schema["enum"]:
+        return schema["enum"][0]
+
+    schema_type = _schema_type(schema)
+    if schema_type == "array":
+        return [_graphql_sample_value(schema.get("items", {}))]
+    if schema_type == "object":
+        return {
+            name: _graphql_sample_value(property_schema)
+            for name, property_schema in schema.get("properties", {}).items()
+        }
+    return _sample_scalar_value(schema)
+
+
+def _graphql_request_body(operation: OperationSpec, variables: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "query": operation.graphql_document or "",
+        "variables": deepcopy(variables),
+    }
+
+
+def _graphql_variable_label(path: tuple[str | int, ...]) -> str:
+    label = "variables"
+    for token in path:
+        if isinstance(token, int):
+            label += f"[{token}]"
+        else:
+            label += f".{token}"
+    return label
+
+
+def _graphql_variable_reference(path: tuple[str | int, ...]) -> str:
+    return f"GraphQL variable '{_graphql_variable_label(path)}'"
+
+
+def _collect_graphql_variable_mutations(
+    schema: dict[str, Any] | None,
+    value: Any,
+    *,
+    path: tuple[str | int, ...] = (),
+) -> list[_BodyMutation]:
+    schema = _normalize_schema(schema)
+    schema_type = _schema_type(schema)
+    mutations: list[_BodyMutation] = []
+
+    if path:
+        mutations.append(
+            _BodyMutation(
+                kind="wrong_type_variable",
+                target=_graphql_variable_label(path),
+                name=f"Wrong-type {_graphql_variable_reference(path)}",
+                description=(
+                    f"Substitutes a wrong-type value for {_graphql_variable_reference(path)}."
+                ),
+                action="replace",
+                path=path,
+                value=invalid_scalar_value(schema),
+            )
+        )
+
+        if schema.get("enum"):
+            mutations.append(
+                _BodyMutation(
+                    kind="invalid_enum",
+                    target=_graphql_variable_label(path),
+                    name=f"Invalid enum {_graphql_variable_reference(path)}",
+                    description=(
+                        f"Uses a value outside the declared enum for "
+                        f"{_graphql_variable_reference(path)}."
+                    ),
+                    action="replace",
+                    path=path,
+                    value=invalid_enum_value(schema),
+                )
+            )
+
+    if schema_type == "array":
+        if isinstance(value, list) and value:
+            mutations.extend(
+                _collect_graphql_variable_mutations(
+                    schema.get("items"),
+                    value[0],
+                    path=(*path, 0),
+                )
+            )
+        return mutations
+
+    if schema_type == "object" and isinstance(value, dict):
+        for required_name in schema.get("required", []):
+            if required_name not in value:
+                continue
+            property_path = (*path, required_name)
+            mutations.append(
+                _BodyMutation(
+                    kind="missing_required_variable",
+                    target=_graphql_variable_label(property_path),
+                    name=f"Missing required {_graphql_variable_reference(property_path)}",
+                    description=f"Removes required {_graphql_variable_reference(property_path)}.",
+                    action="remove",
+                    path=property_path,
+                )
+            )
+
+        for property_name, property_schema in schema.get("properties", {}).items():
+            if property_name not in value:
+                continue
+            mutations.extend(
+                _collect_graphql_variable_mutations(
+                    property_schema,
+                    value[property_name],
+                    path=(*path, property_name),
+                )
+            )
+
+    return mutations
+
+
+def _graphql_attack_from_mutation(
+    operation: OperationSpec,
+    mutation: _BodyMutation,
+    *,
+    variables: dict[str, Any],
+) -> AttackCase:
+    mutated_variables = deepcopy(variables)
+    if mutation.action == "replace":
+        mutated_variables = _replace_json_value(
+            mutated_variables,
+            mutation.path,
+            deepcopy(mutation.value),
+        )
+    elif mutation.action == "remove":
+        mutated_variables = _remove_json_value(mutated_variables, mutation.path)
+    else:
+        raise ValueError(f"Unknown GraphQL mutation action: {mutation.action}")
+
+    return AttackCase(
+        id=attack_id(operation.operation_id, mutation.kind, mutation.target),
+        name=mutation.name,
+        kind=mutation.kind,
+        operation_id=operation.operation_id,
+        method=operation.method,
+        path=operation.path,
+        tags=_tags_for_attack(operation),
+        auth_required=operation.auth_required,
+        description=mutation.description,
+        body_json=_graphql_request_body(operation, mutated_variables),
+        content_type="application/json",
+        expected_outcomes=_graphql_expected_outcomes(),
+        response_schemas=_response_schemas_for_attack(operation),
+    )
+
+
+def _generate_graphql_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]:
+    variables_schema = operation.graphql_variables_schema or {
+        "type": "object",
+        "properties": {},
+    }
+    variables = _graphql_sample_value(variables_schema)
+    if not isinstance(variables, dict):
+        variables = {}
+
+    attacks: list[AttackCase] = []
+    if operation.request_body_required:
+        attacks.append(
+            AttackCase(
+                id=attack_id(operation.operation_id, "missing_request_body", "body"),
+                name="Missing request body",
+                kind="missing_request_body",
+                operation_id=operation.operation_id,
+                method=operation.method,
+                path=operation.path,
+                tags=_tags_for_attack(operation),
+                auth_required=operation.auth_required,
+                description="Omits the required GraphQL request body.",
+                omit_body=True,
+                expected_outcomes=_graphql_expected_outcomes(),
+                response_schemas=_response_schemas_for_attack(operation),
+            )
+        )
+
+    attacks.append(
+        AttackCase(
+            id=attack_id(operation.operation_id, "malformed_json_body", "body"),
+            name="Malformed JSON body",
+            kind="malformed_json_body",
+            operation_id=operation.operation_id,
+            method=operation.method,
+            path=operation.path,
+            tags=_tags_for_attack(operation),
+            auth_required=operation.auth_required,
+            description="Sends invalid JSON for a GraphQL request body.",
+            raw_body=malformed_json_body(operation.request_body_schema),
+            content_type="application/json",
+            expected_outcomes=_graphql_expected_outcomes(),
+            response_schemas=_response_schemas_for_attack(operation),
+        )
+    )
+
+    for mutation in _collect_graphql_variable_mutations(variables_schema, variables):
+        attacks.append(
+            _graphql_attack_from_mutation(
+                operation,
+                mutation,
+                variables=variables,
+            )
+        )
+
+    return attacks
+
+
 def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]:
+    if operation.protocol == "graphql":
+        return _generate_graphql_attacks_for_operation(operation)
+
     attacks: list[AttackCase] = []
     base_path_params, base_query_params, base_headers, base_body = base_request_context(operation)
 
