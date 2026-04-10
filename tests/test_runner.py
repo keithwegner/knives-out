@@ -148,6 +148,9 @@ def _workflow_attack(
     setup_path: str = "/pets",
     terminal_path: str = "/pets/{petId}",
 ) -> WorkflowAttackCase:
+    setup_extracts = (
+        [ExtractRule(name="id", json_pointer="/0/id")] if extracts is None else extracts
+    )
     return WorkflowAttackCase(
         id="wf_lookup",
         name="Workflow lookup",
@@ -162,7 +165,7 @@ def _workflow_attack(
                 operation_id="listPets",
                 method="GET",
                 path=setup_path,
-                extracts=extracts or [ExtractRule(name="id", json_pointer="/0/id")],
+                extracts=setup_extracts,
             )
         ],
         terminal_attack=AttackCase(
