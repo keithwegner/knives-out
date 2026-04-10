@@ -1,5 +1,9 @@
 # knives-out
 
+[![CI](https://github.com/keithwegner/knives-out/actions/workflows/ci.yml/badge.svg)](https://github.com/keithwegner/knives-out/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 `knives-out` is a CLI for adversarial API testing from OpenAPI specs.
 
 It helps developers break their APIs on purpose before someone else does.
