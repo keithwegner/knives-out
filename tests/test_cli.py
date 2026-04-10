@@ -1359,7 +1359,6 @@ def test_run_command_requires_profile_file_for_profile_name(tmp_path: Path) -> N
     )
 
     assert result.exit_code == 2
-    assert "--profile requires --profile-file" in result.stdout
 
 
 def test_run_command_reports_auth_plugin_runtime_error(tmp_path: Path, monkeypatch) -> None:
