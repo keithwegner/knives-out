@@ -249,6 +249,40 @@ def test_load_operations_extracts_api_key_auth_from_components(tmp_path) -> None
     assert operations["optionalAuth"].auth_header_names == ["X-API-Key"]
 
 
+def test_load_operations_extracts_tags(tmp_path) -> None:
+    spec = tmp_path / "operation-tags.yaml"
+    spec.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Tag extraction test
+              version: 1.0.0
+            paths:
+              /pets:
+                get:
+                  operationId: listPets
+                  tags: [pets, read]
+                  responses:
+                    "200":
+                      description: ok
+              /health:
+                get:
+                  operationId: healthcheck
+                  responses:
+                    "200":
+                      description: ok
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    operations = {operation.operation_id: operation for operation in load_operations(spec)}
+
+    assert operations["listPets"].tags == ["pets", "read"]
+    assert operations["healthcheck"].tags == []
+
+
 def test_load_operations_with_warnings_reports_missing_request_schema_and_vague_security(
     tmp_path,
 ) -> None:

@@ -11,7 +11,7 @@ from rich.table import Table
 
 from knives_out.attack_packs import load_attack_packs
 from knives_out.auth_plugins import PluginRuntimeError, load_auth_plugins
-from knives_out.filtering import filter_attack_suite
+from knives_out.filtering import filter_attack_suite, filter_operations
 from knives_out.generator import generate_attack_suite
 from knives_out.models import AttackResults, PreflightWarning
 from knives_out.openapi_loader import load_operations_with_warnings
@@ -108,10 +108,34 @@ def _print_compared_findings(title: str, findings: list[ComparedFinding]) -> Non
 
 
 @app.command()
-def inspect(spec: Path) -> None:
+def inspect(
+    spec: Path,
+    tag: Annotated[
+        list[str] | None,
+        typer.Option(help="Only include operations with these tags. Repeatable."),
+    ] = None,
+    exclude_tag: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude operations with these tags. Repeatable."),
+    ] = None,
+    path: Annotated[
+        list[str] | None,
+        typer.Option(help="Only include operations for these exact OpenAPI paths. Repeatable."),
+    ] = None,
+    exclude_path: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude operations for these exact OpenAPI paths. Repeatable."),
+    ] = None,
+) -> None:
     """Show the operations discovered in an OpenAPI spec."""
     loaded = load_operations_with_warnings(spec)
-    operations = loaded.operations
+    operations = filter_operations(
+        loaded.operations,
+        include_paths=path,
+        exclude_paths=exclude_path,
+        include_tags=tag,
+        exclude_tags=exclude_tag,
+    )
 
     table = Table(title=f"knives-out inspect: {spec}")
     table.add_column("Operation ID")
@@ -167,6 +191,22 @@ def generate(
         list[str] | None,
         typer.Option(help="Exclude attacks for these attack kinds. Repeatable."),
     ] = None,
+    tag: Annotated[
+        list[str] | None,
+        typer.Option(help="Only include attacks for these tags. Repeatable."),
+    ] = None,
+    exclude_tag: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude attacks for these tags. Repeatable."),
+    ] = None,
+    path: Annotated[
+        list[str] | None,
+        typer.Option(help="Only include attacks for these exact OpenAPI paths. Repeatable."),
+    ] = None,
+    exclude_path: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude attacks for these exact OpenAPI paths. Repeatable."),
+    ] = None,
     pack: Annotated[
         list[str] | None,
         typer.Option(help="Load custom attack packs from installed entry point names. Repeatable."),
@@ -219,6 +259,10 @@ def generate(
         exclude_methods=exclude_method,
         include_kinds=kind,
         exclude_kinds=exclude_kind,
+        include_paths=path,
+        exclude_paths=exclude_path,
+        include_tags=tag,
+        exclude_tags=exclude_tag,
     )
     out.write_text(suite.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
     workflow_count = sum(1 for attack in suite.attacks if attack.type == "workflow")
@@ -291,6 +335,22 @@ def run(
         list[str] | None,
         typer.Option(help="Exclude attacks for these attack kinds. Repeatable."),
     ] = None,
+    tag: Annotated[
+        list[str] | None,
+        typer.Option(help="Only run attacks for these tags. Repeatable."),
+    ] = None,
+    exclude_tag: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude attacks for these tags. Repeatable."),
+    ] = None,
+    path: Annotated[
+        list[str] | None,
+        typer.Option(help="Only run attacks for these exact OpenAPI paths. Repeatable."),
+    ] = None,
+    exclude_path: Annotated[
+        list[str] | None,
+        typer.Option(help="Exclude attacks for these exact OpenAPI paths. Repeatable."),
+    ] = None,
 ) -> None:
     """Run a saved attack suite against a live API.
 
@@ -305,6 +365,10 @@ def run(
         exclude_methods=exclude_method,
         include_kinds=kind,
         exclude_kinds=exclude_kind,
+        include_paths=path,
+        exclude_paths=exclude_path,
+        include_tags=tag,
+        exclude_tags=exclude_tag,
     )
     default_headers = _parse_key_value(header, separator=":")
     default_query = _parse_key_value(query, separator="=")

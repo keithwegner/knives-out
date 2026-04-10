@@ -538,6 +538,7 @@ def load_operations_with_warnings(path: str | Path) -> LoadedOperations:
                     method=context["method"],
                     path=route,
                     summary=operation.get("summary") or operation.get("description"),
+                    tags=[tag for tag in operation.get("tags", []) if isinstance(tag, str)],
                     parameters=parsed_parameters,
                     request_body_required=request_body_required,
                     request_body_schema=request_body_schema,
