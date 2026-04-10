@@ -3,6 +3,7 @@ from textwrap import dedent
 
 from typer.testing import CliRunner
 
+from knives_out.auth_plugins import PluginRuntimeError
 from knives_out.cli import app
 from knives_out.models import (
     AttackCase,
@@ -198,11 +199,13 @@ def test_run_command_passes_artifact_dir(tmp_path: Path, monkeypatch) -> None:
         default_query: dict[str, str],
         timeout_seconds: float,
         artifact_dir: Path | None,
+        auth_plugins=None,
         workflow_hooks=None,
     ) -> AttackResults:
         captured["suite_source"] = suite.source
         captured["base_url"] = base_url
         captured["artifact_dir"] = artifact_dir
+        captured["auth_plugins"] = auth_plugins
         return AttackResults(source=suite.source, base_url=base_url, results=[])
 
     monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
@@ -226,6 +229,7 @@ def test_run_command_passes_artifact_dir(tmp_path: Path, monkeypatch) -> None:
     assert captured["suite_source"] == "unit"
     assert captured["base_url"] == "https://example.com"
     assert captured["artifact_dir"] == artifact_dir
+    assert captured["auth_plugins"] == []
 
 
 def test_verify_command_passes_without_baseline_when_no_qualifying_findings(tmp_path: Path) -> None:
@@ -534,9 +538,11 @@ def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatc
         default_query: dict[str, str],
         timeout_seconds: float,
         artifact_dir: Path | None,
+        auth_plugins=None,
         workflow_hooks=None,
     ) -> AttackResults:
         captured["attack_ids"] = [attack.id for attack in suite.attacks]
+        captured["auth_plugins"] = auth_plugins
         return AttackResults(source=suite.source, base_url=base_url, results=[])
 
     monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
@@ -557,6 +563,117 @@ def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatc
 
     assert result.exit_code == 0
     assert captured["attack_ids"] == ["atk_post"]
+    assert captured["auth_plugins"] == []
+
+
+def test_run_command_loads_local_auth_plugin(tmp_path: Path, monkeypatch) -> None:
+    attacks_path = tmp_path / "attacks.json"
+    out_path = tmp_path / "results.json"
+    module_path = tmp_path / "auth_plugin.py"
+    attacks_path.write_text(
+        AttackSuite(source="unit", attacks=[]).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    module_path.write_text(
+        dedent(
+            """
+            from knives_out.auth_plugins import RuntimePlugin, make_auth_plugin
+
+            class ModulePlugin(RuntimePlugin):
+                pass
+
+            auth_plugin = make_auth_plugin("module-auth-plugin", ModulePlugin())
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_execute_attack_suite(
+        suite: AttackSuite,
+        *,
+        base_url: str,
+        default_headers: dict[str, str],
+        default_query: dict[str, str],
+        timeout_seconds: float,
+        artifact_dir: Path | None,
+        auth_plugins=None,
+        workflow_hooks=None,
+    ) -> AttackResults:
+        del default_headers, default_query, timeout_seconds, artifact_dir, workflow_hooks
+        captured["suite_source"] = suite.source
+        captured["base_url"] = base_url
+        captured["auth_plugin_names"] = [plugin.name for plugin in auth_plugins]
+        return AttackResults(source=suite.source, base_url=base_url, results=[])
+
+    monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(attacks_path),
+            "--base-url",
+            "https://example.com",
+            "--auth-plugin-module",
+            str(module_path),
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["suite_source"] == "unit"
+    assert captured["base_url"] == "https://example.com"
+    assert captured["auth_plugin_names"] == ["module-auth-plugin"]
+
+
+def test_run_command_reports_auth_plugin_runtime_error(tmp_path: Path, monkeypatch) -> None:
+    attacks_path = tmp_path / "attacks.json"
+    attacks_path.write_text(
+        AttackSuite(source="unit", attacks=[]).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    def _fake_execute_attack_suite(
+        suite: AttackSuite,
+        *,
+        base_url: str,
+        default_headers: dict[str, str],
+        default_query: dict[str, str],
+        timeout_seconds: float,
+        artifact_dir: Path | None,
+        auth_plugins=None,
+        workflow_hooks=None,
+    ) -> AttackResults:
+        del (
+            suite,
+            base_url,
+            default_headers,
+            default_query,
+            timeout_seconds,
+            artifact_dir,
+            auth_plugins,
+            workflow_hooks,
+        )
+        raise PluginRuntimeError("boom")
+
+    monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(attacks_path),
+            "--base-url",
+            "https://example.com",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Auth plugin error:" in result.stdout
+    assert "boom" in result.stdout
 
 
 def test_generate_command_loads_local_attack_pack(tmp_path: Path) -> None:

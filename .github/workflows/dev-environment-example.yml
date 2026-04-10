@@ -37,6 +37,8 @@ jobs:
           KNIVES_OUT_BASE_URL: ${{ secrets.KNIVES_OUT_BASE_URL }}
           KNIVES_OUT_AUTH_HEADER: ${{ secrets.KNIVES_OUT_AUTH_HEADER }}
           KNIVES_OUT_AUTH_QUERY: ${{ secrets.KNIVES_OUT_AUTH_QUERY }}
+          KNIVES_OUT_LOGIN_USERNAME: ${{ secrets.KNIVES_OUT_LOGIN_USERNAME }}
+          KNIVES_OUT_LOGIN_PASSWORD: ${{ secrets.KNIVES_OUT_LOGIN_PASSWORD }}
         run: |
           if [[ -z "${KNIVES_OUT_BASE_URL}" ]]; then
             echo "Set the KNIVES_OUT_BASE_URL repository secret before running this workflow." >&2
@@ -56,6 +58,9 @@ jobs:
           if [[ -n "${KNIVES_OUT_AUTH_QUERY}" ]]; then
             args+=(--query "${KNIVES_OUT_AUTH_QUERY}")
           fi
+
+          # For login/session auth, load a plugin module instead of static header/query credentials:
+          # args+=(--auth-plugin-module examples/auth_plugins/login_bearer.py)
 
           knives-out run attacks.json "${args[@]}"
       - name: Render Markdown report

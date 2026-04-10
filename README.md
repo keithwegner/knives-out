@@ -4,6 +4,8 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
+Project wiki: [GitHub Wiki](https://github.com/keithwegner/knives-out/wiki)
+
 `knives-out` is a CLI for adversarial API testing from OpenAPI specs.
 
 It helps developers break their APIs on purpose before someone else does.
@@ -15,6 +17,7 @@ Given an OpenAPI document, `knives-out` can:
 - inspect the operations in the spec
 - generate replayable negative test cases
 - optionally chain setup requests into replayable workflow attacks
+- load auth/session plugins for bearer tokens, login flows, and shared sessions
 - run those attacks against a live base URL
 - produce a Markdown report that highlights suspicious outcomes
 
@@ -49,10 +52,10 @@ The project is split into three explicit phases:
 
 That makes the architecture easier to extend later with:
 
-- auth/session plugins
 - custom attack packs
 - schema-aware payload mutation
 - LLM application testing
+- GraphQL support
 - CI gating policies
 - regression suites for previously found bugs
 
@@ -93,6 +96,15 @@ knives-out run attacks.json \
   --out results.json
 ```
 
+Or load an auth/session plugin when static headers are not enough:
+
+```bash
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --auth-plugin-module examples/auth_plugins/login_bearer.py \
+  --out results.json
+```
+
 Create a Markdown report:
 
 ```bash
@@ -122,6 +134,7 @@ It uses repository secrets instead of hard-coded targets:
 - `KNIVES_OUT_BASE_URL` for the dev or staging base URL
 - `KNIVES_OUT_AUTH_HEADER` for an optional header like `Authorization: Bearer ...`
 - `KNIVES_OUT_AUTH_QUERY` for an optional query credential like `api_key=...`
+- plugin-specific login or bearer env vars when you use `--auth-plugin` or `--auth-plugin-module`
 
 `knives-out run` currently exits with status `0` when the suite executes successfully, even if
 some findings are flagged in `results.json`. That keeps execution review-friendly:
@@ -131,8 +144,10 @@ For built-in gating, use `knives-out verify` after `run`. It can fail on qualify
 current run, or only on new qualifying findings when you also pass `--baseline previous-results.json`.
 When you want stateful coverage, generate with `--auto-workflows` first, then add
 `--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py` or your own custom pack as
-you move from generic coverage to app-specific journeys. See `docs/ci.md` for the sample workflow,
-secret setup, and baseline-aware CI patterns.
+you move from generic coverage to app-specific journeys. For protected APIs, keep simple static
+credentials on `--header` or `--query`, or move up to
+`--auth-plugin-module examples/auth_plugins/login_bearer.py` for login/session flows. See
+`docs/ci.md` for the sample workflow, secret setup, and baseline-aware CI patterns.
 
 ## CLI
 
@@ -191,6 +206,16 @@ knives-out run attacks.json \
   --base-url http://localhost:8000 \
   --header "Authorization: Bearer dev-token" \
   --query "api_key=dev-secret" \
+  --out results.json
+```
+
+You can also load auth/session plugins from entry points or local modules:
+
+```bash
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --auth-plugin env-bearer \
+  --auth-plugin-module examples/auth_plugins/login_bearer.py \
   --out results.json
 ```
 
@@ -345,6 +370,51 @@ Then load it with:
 knives-out generate examples/openapi/petstore.yaml \
   --workflow-pack listed-id-lookup \
   --out attacks.json
+```
+
+## Auth/session plugins
+
+Auth/session plugins run at execution time and can mutate outgoing requests or establish shared
+runtime state before the suite or a workflow runs.
+
+They are a good fit when simple static credentials are not enough:
+
+- add a bearer token from an environment variable
+- log in once before the suite and inject the returned token into later requests
+- establish a session cookie before each workflow
+
+An auth plugin can be either:
+
+- an object exposed as `auth_plugin`
+- an object exposed as `plugin`
+- a zero-argument `build_plugin()` factory
+
+The easiest helper is `make_auth_plugin()` from `knives_out.auth_plugins`.
+
+Local module example:
+
+```bash
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --auth-plugin-module examples/auth_plugins/login_bearer.py \
+  --out results.json
+```
+
+Installed entry point example:
+
+```toml
+[project.entry-points."knives_out.auth_plugins"]
+env-bearer = "my_package.auth_plugins:auth_plugin"
+```
+
+Then load it with:
+
+```bash
+export KNIVES_OUT_BEARER_TOKEN=dev-token
+knives-out run attacks.json \
+  --base-url http://localhost:8000 \
+  --auth-plugin env-bearer \
+  --out results.json
 ```
 
 ## Roadmap

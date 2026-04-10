@@ -35,6 +35,9 @@ unexpected-header = "knives_out.example_packs:attack_pack"
 [project.entry-points."knives_out.workflow_packs"]
 listed-id-lookup = "knives_out.example_workflow_packs:workflow_pack"
 
+[project.entry-points."knives_out.auth_plugins"]
+env-bearer = "knives_out.example_auth_plugins:auth_plugin"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/knives_out"]
 
