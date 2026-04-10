@@ -315,7 +315,7 @@ def execute_attack_suite(
                 ) = _validate_response_schema(attack, response)
             if response_schema_valid is False:
                 flagged = True
-                if issue is None:
+                if issue in {None, "unexpected_success"}:
                     issue = "response_schema_mismatch"
 
             results.append(
