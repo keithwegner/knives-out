@@ -82,7 +82,9 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "Promote qualifying findings" in ci_doc
     assert "pytest --cov=src/knives_out --cov-report=term-missing" in ci_doc
     assert "--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py" in ci_doc
-    assert "--format html --artifact-root artifacts --out report.html" in ci_doc
+    assert "--format html" in ci_doc
+    assert "--artifact-root artifacts" in ci_doc
+    assert "--out report.html" in ci_doc
 
 
 def test_sync_wiki_workflow_uses_dedicated_secret_and_sync_script() -> None:
