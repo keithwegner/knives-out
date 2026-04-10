@@ -368,8 +368,10 @@ The `main-maintenance.yml` workflow currently runs:
 - `python scripts/check_markdown_links.py README.md docs`
 - `python scripts/sync_wiki.py render --out-dir ...`
 - `pytest --cov=src/knives_out --cov-report=term-missing --cov-report=json:coverage.json`
+- `python scripts/sync_coverage_badge.py publish ...`
 
 After the full test pass, it uploads `coverage.json` as the `main-maintenance-coverage` artifact,
-downloads the previous successful artifact from the same workflow on `main`, and fails if total
-coverage drops. The first successful run seeds that baseline automatically, so there is no separate
-manual setup step.
+publishes a Shields-compatible `coverage-badge.json` file to the repo's `badges` branch for the
+README badge, downloads the previous successful artifact from the same workflow on `main`, and
+fails if total coverage drops. The first successful run seeds both the baseline and badge branch
+automatically, so there is no separate manual setup step.
