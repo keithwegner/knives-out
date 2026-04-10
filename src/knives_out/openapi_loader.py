@@ -118,10 +118,16 @@ def _extract_security(
     schemes = root.get("components", {}).get("securitySchemes", {})
     header_names: set[str] = set()
     query_names: set[str] = set()
+    has_non_optional_requirement = False
+    has_optional_requirement = False
 
     for requirement in security:
         if not isinstance(requirement, dict):
             continue
+        if not requirement:
+            has_optional_requirement = True
+            continue
+        has_non_optional_requirement = True
         for scheme_name in requirement:
             scheme = resolve_refs(schemes.get(scheme_name, {}), root)
             scheme_type = scheme.get("type")
@@ -135,7 +141,8 @@ def _extract_security(
                 elif location == "query" and name:
                     query_names.add(name)
 
-    return True, sorted(header_names), sorted(query_names)
+    auth_required = has_non_optional_requirement and not has_optional_requirement
+    return auth_required, sorted(header_names), sorted(query_names)
 
 
 def _extract_response_schemas(
