@@ -220,8 +220,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
                     method=operation.method,
                     path=operation.path,
                     description=(
-                        f"Omits required {parameter.location} parameter "
-                        f"'{parameter.name}'."
+                        f"Omits required {parameter.location} parameter '{parameter.name}'."
                     ),
                     path_params=path_params,
                     query=query_params,

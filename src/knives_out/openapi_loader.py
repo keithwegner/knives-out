@@ -162,8 +162,7 @@ def load_operations(path: str | Path) -> list[OperationSpec]:
             operation_id = operation.get("operationId")
             if not operation_id:
                 sanitized_path = (
-                    route.strip("/").replace("/", "_").replace("{", "").replace("}", "")
-                    or "root"
+                    route.strip("/").replace("/", "_").replace("{", "").replace("}", "") or "root"
                 )
                 operation_id = f"{method}_{sanitized_path}"
 
