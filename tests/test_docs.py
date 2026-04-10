@@ -124,8 +124,7 @@ def test_main_maintenance_workflow_checks_docs_links_and_coverage_regressions() 
     assert "tests/test_maintenance_scripts.py" in workflow
     assert "python scripts/check_markdown_links.py README.md docs" in workflow
     assert (
-        'python scripts/sync_wiki.py render --out-dir "${{ runner.temp }}/wiki-render"'
-        in workflow
+        'python scripts/sync_wiki.py render --out-dir "${{ runner.temp }}/wiki-render"' in workflow
     )
     assert (
         "pytest --cov=src/knives_out --cov-report=term-missing --cov-report=json:coverage.json"

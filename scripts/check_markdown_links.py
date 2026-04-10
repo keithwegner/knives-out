@@ -81,9 +81,7 @@ def validate_markdown_file(path: Path) -> list[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Validate repo-local markdown links and anchors."
-    )
+    parser = argparse.ArgumentParser(description="Validate repo-local markdown links and anchors.")
     parser.add_argument(
         "paths",
         nargs="+",
