@@ -85,6 +85,29 @@ Create a Markdown report:
 knives-out report results.json --out report.md
 ```
 
+## CI usage
+
+`knives-out` works well in CI when you split the flow into the same three phases:
+
+1. generate attacks from a checked-in OpenAPI spec
+2. run them against a dev or staging environment
+3. upload the JSON results, request artifacts, and Markdown report for review
+
+A ready-to-adapt GitHub Actions example lives at `.github/workflows/dev-environment-example.yml`.
+It uses repository secrets instead of hard-coded targets:
+
+- `KNIVES_OUT_BASE_URL` for the dev or staging base URL
+- `KNIVES_OUT_AUTH_HEADER` for an optional header like `Authorization: Bearer ...`
+- `KNIVES_OUT_AUTH_QUERY` for an optional query credential like `api_key=...`
+
+`knives-out run` currently exits with status `0` when the suite executes successfully, even if
+some findings are flagged in `results.json`. That makes the default workflow review-friendly:
+teams can always upload `results.json`, `report.md`, and per-attack artifacts for triage.
+
+If you want the workflow to gate merges, add a follow-up step that reads `results.json` and fails
+when flagged results exceed your threshold. See `docs/ci.md` for the sample workflow, secret
+setup, and an optional gating snippet.
+
 ## CLI
 
 ### `inspect`

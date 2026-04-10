@@ -1,0 +1,65 @@
+name: dev-environment-example
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SPEC_PATH: examples/openapi/petstore.yaml
+
+jobs:
+  knives-out-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Generate attack suite
+        run: knives-out generate "$SPEC_PATH" --out attacks.json
+      - name: Run suite against dev environment
+        shell: bash
+        env:
+          KNIVES_OUT_BASE_URL: ${{ secrets.KNIVES_OUT_BASE_URL }}
+          KNIVES_OUT_AUTH_HEADER: ${{ secrets.KNIVES_OUT_AUTH_HEADER }}
+          KNIVES_OUT_AUTH_QUERY: ${{ secrets.KNIVES_OUT_AUTH_QUERY }}
+        run: |
+          if [[ -z "${KNIVES_OUT_BASE_URL}" ]]; then
+            echo "Set the KNIVES_OUT_BASE_URL repository secret before running this workflow." >&2
+            exit 1
+          fi
+
+          args=(
+            --base-url "${KNIVES_OUT_BASE_URL}"
+            --artifact-dir artifacts
+            --out results.json
+          )
+
+          if [[ -n "${KNIVES_OUT_AUTH_HEADER}" ]]; then
+            args+=(--header "${KNIVES_OUT_AUTH_HEADER}")
+          fi
+
+          if [[ -n "${KNIVES_OUT_AUTH_QUERY}" ]]; then
+            args+=(--query "${KNIVES_OUT_AUTH_QUERY}")
+          fi
+
+          knives-out run attacks.json "${args[@]}"
+      - name: Render Markdown report
+        run: knives-out report results.json --out report.md
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: knives-out-dev-results
+          if-no-files-found: ignore
+          path: |
+            attacks.json
+            results.json
+            report.md
+            artifacts/
