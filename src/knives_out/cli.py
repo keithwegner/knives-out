@@ -10,7 +10,8 @@ from rich.table import Table
 from knives_out.attack_packs import load_attack_packs
 from knives_out.filtering import filter_attack_suite
 from knives_out.generator import generate_attack_suite
-from knives_out.openapi_loader import load_operations
+from knives_out.models import PreflightWarning
+from knives_out.openapi_loader import load_operations_with_warnings
 from knives_out.reporting import load_attack_results, render_markdown_report
 from knives_out.runner import execute_attack_suite, load_attack_suite
 
@@ -32,10 +33,35 @@ def _parse_key_value(items: list[str] | None, *, separator: str) -> dict[str, An
     return parsed
 
 
+def _warning_target(warning: PreflightWarning) -> str:
+    if warning.operation_id:
+        return f"{warning.operation_id} ({warning.method} {warning.path})"
+    if warning.method and warning.path:
+        return f"{warning.method} {warning.path}"
+    return "spec"
+
+
+def _print_preflight_warnings(warnings: list[PreflightWarning]) -> None:
+    if not warnings:
+        return
+
+    table = Table(title=f"Preflight warnings ({len(warnings)})")
+    table.add_column("Code")
+    table.add_column("Target")
+    table.add_column("Message")
+
+    for warning in warnings:
+        table.add_row(warning.code, _warning_target(warning), warning.message)
+
+    console.print("")
+    console.print(table)
+
+
 @app.command()
 def inspect(spec: Path) -> None:
     """Show the operations discovered in an OpenAPI spec."""
-    operations = load_operations(spec)
+    loaded = load_operations_with_warnings(spec)
+    operations = loaded.operations
 
     table = Table(title=f"knives-out inspect: {spec}")
     table.add_column("Operation ID")
@@ -57,6 +83,7 @@ def inspect(spec: Path) -> None:
 
     console.print(table)
     console.print(f"\nFound {len(operations)} operations.")
+    _print_preflight_warnings(loaded.warnings)
 
 
 @app.command()
@@ -103,7 +130,8 @@ def generate(
 
     Filters are applied after attack generation and before the suite is written.
     """
-    operations = load_operations(spec)
+    loaded = load_operations_with_warnings(spec)
+    operations = loaded.operations
     attack_packs = load_attack_packs(entry_point_names=pack, module_paths=pack_module)
     suite = generate_attack_suite(operations, source=str(spec), extra_packs=attack_packs)
     suite = filter_attack_suite(
@@ -117,6 +145,7 @@ def generate(
     )
     out.write_text(suite.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
     console.print(f"Wrote {len(suite.attacks)} attacks to [bold]{out}[/bold].")
+    _print_preflight_warnings(loaded.warnings)
 
 
 @app.command()

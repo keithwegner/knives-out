@@ -118,6 +118,9 @@ Shows a summary of operations discovered in an OpenAPI document.
 knives-out inspect path/to/openapi.yaml
 ```
 
+`inspect` surfaces preflight warnings for spec gaps such as missing request schemas, vague
+security declarations, and broken `$ref` pointers.
+
 ### `generate`
 
 Builds an `AttackSuite` JSON file from an OpenAPI document.
@@ -125,6 +128,9 @@ Builds an `AttackSuite` JSON file from an OpenAPI document.
 ```bash
 knives-out generate path/to/openapi.yaml --out attacks.json
 ```
+
+`generate` echoes the same preflight warnings as `inspect` because many CI flows skip an explicit
+inspection step. `run` does not re-lint the spec because it operates on a saved attack suite.
 
 You can load custom attack packs from installed entry points or local modules:
 

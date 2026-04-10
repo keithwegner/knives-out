@@ -4,7 +4,13 @@ from textwrap import dedent
 from typer.testing import CliRunner
 
 from knives_out.cli import app
-from knives_out.models import AttackCase, AttackResults, AttackSuite
+from knives_out.models import (
+    AttackCase,
+    AttackResults,
+    AttackSuite,
+    LoadedOperations,
+    PreflightWarning,
+)
 
 runner = CliRunner()
 EXAMPLE_SPEC = Path(__file__).resolve().parents[1] / "examples" / "openapi" / "petstore.yaml"
@@ -15,6 +21,31 @@ def test_inspect_command_runs() -> None:
 
     assert result.exit_code == 0
     assert "Found 3 operations." in result.stdout
+
+
+def test_inspect_command_shows_preflight_warnings(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "knives_out.cli.load_operations_with_warnings",
+        lambda spec: LoadedOperations(
+            operations=[],
+            warnings=[
+                PreflightWarning(
+                    code="missing_request_schema",
+                    message="Request body is declared but no usable schema was found.",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                )
+            ],
+        ),
+    )
+
+    result = runner.invoke(app, ["inspect", str(EXAMPLE_SPEC)])
+
+    assert result.exit_code == 0
+    assert "Preflight warnings" in result.stdout
+    assert "missing_request_schema" in result.stdout
+    assert "createPet" in result.stdout
 
 
 def test_generate_command_writes_attack_suite(tmp_path: Path) -> None:
@@ -78,7 +109,10 @@ def test_run_command_passes_artifact_dir(tmp_path: Path, monkeypatch) -> None:
 def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
     out_path = tmp_path / "attacks.json"
 
-    monkeypatch.setattr("knives_out.cli.load_operations", lambda spec: [])
+    monkeypatch.setattr(
+        "knives_out.cli.load_operations_with_warnings",
+        lambda spec: LoadedOperations(operations=[], warnings=[]),
+    )
     monkeypatch.setattr(
         "knives_out.cli.generate_attack_suite",
         lambda operations, source, extra_packs=None: AttackSuite(
@@ -121,6 +155,39 @@ def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
     assert [attack.id for attack in suite.attacks] == ["atk_post"]
+
+
+def test_generate_command_echoes_preflight_warnings(tmp_path: Path, monkeypatch) -> None:
+    out_path = tmp_path / "attacks.json"
+
+    monkeypatch.setattr(
+        "knives_out.cli.load_operations_with_warnings",
+        lambda spec: LoadedOperations(
+            operations=[],
+            warnings=[
+                PreflightWarning(
+                    code="vague_security",
+                    message=(
+                        "Security requirements include unsupported or ambiguous schemes: "
+                        "oauthSecurity."
+                    ),
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "knives_out.cli.generate_attack_suite",
+        lambda operations, source, extra_packs=None: AttackSuite(source=source, attacks=[]),
+    )
+
+    result = runner.invoke(app, ["generate", str(EXAMPLE_SPEC), "--out", str(out_path)])
+
+    assert result.exit_code == 0
+    assert "Preflight warnings" in result.stdout
+    assert "vague_security" in result.stdout
 
 
 def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatch) -> None:
