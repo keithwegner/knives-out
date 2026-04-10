@@ -6,6 +6,8 @@ from typing import Any
 
 from knives_out.models import AttackCase, AttackSuite, OperationSpec, ParameterSpec
 
+MAX_SAMPLE_DEPTH = 4
+
 
 def _normalize_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
     if not schema:
@@ -27,16 +29,7 @@ def _normalize_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
     return result
 
 
-def sample_value(schema: dict[str, Any] | None, *, depth: int = 0) -> Any:
-    schema = _normalize_schema(schema)
-    if depth > 4:
-        return "example"
-
-    if "default" in schema:
-        return schema["default"]
-    if "enum" in schema and schema["enum"]:
-        return schema["enum"][0]
-
+def _sample_scalar_value(schema: dict[str, Any]) -> Any:
     schema_type = schema.get("type")
     schema_format = schema.get("format")
 
@@ -56,22 +49,77 @@ def sample_value(schema: dict[str, Any] | None, *, depth: int = 0) -> Any:
         return 1.0
     if schema_type == "boolean":
         return True
+    return "example"
+
+
+def _properties_to_sample(schema: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    properties = schema.get("properties", {})
+    required = set(schema.get("required", []))
+
+    if required:
+        return [
+            (name, property_schema)
+            for name, property_schema in properties.items()
+            if name in required
+        ]
+    if properties:
+        first_name, first_schema = next(iter(properties.items()))
+        return [(first_name, first_schema)]
+    return []
+
+
+def _limited_sample_value(schema: dict[str, Any], *, budget: int = 2) -> Any:
+    if "default" in schema:
+        return schema["default"]
+    if "enum" in schema and schema["enum"]:
+        return schema["enum"][0]
+
+    schema_type = schema.get("type")
+    if budget <= 0:
+        if schema_type == "array":
+            return []
+        if schema_type == "object" or schema.get("properties"):
+            return {}
+        return _sample_scalar_value(schema)
+
+    if schema_type == "array":
+        return [_limited_sample_value(schema.get("items", {}), budget=budget - 1)]
+    if schema_type == "object" or schema.get("properties"):
+        body: dict[str, Any] = {}
+        for name, property_schema in _properties_to_sample(schema):
+            body[name] = _limited_sample_value(
+                _normalize_schema(property_schema),
+                budget=budget - 1,
+            )
+        return body
+
+    return _sample_scalar_value(schema)
+
+
+def sample_value(schema: dict[str, Any] | None, *, depth: int = 0) -> Any:
+    schema = _normalize_schema(schema)
+    if depth > MAX_SAMPLE_DEPTH:
+        # Preserve container shapes after the recursion limit so deep samples stay useful.
+        return _limited_sample_value(schema)
+
+    if "default" in schema:
+        return schema["default"]
+    if "enum" in schema and schema["enum"]:
+        return schema["enum"][0]
+
+    schema_type = schema.get("type")
+
+    if schema_type in {"string", "integer", "number", "boolean"}:
+        return _sample_scalar_value(schema)
     if schema_type == "array":
         return [sample_value(schema.get("items", {}), depth=depth + 1)]
     if schema_type == "object" or schema.get("properties"):
-        properties = schema.get("properties", {})
-        required = set(schema.get("required", []))
         body: dict[str, Any] = {}
-        for name, property_schema in properties.items():
-            if required and name not in required:
-                continue
+        for name, property_schema in _properties_to_sample(schema):
             body[name] = sample_value(property_schema, depth=depth + 1)
-        if not body and properties:
-            first_name, first_schema = next(iter(properties.items()))
-            body[first_name] = sample_value(first_schema, depth=depth + 1)
         return body
 
-    return "example"
+    return _sample_scalar_value(schema)
 
 
 def invalid_scalar_value(schema: dict[str, Any] | None) -> Any:
