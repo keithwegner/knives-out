@@ -13,6 +13,8 @@ MAIN_MAINTENANCE_WORKFLOW = ROOT / ".github" / "workflows" / "main-maintenance.y
 def test_readme_includes_ci_guidance() -> None:
     readme = README.read_text(encoding="utf-8")
 
+    assert "coverage-badge.json" in readme
+    assert "actions/workflows/main-maintenance.yml" in readme
     assert "Project wiki:" in readme
     assert "https://github.com/keithwegner/knives-out/wiki" in readme
     assert "## CI usage" in readme
@@ -103,6 +105,7 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "--path /draft-orders/{draftId}" in ci_doc
     assert "Promote qualifying findings" in ci_doc
     assert "pytest --cov=src/knives_out --cov-report=term-missing" in ci_doc
+    assert "coverage-badge.json" in ci_doc
     assert "--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py" in ci_doc
     assert "--format html" in ci_doc
     assert "--artifact-root artifacts" in ci_doc
@@ -129,6 +132,7 @@ def test_main_maintenance_workflow_checks_docs_links_and_coverage_regressions() 
     assert "- main" in workflow
     assert "actions/upload-artifact@v6" in workflow
     assert "actions/github-script@v7" in workflow
+    assert "contents: write" in workflow
     assert "ruff check ." in workflow
     assert "ruff format --check ." in workflow
     assert "tests/test_maintenance_scripts.py" in workflow
@@ -141,6 +145,9 @@ def test_main_maintenance_workflow_checks_docs_links_and_coverage_regressions() 
         in workflow
     )
     assert "main-maintenance-coverage" in workflow
+    assert "python scripts/sync_coverage_badge.py publish" in workflow
+    assert "coverage-badge" in workflow
+    assert "x-access-token:${GITHUB_TOKEN}" in workflow
     assert 'workflow_id: "main-maintenance.yml"' in workflow
     assert "python scripts/check_coverage_drop.py" in workflow
 

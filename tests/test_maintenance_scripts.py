@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ from textwrap import dedent
 ROOT = Path(__file__).resolve().parents[1]
 LINK_CHECKER_PATH = ROOT / "scripts" / "check_markdown_links.py"
 COVERAGE_CHECKER_PATH = ROOT / "scripts" / "check_coverage_drop.py"
+COVERAGE_BADGE_SYNC_PATH = ROOT / "scripts" / "sync_coverage_badge.py"
 
 
 def _load_module(name: str, path: Path):
@@ -22,6 +24,7 @@ def _load_module(name: str, path: Path):
 
 
 LINK_CHECKER = _load_module("check_markdown_links", LINK_CHECKER_PATH)
+COVERAGE_BADGE_SYNC = _load_module("sync_coverage_badge", COVERAGE_BADGE_SYNC_PATH)
 
 
 def _run_script(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -47,6 +50,20 @@ def _write_coverage(path: Path, percent: float) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+def _run_git(args: list[str], cwd: Path) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def _git_output(args: list[str], cwd: Path) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def test_markdown_link_checker_accepts_existing_paths_anchors_and_code_samples(
@@ -181,3 +198,84 @@ def test_coverage_drop_check_passes_when_coverage_improves(tmp_path: Path) -> No
 
     assert result.returncode == 0
     assert "coverage improved by 2.00 percentage points" in result.stdout.lower()
+
+
+def test_render_coverage_badge_uses_expected_label_message_and_color() -> None:
+    payload = COVERAGE_BADGE_SYNC.render_badge_payload(92.34)
+
+    assert payload == {
+        "schemaVersion": 1,
+        "label": "coverage",
+        "message": "92.3%",
+        "color": "green",
+    }
+
+
+def test_render_coverage_badge_write_is_stable_when_content_matches(tmp_path: Path) -> None:
+    badge_file = tmp_path / "coverage-badge.json"
+    payload = COVERAGE_BADGE_SYNC.render_badge_payload(88.8)
+
+    first = COVERAGE_BADGE_SYNC.write_badge(badge_file, payload)
+    second = COVERAGE_BADGE_SYNC.write_badge(badge_file, payload)
+
+    assert first is True
+    assert second is False
+
+
+def test_publish_coverage_badge_commits_changes_then_noops_when_content_matches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Codex")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "codex@example.com")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Codex")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "codex@example.com")
+
+    remote_dir = tmp_path / "badges.git"
+    coverage_json = tmp_path / "coverage.json"
+    checkout_dir = tmp_path / "badge-checkout"
+    inspect_dir = tmp_path / "inspect"
+    _write_coverage(coverage_json, 91.25)
+
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=badges", str(remote_dir)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    first_publish = COVERAGE_BADGE_SYNC.publish_badge(
+        ROOT,
+        coverage_json,
+        checkout_dir,
+        remote=str(remote_dir),
+    )
+
+    assert first_publish.committed is True
+    assert first_publish.coverage_percent == 91.25
+
+    subprocess.run(
+        ["git", "clone", str(remote_dir), str(inspect_dir)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    first_head = _git_output(["rev-parse", "HEAD"], cwd=inspect_dir)
+    published_badge = json.loads((inspect_dir / "coverage-badge.json").read_text(encoding="utf-8"))
+
+    assert published_badge["message"] == "91.2%"
+    assert published_badge["label"] == "coverage"
+
+    second_publish = COVERAGE_BADGE_SYNC.publish_badge(
+        ROOT,
+        coverage_json,
+        checkout_dir,
+        remote=str(remote_dir),
+    )
+
+    assert second_publish.committed is False
+
+    _run_git(["pull", "--ff-only"], cwd=inspect_dir)
+    second_head = _git_output(["rev-parse", "HEAD"], cwd=inspect_dir)
+
+    assert second_head == first_head

@@ -8,7 +8,7 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
 
 concurrency:
   group: main-maintenance-${{ github.ref }}
@@ -53,6 +53,15 @@ jobs:
           name: main-maintenance-coverage
           path: coverage.json
           if-no-files-found: error
+
+      - name: Publish coverage badge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/sync_coverage_badge.py publish \
+            --coverage-json coverage.json \
+            --checkout-dir "${{ runner.temp }}/coverage-badge" \
+            --remote "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
 
       - name: Find previous successful coverage baseline
         id: previous-baseline
