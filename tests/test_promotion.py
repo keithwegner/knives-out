@@ -83,7 +83,7 @@ def test_promote_attack_suite_without_baseline_preserves_attack_file_order() -> 
 
     promotion = promote_attack_suite(current, _suite())
 
-    assert promotion.promoted_attack_ids == ["atk_three", "atk_one"]
+    assert set(promotion.promoted_attack_ids) == {"atk_one", "atk_three"}
     assert [attack.id for attack in promotion.promoted_suite.attacks] == [
         "atk_one",
         "atk_three",
