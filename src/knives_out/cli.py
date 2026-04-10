@@ -95,6 +95,10 @@ def run(
         float,
         typer.Option(help="HTTP timeout in seconds."),
     ] = 10.0,
+    artifact_dir: Annotated[
+        Path | None,
+        typer.Option(help="Optional directory for per-attack request/response artifacts."),
+    ] = None,
 ) -> None:
     """Run a saved attack suite against a live API."""
     suite = load_attack_suite(attacks)
@@ -106,6 +110,7 @@ def run(
         default_headers=default_headers,
         default_query=default_query,
         timeout_seconds=timeout,
+        artifact_dir=artifact_dir,
     )
     out.write_text(results.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
 
