@@ -1,13 +1,44 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 from knives_out.attack_packs import LoadedAttackPack
-from knives_out.models import AttackCase, AttackSuite, OperationSpec, ParameterSpec
+from knives_out.models import (
+    AttackCase,
+    AttackSuite,
+    ExtractRule,
+    OperationSpec,
+    ParameterSpec,
+    WorkflowAttackCase,
+    WorkflowStep,
+)
+from knives_out.workflow_packs import LoadedWorkflowPack
 
 MAX_SAMPLE_DEPTH = 4
+_SCALAR_SCHEMA_TYPES = {"string", "integer", "number", "boolean"}
+
+
+@dataclass(frozen=True)
+class _ExtractCandidate:
+    name: str
+    json_pointer: str
+
+
+@dataclass(frozen=True)
+class _TargetBinding:
+    target: str
+    name: str
+
+
+@dataclass(frozen=True)
+class _BindingAssignment:
+    binding: _TargetBinding
+    extract: _ExtractCandidate
+    exact_name: bool
 
 
 def _normalize_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
@@ -198,6 +229,259 @@ def _response_schemas_for_attack(operation: OperationSpec) -> dict[str, Any]:
     return deepcopy(operation.response_schemas)
 
 
+def _schema_type(schema: dict[str, Any] | None) -> str | None:
+    if not schema:
+        return None
+    normalized = _normalize_schema(schema)
+    schema_type = normalized.get("type")
+    if isinstance(schema_type, str):
+        return schema_type
+    if normalized.get("properties") or normalized.get("required"):
+        return "object"
+    if "items" in normalized:
+        return "array"
+    return None
+
+
+def _is_scalar_schema(schema: dict[str, Any] | None) -> bool:
+    return _schema_type(schema) in _SCALAR_SCHEMA_TYPES
+
+
+def _escape_json_pointer_token(token: str) -> str:
+    return token.replace("~", "~0").replace("/", "~1")
+
+
+def _name_tokens(name: str) -> tuple[str, ...]:
+    expanded = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    return tuple(token.lower() for token in re.split(r"[^A-Za-z0-9]+", expanded) if token)
+
+
+def _match_names(source_name: str, target_name: str) -> tuple[bool, bool]:
+    source_tokens = _name_tokens(source_name)
+    target_tokens = _name_tokens(target_name)
+    if not source_tokens or not target_tokens:
+        return False, False
+    if source_tokens == target_tokens:
+        return True, True
+    if source_tokens[-1] == "id" and target_tokens[-1] == "id":
+        if source_tokens == ("id",) or target_tokens == ("id",):
+            return True, False
+    return False, False
+
+
+def _is_json_response_schema(content_type: str | None, schema: dict[str, Any] | None) -> bool:
+    normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
+    return "json" in normalized_content_type or _schema_type(schema) in {"object", "array"}
+
+
+def _producer_extract_candidates(operation: OperationSpec) -> list[_ExtractCandidate]:
+    if operation.auth_required:
+        return []
+
+    candidates: dict[tuple[str, str], _ExtractCandidate] = {}
+    for status_code, response_spec in operation.response_schemas.items():
+        if not status_code.startswith("2"):
+            continue
+        if not _is_json_response_schema(response_spec.content_type, response_spec.schema_def):
+            continue
+
+        schema = _normalize_schema(response_spec.schema_def)
+        if _schema_type(schema) == "object":
+            for name, property_schema in schema.get("properties", {}).items():
+                property_schema = _normalize_schema(property_schema)
+                if _is_scalar_schema(property_schema):
+                    candidate = _ExtractCandidate(
+                        name=name,
+                        json_pointer=f"/{_escape_json_pointer_token(name)}",
+                    )
+                    candidates[(candidate.name, candidate.json_pointer)] = candidate
+        elif _schema_type(schema) == "array":
+            item_schema = _normalize_schema(schema.get("items", {}))
+            if _schema_type(item_schema) != "object":
+                continue
+            for name, property_schema in item_schema.get("properties", {}).items():
+                property_schema = _normalize_schema(property_schema)
+                if _is_scalar_schema(property_schema):
+                    candidate = _ExtractCandidate(
+                        name=name,
+                        json_pointer=f"/0/{_escape_json_pointer_token(name)}",
+                    )
+                    candidates[(candidate.name, candidate.json_pointer)] = candidate
+
+    return list(candidates.values())
+
+
+def _terminal_required_bindings(
+    operation: OperationSpec,
+    attack: AttackCase,
+) -> list[_TargetBinding]:
+    bindings: list[_TargetBinding] = []
+    for parameter in operation.parameters:
+        if parameter.location == "path" and parameter.name in attack.path_params:
+            bindings.append(_TargetBinding(target="path", name=parameter.name))
+        elif (
+            parameter.location == "query" and parameter.required and parameter.name in attack.query
+        ):
+            bindings.append(_TargetBinding(target="query", name=parameter.name))
+
+    body_schema = _normalize_schema(operation.request_body_schema)
+    if isinstance(attack.body_json, dict) and _schema_type(body_schema) == "object":
+        properties = body_schema.get("properties", {})
+        for name in body_schema.get("required", []):
+            if name not in attack.body_json:
+                continue
+            property_schema = _normalize_schema(properties.get(name, {}))
+            if _is_scalar_schema(property_schema):
+                bindings.append(_TargetBinding(target="body", name=name))
+
+    return bindings
+
+
+def _best_binding_assignment(
+    binding: _TargetBinding,
+    extracts: list[_ExtractCandidate],
+) -> _BindingAssignment | None:
+    best_assignment: _BindingAssignment | None = None
+    best_score = (-1, -1)
+
+    for extract in extracts:
+        matched, exact_name = _match_names(extract.name, binding.name)
+        if not matched:
+            continue
+        score = (1 if exact_name else 0, -len(_name_tokens(extract.name)))
+        if score > best_score:
+            best_assignment = _BindingAssignment(
+                binding=binding,
+                extract=extract,
+                exact_name=exact_name,
+            )
+            best_score = score
+
+    return best_assignment
+
+
+def _set_placeholder_value(attack: AttackCase, binding: _TargetBinding, placeholder: str) -> None:
+    if binding.target == "path":
+        attack.path_params[binding.name] = placeholder
+    elif binding.target == "query":
+        attack.query[binding.name] = placeholder
+    elif binding.target == "body" and isinstance(attack.body_json, dict):
+        attack.body_json[binding.name] = placeholder
+
+
+def _workflow_attack_from_assignments(
+    producer: OperationSpec,
+    terminal_attack: AttackCase,
+    assignments: list[_BindingAssignment],
+) -> WorkflowAttackCase:
+    path_params, query, headers, body = base_request_context(producer)
+    terminal_copy = terminal_attack.model_copy(deep=True)
+
+    extracts: list[ExtractRule] = []
+    seen_extracts: set[tuple[str, str]] = set()
+    for assignment in assignments:
+        extract_key = (assignment.extract.name, assignment.extract.json_pointer)
+        if extract_key not in seen_extracts:
+            extracts.append(
+                ExtractRule(
+                    name=assignment.extract.name,
+                    json_pointer=assignment.extract.json_pointer,
+                )
+            )
+            seen_extracts.add(extract_key)
+        _set_placeholder_value(
+            terminal_copy,
+            assignment.binding,
+            f"{{{{{assignment.extract.name}}}}}",
+        )
+
+    workflow_id = attack_id(
+        terminal_attack.operation_id,
+        f"workflow_{terminal_attack.kind}",
+        f"{producer.operation_id}:{','.join(sorted(name for name, _ in seen_extracts))}",
+    )
+    return WorkflowAttackCase(
+        id=workflow_id,
+        name=f"Workflow via {producer.operation_id}: {terminal_attack.name}",
+        kind=terminal_attack.kind,
+        operation_id=terminal_attack.operation_id,
+        method=terminal_attack.method,
+        path=terminal_attack.path,
+        description=(
+            f"Creates state with {producer.operation_id} before executing "
+            f"the terminal attack '{terminal_attack.name}'."
+        ),
+        setup_steps=[
+            WorkflowStep(
+                name=f"Setup via {producer.operation_id}",
+                operation_id=producer.operation_id,
+                method=producer.method,
+                path=producer.path,
+                path_params=path_params,
+                query=query,
+                headers=headers,
+                body_json=body,
+                extracts=extracts,
+            )
+        ],
+        terminal_attack=terminal_copy,
+    )
+
+
+def generate_workflow_attacks(
+    operations: list[OperationSpec],
+    request_attacks: list[AttackCase],
+) -> list[WorkflowAttackCase]:
+    operations_by_id = {operation.operation_id: operation for operation in operations}
+    producer_candidates = [
+        (operation, _producer_extract_candidates(operation)) for operation in operations
+    ]
+
+    workflows: list[WorkflowAttackCase] = []
+    for attack in request_attacks:
+        operation = operations_by_id.get(attack.operation_id)
+        if operation is None:
+            continue
+
+        bindings = _terminal_required_bindings(operation, attack)
+        if not bindings:
+            continue
+
+        candidate_matches: list[tuple[tuple[int, int], WorkflowAttackCase]] = []
+        for producer, extracts in producer_candidates:
+            if producer.operation_id == attack.operation_id or not extracts:
+                continue
+
+            assignments: list[_BindingAssignment] = []
+            exact_matches = 0
+            for binding in bindings:
+                assignment = _best_binding_assignment(binding, extracts)
+                if assignment is None:
+                    continue
+                assignments.append(assignment)
+                if assignment.exact_name:
+                    exact_matches += 1
+
+            if not assignments:
+                continue
+
+            score = (exact_matches, len(assignments))
+            candidate_matches.append(
+                (score, _workflow_attack_from_assignments(producer, attack, assignments))
+            )
+
+        if not candidate_matches:
+            continue
+
+        candidate_matches.sort(key=lambda item: item[0], reverse=True)
+        best_score, best_workflow = candidate_matches[0]
+        if len(candidate_matches) > 1 and candidate_matches[1][0] == best_score:
+            continue
+        workflows.append(best_workflow)
+
+    return workflows
+
+
 def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]:
     attacks: list[AttackCase] = []
     base_path_params, base_query_params, base_headers, base_body = base_request_context(operation)
@@ -381,6 +665,8 @@ def generate_attack_suite(
     source: str,
     *,
     extra_packs: list[LoadedAttackPack] | None = None,
+    auto_workflows: bool = False,
+    workflow_packs: list[LoadedWorkflowPack] | None = None,
 ) -> AttackSuite:
     attacks: list[AttackCase] = []
     packs = list(extra_packs or [])
@@ -388,4 +674,12 @@ def generate_attack_suite(
         attacks.extend(generate_attacks_for_operation(operation))
         for pack in packs:
             attacks.extend(pack.generate(operation))
-    return AttackSuite(source=source, attacks=attacks)
+
+    workflows: list[WorkflowAttackCase] = []
+    if auto_workflows:
+        workflows.extend(generate_workflow_attacks(operations, attacks))
+
+    for workflow_pack in workflow_packs or []:
+        workflows.extend(workflow_pack.generate(operations, attacks))
+
+    return AttackSuite(source=source, attacks=[*attacks, *workflows])

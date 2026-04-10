@@ -30,6 +30,14 @@ def _finding_table_rows(findings: list[ComparedFinding]) -> list[str]:
     return rows
 
 
+def _workflow_phase(result) -> str:
+    if result.type != "workflow":
+        return "request"
+    if result.error and result.error.startswith("Workflow setup failed"):
+        return "setup"
+    return "terminal"
+
+
 def render_markdown_report(
     results: AttackResults,
     *,
@@ -127,9 +135,13 @@ def render_markdown_report(
     for result in results.results:
         lines.append(f"### {result.name}")
         lines.append("")
+        lines.append(f"- Type: `{result.type}`")
         lines.append(f"- Operation: `{result.operation_id}`")
         lines.append(f"- Method: `{result.method}`")
         lines.append(f"- URL: `{result.url}`")
+        if result.type == "workflow":
+            lines.append(f"- Workflow phase: `{_workflow_phase(result)}`")
+            lines.append(f"- Setup steps executed: `{len(result.workflow_steps or [])}`")
         lines.append(
             f"- Status: `{result.status_code}`"
             if result.status_code is not None
@@ -153,6 +165,18 @@ def render_markdown_report(
             lines.append("```text")
             lines.append(result.response_excerpt)
             lines.append("```")
+        if result.workflow_steps:
+            lines.append("")
+            lines.append("| Step | Operation | Method | Status | URL |")
+            lines.append("| --- | --- | --- | ---: | --- |")
+            for step in result.workflow_steps:
+                step_status = str(step.status_code) if step.status_code is not None else "-"
+                lines.append(
+                    f"| {step.name} | {step.operation_id} | {step.method} | "
+                    f"{step_status} | `{step.url}` |"
+                )
+                if step.error:
+                    lines.append(f"| Error | - | - | - | `{step.error}` |")
         lines.append("")
 
     return "\n".join(lines).strip() + "\n"

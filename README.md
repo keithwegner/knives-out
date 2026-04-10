@@ -1,5 +1,9 @@
 # knives-out
 
+[![CI](https://github.com/keithwegner/knives-out/actions/workflows/ci.yml/badge.svg)](https://github.com/keithwegner/knives-out/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 `knives-out` is a CLI for adversarial API testing from OpenAPI specs.
 
 It helps developers break their APIs on purpose before someone else does.
@@ -10,6 +14,7 @@ Given an OpenAPI document, `knives-out` can:
 
 - inspect the operations in the spec
 - generate replayable negative test cases
+- optionally chain setup requests into replayable workflow attacks
 - run those attacks against a live base URL
 - produce a Markdown report that highlights suspicious outcomes
 
@@ -30,6 +35,7 @@ The starter scaffold generates a first wave of useful negative tests:
 - missing request bodies
 - malformed JSON bodies
 - missing auth headers or query credentials when the spec declares security
+- opt-in setup-plus-terminal workflow attacks that reuse extracted response values
 
 This is not a full fuzzing engine yet. It is a structured attack generator and runner.
 
@@ -68,6 +74,14 @@ Generate attacks:
 
 ```bash
 knives-out generate examples/openapi/petstore.yaml --out attacks.json
+```
+
+Opt in to built-in stateful workflows:
+
+```bash
+knives-out generate examples/openapi/petstore.yaml \
+  --auto-workflows \
+  --out attacks.json
 ```
 
 Run them against a live API:
@@ -115,7 +129,10 @@ teams can always upload `results.json`, `report.md`, and per-attack artifacts fo
 
 For built-in gating, use `knives-out verify` after `run`. It can fail on qualifying findings in the
 current run, or only on new qualifying findings when you also pass `--baseline previous-results.json`.
-See `docs/ci.md` for the sample workflow, secret setup, and baseline-aware CI patterns.
+When you want stateful coverage, generate with `--auto-workflows` first, then add
+`--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py` or your own custom pack as
+you move from generic coverage to app-specific journeys. See `docs/ci.md` for the sample workflow,
+secret setup, and baseline-aware CI patterns.
 
 ## CLI
 
@@ -147,6 +164,15 @@ You can load custom attack packs from installed entry points or local modules:
 knives-out generate path/to/openapi.yaml \
   --pack unexpected-header \
   --pack-module examples/custom_packs/unexpected_header.py \
+  --out attacks.json
+```
+
+You can also opt in to built-in workflow generation or load workflow packs:
+
+```bash
+knives-out generate path/to/openapi.yaml \
+  --auto-workflows \
+  --workflow-pack-module examples/workflow_packs/listed_pet_lookup.py \
   --out attacks.json
 ```
 
@@ -285,9 +311,45 @@ Then load it with:
 knives-out generate examples/openapi/petstore.yaml --pack unexpected-header --out attacks.json
 ```
 
+## Custom workflow packs
+
+Workflow packs contribute `WorkflowAttackCase` records after the request attacks are generated, so
+they can reuse existing terminal attacks instead of rebuilding request payloads from scratch.
+
+A workflow pack can be either:
+
+- a callable `generate(operations: list[OperationSpec], request_attacks: list[AttackCase]) -> list[WorkflowAttackCase]`
+- an object exposed as `workflow_pack` with a `name` and `generate(operations, request_attacks)` method
+
+The easiest helper is `make_workflow_pack()` from `knives_out.workflow_packs`.
+
+Local module example:
+
+```bash
+knives-out generate examples/openapi/petstore.yaml \
+  --auto-workflows \
+  --workflow-pack-module examples/workflow_packs/listed_pet_lookup.py \
+  --out attacks.json
+```
+
+Installed entry point example:
+
+```toml
+[project.entry-points."knives_out.workflow_packs"]
+listed-id-lookup = "my_package.workflow_packs:workflow_pack"
+```
+
+Then load it with:
+
+```bash
+knives-out generate examples/openapi/petstore.yaml \
+  --workflow-pack listed-id-lookup \
+  --out attacks.json
+```
+
 ## Roadmap
 
-The first milestone is intentionally modest:
+The current direction is still intentionally modest:
 
 - parse common OpenAPI patterns well
 - generate useful negative tests with low noise

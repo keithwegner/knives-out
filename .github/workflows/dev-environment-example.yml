@@ -22,7 +22,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Generate attack suite
-        run: knives-out generate "$SPEC_PATH" --out attacks.json
+        run: |
+          knives-out generate "$SPEC_PATH" --out attacks.json
+          # For stateful coverage, opt in to built-in workflows:
+          # knives-out generate "$SPEC_PATH" --auto-workflows --out attacks.json
+          # For app-specific journeys, add a workflow pack module:
+          # knives-out generate "$SPEC_PATH" \
+          #   --auto-workflows \
+          #   --workflow-pack-module examples/workflow_packs/listed_pet_lookup.py \
+          #   --out attacks.json
       - name: Run suite against dev environment
         shell: bash
         env:

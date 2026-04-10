@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from knives_out.models import AttackCase, AttackSuite
+from knives_out.models import AttackCase, AttackSuite, WorkflowAttackCase
 
 
 def _normalized_values(values: list[str] | None) -> set[str]:
@@ -8,7 +8,7 @@ def _normalized_values(values: list[str] | None) -> set[str]:
 
 
 def _matches_attack(
-    attack: AttackCase,
+    attack: AttackCase | WorkflowAttackCase,
     *,
     include_operations: set[str],
     exclude_operations: set[str],

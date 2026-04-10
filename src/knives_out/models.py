@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 SeverityLevel = Literal["none", "low", "medium", "high", "critical"]
 ConfidenceLevel = Literal["none", "low", "medium", "high"]
+AttackType = Literal["request", "workflow"]
 
 
 class ParameterSpec(BaseModel):
@@ -50,6 +51,7 @@ class LoadedOperations(BaseModel):
 
 
 class AttackCase(BaseModel):
+    type: Literal["request"] = "request"
     id: str
     name: str
     kind: str
@@ -70,13 +72,96 @@ class AttackCase(BaseModel):
     response_schemas: dict[str, ResponseSpec] = Field(default_factory=dict)
 
 
+class ExtractRule(BaseModel):
+    name: str
+    json_pointer: str
+    required: bool = True
+
+
+class WorkflowStep(BaseModel):
+    name: str
+    operation_id: str
+    method: str
+    path: str
+    path_params: dict[str, Any] = Field(default_factory=dict)
+    query: dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
+    body_json: Any | None = None
+    raw_body: str | None = None
+    content_type: str | None = None
+    omit_body: bool = False
+    omit_header_names: list[str] = Field(default_factory=list)
+    omit_query_names: list[str] = Field(default_factory=list)
+    expected_outcomes: list[str] = Field(default_factory=lambda: ["2xx"])
+    extracts: list[ExtractRule] = Field(default_factory=list)
+
+
+class WorkflowAttackCase(BaseModel):
+    type: Literal["workflow"] = "workflow"
+    id: str
+    name: str
+    kind: str
+    operation_id: str
+    method: str
+    path: str
+    description: str
+    setup_steps: list[WorkflowStep] = Field(default_factory=list)
+    terminal_attack: AttackCase
+
+
+AttackDefinition = Annotated[AttackCase | WorkflowAttackCase, Field(discriminator="type")]
+
+
+def _coerce_attack_definition(attack: Any) -> Any:
+    if not isinstance(attack, dict):
+        return attack
+
+    coerced = dict(attack)
+    coerced.setdefault(
+        "type",
+        "workflow" if "setup_steps" in coerced or "terminal_attack" in coerced else "request",
+    )
+    terminal_attack = coerced.get("terminal_attack")
+    if isinstance(terminal_attack, dict):
+        terminal_coerced = dict(terminal_attack)
+        terminal_coerced.setdefault("type", "request")
+        coerced["terminal_attack"] = terminal_coerced
+    return coerced
+
+
 class AttackSuite(BaseModel):
     source: str
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    attacks: list[AttackCase] = Field(default_factory=list)
+    attacks: list[AttackDefinition] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_attack_types(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        attacks = data.get("attacks")
+        if not isinstance(attacks, list):
+            return data
+
+        coerced = dict(data)
+        coerced["attacks"] = [_coerce_attack_definition(attack) for attack in attacks]
+        return coerced
+
+
+class WorkflowStepResult(BaseModel):
+    name: str
+    operation_id: str
+    method: str
+    url: str
+    status_code: int | None = None
+    error: str | None = None
+    duration_ms: float | None = None
+    response_excerpt: str | None = None
 
 
 class AttackResult(BaseModel):
+    type: AttackType = "request"
     attack_id: str
     operation_id: str
     kind: str
@@ -94,6 +179,7 @@ class AttackResult(BaseModel):
     response_schema_status: str | None = None
     response_schema_valid: bool | None = None
     response_schema_error: str | None = None
+    workflow_steps: list[WorkflowStepResult] | None = None
 
 
 class AttackResults(BaseModel):
@@ -101,3 +187,27 @@ class AttackResults(BaseModel):
     base_url: str
     executed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     results: list[AttackResult] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_result_types(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        results = data.get("results")
+        if not isinstance(results, list):
+            return data
+
+        coerced = dict(data)
+        coerced["results"] = []
+        for result in results:
+            if not isinstance(result, dict):
+                coerced["results"].append(result)
+                continue
+            result_coerced = dict(result)
+            result_coerced.setdefault(
+                "type",
+                "workflow" if result_coerced.get("workflow_steps") else "request",
+            )
+            coerced["results"].append(result_coerced)
+        return coerced
