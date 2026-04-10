@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,63 @@ def _excerpt(text: str, limit: int = 300) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _request_body_artifact(attack: AttackCase, headers: dict[str, str]) -> dict[str, Any]:
+    if attack.omit_body:
+        return {"present": False}
+    if attack.raw_body is not None:
+        return {
+            "present": True,
+            "kind": "raw",
+            "content_type": headers.get("Content-Type") or attack.content_type,
+            "excerpt": _excerpt(attack.raw_body),
+        }
+    if attack.body_json is not None:
+        serialized = json.dumps(attack.body_json, sort_keys=True)
+        return {
+            "present": True,
+            "kind": "json",
+            "content_type": headers.get("Content-Type") or "application/json",
+            "excerpt": _excerpt(serialized),
+        }
+    return {"present": False}
+
+
+def _write_attack_artifact(
+    artifact_root: Path,
+    *,
+    attack: AttackCase,
+    url: str,
+    headers: dict[str, str],
+    query: dict[str, Any],
+    response: httpx.Response | None,
+    error: str | None,
+    duration_ms: float,
+) -> None:
+    artifact = {
+        "attack": {
+            "id": attack.id,
+            "name": attack.name,
+            "kind": attack.kind,
+            "operation_id": attack.operation_id,
+        },
+        "request": {
+            "method": attack.method,
+            "url": url,
+            "headers": headers,
+            "query": query,
+            "body": _request_body_artifact(attack, headers),
+        },
+        "response": {
+            "status_code": response.status_code if response is not None else None,
+            "error": error,
+            "duration_ms": round(duration_ms, 2),
+            "body_excerpt": _excerpt(response.text) if response is not None else None,
+        },
+    }
+    artifact_path = artifact_root / f"{attack.id}.json"
+    artifact_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
 
 
 def _normalized_content_type(content_type: str | None) -> str:
@@ -265,10 +323,14 @@ def execute_attack_suite(
     default_headers: dict[str, str] | None = None,
     default_query: dict[str, Any] | None = None,
     timeout_seconds: float = 10.0,
+    artifact_dir: str | Path | None = None,
 ) -> AttackResults:
     default_headers = dict(default_headers or {})
     default_query = dict(default_query or {})
     results: list[AttackResult] = []
+    artifact_root = Path(artifact_dir) if artifact_dir is not None else None
+    if artifact_root is not None:
+        artifact_root.mkdir(parents=True, exist_ok=True)
 
     normalized_base_url = base_url.rstrip("/")
 
@@ -302,6 +364,18 @@ def execute_attack_suite(
             except Exception as exc:  # noqa: BLE001
                 error = str(exc)
             duration_ms = (time.perf_counter() - start) * 1000.0
+
+            if artifact_root is not None:
+                _write_attack_artifact(
+                    artifact_root,
+                    attack=attack,
+                    url=url,
+                    headers=request_kwargs["headers"],
+                    query=query,
+                    response=response,
+                    error=error,
+                    duration_ms=duration_ms,
+                )
 
             flagged, issue = evaluate_result(response.status_code if response else None, error)
             response_schema_status: str | None = None

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 
 from knives_out.models import AttackCase, AttackResult, AttackResults, AttackSuite
@@ -292,3 +294,59 @@ def test_execute_attack_suite_removes_only_declared_auth_query_param(monkeypatch
         "limit": 10,
         "page": "2",
     }
+
+
+def test_execute_attack_suite_writes_artifacts(tmp_path, monkeypatch) -> None:
+    response = httpx.Response(422, text="invalid input from server")
+    _install_recording_client(monkeypatch, response)
+    artifact_dir = tmp_path / "artifacts"
+
+    suite = AttackSuite(
+        source="unit",
+        attacks=[
+            AttackCase(
+                id="atk_artifact",
+                name="Artifact attack",
+                kind="wrong_type_param",
+                operation_id="createPet",
+                method="POST",
+                path="/pets",
+                description="Artifact attack",
+                headers={"X-Tenant": "tenant-123"},
+                query={"limit": 10},
+                body_json={"name": "Milo"},
+            )
+        ],
+    )
+
+    execute_attack_suite(
+        suite,
+        base_url="https://example.com",
+        default_headers={"Authorization": "Bearer dev-token"},
+        default_query={"page": "2"},
+        artifact_dir=artifact_dir,
+    )
+
+    artifact_path = artifact_dir / "atk_artifact.json"
+    assert artifact_path.exists()
+
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert artifact["attack"]["id"] == "atk_artifact"
+    assert artifact["request"]["method"] == "POST"
+    assert artifact["request"]["url"] == "https://example.com/pets"
+    assert artifact["request"]["headers"] == {
+        "Authorization": "Bearer dev-token",
+        "X-Tenant": "tenant-123",
+    }
+    assert artifact["request"]["query"] == {
+        "limit": 10,
+        "page": "2",
+    }
+    assert artifact["request"]["body"] == {
+        "present": True,
+        "kind": "json",
+        "content_type": "application/json",
+        "excerpt": '{"name": "Milo"}',
+    }
+    assert artifact["response"]["status_code"] == 422
+    assert artifact["response"]["body_excerpt"] == "invalid input from server"
