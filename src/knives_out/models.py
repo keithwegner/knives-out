@@ -170,6 +170,8 @@ class AttackResult(BaseModel):
     kind: str
     name: str
     method: str
+    path: str | None = None
+    tags: list[str] = Field(default_factory=list)
     url: str
     status_code: int | None = None
     error: str | None = None

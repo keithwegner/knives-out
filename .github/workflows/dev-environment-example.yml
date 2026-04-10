@@ -72,7 +72,12 @@ jobs:
 
           knives-out run attacks.json "${args[@]}"
       - name: Render Markdown report
-        run: knives-out report results.json --out report.md
+        run: |
+          knives-out report results.json --out report.md
+          # If you keep a checked-in .knives-out-ignore.yml file in the repo root,
+          # report, verify, and promote will load it automatically.
+          # To use a different file explicitly, add:
+          #   --suppressions path/to/suppressions.yml
       - name: Render baseline-aware report
         if: ${{ hashFiles('previous-results.json') != '' }}
         run: |
@@ -89,6 +94,8 @@ jobs:
           #   --baseline previous-results.json \
           #   --min-severity high \
           #   --min-confidence medium
+          # To seed a new suppression file for review outside CI, run:
+          # knives-out triage results.json --out .knives-out-ignore.yml
       - name: Promote qualifying findings into a regression suite
         if: always()
         run: |

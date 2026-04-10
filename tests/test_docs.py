@@ -18,6 +18,8 @@ def test_readme_includes_ci_guidance() -> None:
     assert "`knives-out run` currently exits with status `0`" in readme
     assert "knives-out verify results.json" in readme
     assert "knives-out promote results.json" in readme
+    assert "knives-out triage results.json" in readme
+    assert ".knives-out-ignore.yml" in readme
     assert "--auto-workflows" in readme
     assert "--tag orders" in readme
     assert "--path /draft-orders/{draftId}" in readme
@@ -41,6 +43,8 @@ def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     assert "knives-out report results.json --out report.md" in workflow
     assert "knives-out report results.json \\" in workflow
     assert "knives-out verify results.json" in workflow
+    assert "knives-out triage results.json --out .knives-out-ignore.yml" in workflow
+    assert ".knives-out-ignore.yml" in workflow
     assert "knives-out promote results.json" in workflow
     assert "KNIVES_OUT_BASE_URL" in workflow
 
@@ -53,6 +57,9 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "artifacts/" in ci_doc
     assert "Simple gating with no baseline" in ci_doc
     assert "Baseline-aware gating" in ci_doc
+    assert "Optional: checked-in suppressions" in ci_doc
+    assert "knives-out triage results.json --out .knives-out-ignore.yml" in ci_doc
+    assert ".knives-out-ignore.yml" in ci_doc
     assert "--baseline previous-results.json" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc
     assert "--tag orders" in ci_doc

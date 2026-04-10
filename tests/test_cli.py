@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from textwrap import dedent
 
@@ -13,6 +14,7 @@ from knives_out.models import (
     LoadedOperations,
     PreflightWarning,
 )
+from knives_out.suppressions import load_suppressions
 
 runner = CliRunner()
 EXAMPLE_SPEC = Path(__file__).resolve().parents[1] / "examples" / "openapi" / "petstore.yaml"
@@ -28,6 +30,10 @@ def _results_with_findings(*results: AttackResult) -> AttackResults:
         base_url="https://example.com",
         results=list(results),
     )
+
+
+def _normalized_output(output: str) -> str:
+    return re.sub(r"\s+", " ", output).strip()
 
 
 def test_inspect_command_runs() -> None:
@@ -344,9 +350,9 @@ def test_verify_command_passes_with_baseline_when_findings_only_persist(tmp_path
     )
 
     assert result.exit_code == 0
-    assert "Persisting:" in result.stdout
-    assert "1." in result.stdout
-    assert "Verification passed." in result.stdout
+    normalized = _normalized_output(result.stdout)
+    assert "Persisting: 1" in normalized
+    assert "Verification passed." in normalized
 
 
 def test_verify_command_fails_with_baseline_when_new_qualifying_findings_appear(
@@ -646,6 +652,210 @@ def test_promote_command_reports_missing_attack_ids(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "Promotion error:" in result.stdout
     assert "atk_missing" in result.stdout
+
+
+def test_verify_command_applies_suppressions(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    suppressions_path = tmp_path / ".knives-out-ignore.yml"
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_server",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                path="/pets",
+                tags=["pets", "write"],
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+    suppressions_path.write_text(
+        "suppressions:\n"
+        "  - attack_id: atk_server\n"
+        "    issue: server_error\n"
+        "    reason: known issue\n"
+        "    owner: api-team\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["verify", str(results_path), "--suppressions", str(suppressions_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Applied 1 suppression rule" in result.stdout
+    assert "suppressed: 1" in result.stdout
+
+
+def test_promote_command_respects_suppressions(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.json"
+    attacks_path = tmp_path / "attacks.json"
+    suppressions_path = tmp_path / ".knives-out-ignore.yml"
+    out_path = tmp_path / "regression-attacks.json"
+    _write_results(
+        current_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_two",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                path="/pets",
+                tags=["pets", "write"],
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+    attacks_path.write_text(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                AttackCase(
+                    id="atk_two",
+                    name="Attack two",
+                    kind="missing_request_body",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                    description="Attack two",
+                ),
+            ],
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    suppressions_path.write_text(
+        "suppressions:\n"
+        "  - attack_id: atk_two\n"
+        "    issue: server_error\n"
+        "    reason: known issue\n"
+        "    owner: api-team\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "promote",
+            str(current_path),
+            "--attacks",
+            str(attacks_path),
+            "--suppressions",
+            str(suppressions_path),
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert suite.attacks == []
+    normalized = _normalized_output(result.stdout)
+    assert "Qualifying attacks: 0." in normalized
+
+
+def test_triage_command_writes_review_ready_suppressions(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    suppressions_path = tmp_path / ".knives-out-ignore.yml"
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_one",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                path="/pets",
+                tags=["pets", "write"],
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        ["triage", str(results_path), "--out", str(suppressions_path)],
+    )
+
+    assert result.exit_code == 0
+    suppressions = load_suppressions(suppressions_path)
+    assert len(suppressions.suppressions) == 1
+    suppression = suppressions.suppressions[0]
+    assert suppression.attack_id == "atk_one"
+    assert suppression.issue == "server_error"
+    assert suppression.reason.startswith("TODO:")
+    assert suppression.owner.startswith("TODO:")
+
+
+def test_report_command_applies_suppressions(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.json"
+    suppressions_path = tmp_path / ".knives-out-ignore.yml"
+    report_path = tmp_path / "report.md"
+    _write_results(
+        current_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_one",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                path="/pets",
+                tags=["pets", "write"],
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+    suppressions_path.write_text(
+        "suppressions:\n"
+        "  - attack_id: atk_one\n"
+        "    issue: server_error\n"
+        "    reason: known issue\n"
+        "    owner: api-team\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            str(current_path),
+            "--suppressions",
+            str(suppressions_path),
+            "--out",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    report = report_path.read_text(encoding="utf-8")
+    assert "## Suppressed findings" in report
+    assert "known issue" in report
 
 
 def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:

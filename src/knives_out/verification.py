@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from knives_out.models import AttackResult, AttackResults
+from knives_out.suppressions import SuppressedFinding, SuppressionRule
 
 SeverityThreshold = Literal["low", "medium", "high", "critical"]
 ConfidenceThreshold = Literal["low", "medium", "high"]
@@ -57,6 +58,8 @@ class ResultComparison:
     baseline: AttackResults | None
     current_findings: list[AttackResult]
     baseline_findings: list[AttackResult]
+    suppressed_current_findings: list[SuppressedFinding]
+    suppressed_baseline_findings: list[SuppressedFinding]
     new_findings: list[ComparedFinding]
     resolved_findings: list[ComparedFinding]
     persisting_findings: list[ComparedFinding]
@@ -91,21 +94,53 @@ def compared_finding_sort_key(finding: ComparedFinding) -> tuple[int, int, str, 
     return attack_result_sort_key(finding.result)
 
 
-def _flagged_findings(results: AttackResults) -> dict[tuple[str, str], AttackResult]:
+def suppressed_finding_sort_key(finding: SuppressedFinding) -> tuple[int, int, str, str]:
+    return attack_result_sort_key(finding.result)
+
+
+def _matching_suppression(
+    result: AttackResult,
+    suppressions: list[SuppressionRule],
+) -> SuppressionRule | None:
+    for rule in suppressions:
+        if rule.matches(result):
+            return rule
+    return None
+
+
+def _flagged_findings(
+    results: AttackResults,
+    *,
+    suppressions: list[SuppressionRule] | None = None,
+) -> tuple[dict[tuple[str, str], AttackResult], list[SuppressedFinding]]:
     flagged: dict[tuple[str, str], AttackResult] = {}
+    suppressed: list[SuppressedFinding] = []
+    active_suppressions = list(suppressions or [])
     for result in results.results:
         if not result.flagged or result.issue is None:
             continue
+        matched_rule = _matching_suppression(result, active_suppressions)
+        if matched_rule is not None:
+            suppressed.append(SuppressedFinding(result=result, rule=matched_rule))
+            continue
         flagged[(result.attack_id, result.issue)] = result
-    return flagged
+    return flagged, sorted(suppressed, key=suppressed_finding_sort_key)
 
 
 def compare_attack_results(
     current: AttackResults,
     baseline: AttackResults | None = None,
+    *,
+    suppressions: list[SuppressionRule] | None = None,
 ) -> ResultComparison:
-    current_flagged = _flagged_findings(current)
-    baseline_flagged = _flagged_findings(baseline) if baseline is not None else {}
+    current_flagged, suppressed_current = _flagged_findings(current, suppressions=suppressions)
+    if baseline is not None:
+        baseline_flagged, suppressed_baseline = _flagged_findings(
+            baseline,
+            suppressions=suppressions,
+        )
+    else:
+        baseline_flagged, suppressed_baseline = {}, []
 
     current_keys = set(current_flagged)
     baseline_keys = set(baseline_flagged)
@@ -141,6 +176,8 @@ def compare_attack_results(
         baseline=baseline,
         current_findings=sorted(current_flagged.values(), key=attack_result_sort_key),
         baseline_findings=sorted(baseline_flagged.values(), key=attack_result_sort_key),
+        suppressed_current_findings=suppressed_current,
+        suppressed_baseline_findings=suppressed_baseline,
         new_findings=new_findings,
         resolved_findings=resolved_findings,
         persisting_findings=persisting_findings,
@@ -165,8 +202,9 @@ def evaluate_verification(
     baseline: AttackResults | None = None,
     min_severity: SeverityThreshold = "high",
     min_confidence: ConfidenceThreshold = "medium",
+    suppressions: list[SuppressionRule] | None = None,
 ) -> VerificationResult:
-    comparison = compare_attack_results(current, baseline)
+    comparison = compare_attack_results(current, baseline, suppressions=suppressions)
     if baseline is None:
         failing_findings = [
             ComparedFinding(change="new", current=result, baseline=None)

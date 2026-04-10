@@ -17,6 +17,7 @@ from knives_out.models import (
 )
 from knives_out.reporting import render_markdown_report
 from knives_out.runner import execute_attack_suite
+from knives_out.suppressions import SuppressionRule
 
 
 class _StubClient:
@@ -218,6 +219,8 @@ def test_execute_attack_suite_flags_response_schema_mismatch(monkeypatch) -> Non
     assert result.issue == "response_schema_mismatch"
     assert result.severity == "medium"
     assert result.confidence == "high"
+    assert result.path == "/pets"
+    assert result.tags == []
     assert result.response_schema_status == "201"
     assert result.response_schema_valid is False
     assert result.response_schema_error == "$.id: expected integer, got string"
@@ -466,6 +469,48 @@ def test_render_markdown_report_with_baseline_shows_regression_sections() -> Non
     assert "New server failure" in report
     assert "Resolved auth failure" in report
     assert "Persisting mismatch" in report
+
+
+def test_render_markdown_report_shows_suppressed_findings() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_suppressed",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Suppressed failure",
+                method="POST",
+                path="/pets",
+                tags=["pets", "write"],
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ],
+    )
+
+    report = render_markdown_report(
+        results,
+        suppressions=[
+            SuppressionRule(
+                attack_id="atk_suppressed",
+                issue="server_error",
+                reason="known issue",
+                owner="api-team",
+            )
+        ],
+    )
+
+    assert "## Suppressed findings" in report
+    assert "Suppressed failure" in report
+    assert "known issue" in report
+    assert "Active flagged results: **0**" in report
+    assert "Suppressed flagged results: **1**" in report
 
 
 def test_execute_attack_suite_removes_only_declared_auth_header(monkeypatch) -> None:

@@ -4,9 +4,9 @@ from collections import Counter
 from pathlib import Path
 
 from knives_out.models import AttackResults
+from knives_out.suppressions import SuppressedFinding, SuppressionRule
 from knives_out.verification import (
     ComparedFinding,
-    attack_result_sort_key,
     compare_attack_results,
 )
 
@@ -30,6 +30,18 @@ def _finding_table_rows(findings: list[ComparedFinding]) -> list[str]:
     return rows
 
 
+def _suppressed_table_rows(findings: list[SuppressedFinding]) -> list[str]:
+    rows: list[str] = []
+    for finding in findings:
+        result = finding.result
+        rule = finding.rule
+        expires = rule.expires_on.isoformat() if rule.expires_on is not None else "-"
+        rows.append(
+            f"| {result.name} | {result.issue or '-'} | {rule.reason} | {rule.owner} | {expires} |"
+        )
+    return rows
+
+
 def _workflow_phase(result) -> str:
     if result.type != "workflow":
         return "request"
@@ -42,9 +54,13 @@ def render_markdown_report(
     results: AttackResults,
     *,
     baseline: AttackResults | None = None,
+    suppressions: list[SuppressionRule] | None = None,
 ) -> str:
+    comparison = compare_attack_results(results, baseline, suppressions=suppressions)
+
     total = len(results.results)
-    flagged = sum(1 for result in results.results if result.flagged)
+    flagged = len(comparison.current_findings)
+    suppressed_flagged = len(comparison.suppressed_current_findings)
     response_schema_mismatches = sum(
         1 for result in results.results if result.response_schema_valid is False
     )
@@ -57,7 +73,8 @@ def render_markdown_report(
     lines.append(f"- Base URL: `{results.base_url}`")
     lines.append(f"- Executed at: `{results.executed_at.isoformat()}`")
     lines.append(f"- Total attacks: **{total}**")
-    lines.append(f"- Flagged results: **{flagged}**")
+    lines.append(f"- Active flagged results: **{flagged}**")
+    lines.append(f"- Suppressed flagged results: **{suppressed_flagged}**")
     lines.append(f"- Response schema mismatches: **{response_schema_mismatches}**")
     lines.append("")
     lines.append("## Outcome summary")
@@ -74,11 +91,7 @@ def render_markdown_report(
     lines.append("| --- | --- | ---: | --- | --- | --- | --- | --- |")
 
     found_flagged = False
-    flagged_results = sorted(
-        (result for result in results.results if result.flagged),
-        key=attack_result_sort_key,
-    )
-    for result in flagged_results:
+    for result in comparison.current_findings:
         found_flagged = True
         status = str(result.status_code) if result.status_code is not None else "-"
         schema = "mismatch" if result.response_schema_valid is False else "-"
@@ -91,9 +104,16 @@ def render_markdown_report(
     if not found_flagged:
         lines.append("| None | - | - | - | - | - | - | - |")
 
-    if baseline is not None:
-        comparison = compare_attack_results(results, baseline)
+    lines.append("")
+    lines.append("## Suppressed findings")
+    lines.append("")
+    lines.append("| Attack | Issue | Reason | Owner | Expires |")
+    lines.append("| --- | --- | --- | --- | --- |")
+    lines.extend(_suppressed_table_rows(comparison.suppressed_current_findings))
+    if not comparison.suppressed_current_findings:
+        lines.append("| None | - | - | - | - |")
 
+    if baseline is not None:
         lines.append("")
         lines.append("## Verification summary")
         lines.append("")
@@ -101,6 +121,9 @@ def render_markdown_report(
         lines.append(f"- New findings: **{len(comparison.new_findings)}**")
         lines.append(f"- Resolved findings: **{len(comparison.resolved_findings)}**")
         lines.append(f"- Persisting findings: **{len(comparison.persisting_findings)}**")
+        lines.append(
+            f"- Suppressed current findings: **{len(comparison.suppressed_current_findings)}**"
+        )
 
         lines.append("")
         lines.append("## New findings")
