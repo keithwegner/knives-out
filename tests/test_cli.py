@@ -1,4 +1,5 @@
 from pathlib import Path
+from textwrap import dedent
 
 from typer.testing import CliRunner
 
@@ -80,7 +81,7 @@ def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("knives_out.cli.load_operations", lambda spec: [])
     monkeypatch.setattr(
         "knives_out.cli.generate_attack_suite",
-        lambda operations, source: AttackSuite(
+        lambda operations, source, extra_packs=None: AttackSuite(
             source=source,
             attacks=[
                 AttackCase(
@@ -184,3 +185,65 @@ def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatc
 
     assert result.exit_code == 0
     assert captured["attack_ids"] == ["atk_post"]
+
+
+def test_generate_command_loads_local_attack_pack(tmp_path: Path) -> None:
+    spec_path = tmp_path / "custom-pack-spec.yaml"
+    spec_path.write_text(
+        dedent(
+            """
+            openapi: 3.0.3
+            info:
+              title: Custom pack test
+              version: 1.0.0
+            paths:
+              /pets:
+                get:
+                  operationId: listPets
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    module_path = tmp_path / "custom_pack.py"
+    module_path.write_text(
+        dedent(
+            """
+            from knives_out.attack_packs import make_attack_pack
+            from knives_out.models import AttackCase, OperationSpec
+
+            def generate(operation: OperationSpec) -> list[AttackCase]:
+                return [
+                    AttackCase(
+                        id=f"atk_{operation.operation_id}_custom",
+                        name="Custom probe",
+                        kind="custom_probe",
+                        operation_id=operation.operation_id,
+                        method=operation.method,
+                        path=operation.path,
+                        description="Custom probe",
+                    )
+                ]
+
+            attack_pack = make_attack_pack("custom-pack", generate)
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    out_path = tmp_path / "attacks.json"
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            str(spec_path),
+            "--pack-module",
+            str(module_path),
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert any(attack.kind == "custom_probe" for attack in suite.attacks)

@@ -4,6 +4,7 @@ import hashlib
 from copy import deepcopy
 from typing import Any
 
+from knives_out.attack_packs import LoadedAttackPack
 from knives_out.models import AttackCase, AttackSuite, OperationSpec, ParameterSpec
 
 MAX_SAMPLE_DEPTH = 4
@@ -155,12 +156,12 @@ def malformed_json_body(_: dict[str, Any] | None) -> str:
     return '{"unterminated": true'
 
 
-def _attack_id(operation_id: str, kind: str, target: str) -> str:
+def attack_id(operation_id: str, kind: str, target: str) -> str:
     digest = hashlib.sha1(f"{operation_id}:{kind}:{target}".encode()).hexdigest()[:12]
     return f"atk_{digest}"
 
 
-def _base_request_context(
+def base_request_context(
     operation: OperationSpec,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], Any | None]:
     path_params: dict[str, Any] = {}
@@ -199,7 +200,7 @@ def _response_schemas_for_attack(operation: OperationSpec) -> dict[str, Any]:
 
 def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]:
     attacks: list[AttackCase] = []
-    base_path_params, base_query_params, base_headers, base_body = _base_request_context(operation)
+    base_path_params, base_query_params, base_headers, base_body = base_request_context(operation)
 
     for parameter in operation.parameters:
         if parameter.required and parameter.location in {"query", "header"}:
@@ -213,7 +214,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
 
             attacks.append(
                 AttackCase(
-                    id=_attack_id(
+                    id=attack_id(
                         operation.operation_id,
                         "missing_required_param",
                         _parameter_target_label(parameter),
@@ -249,7 +250,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
 
         attacks.append(
             AttackCase(
-                id=_attack_id(
+                id=attack_id(
                     operation.operation_id,
                     "wrong_type_param",
                     _parameter_target_label(parameter),
@@ -287,7 +288,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
 
             attacks.append(
                 AttackCase(
-                    id=_attack_id(
+                    id=attack_id(
                         operation.operation_id,
                         "invalid_enum",
                         _parameter_target_label(parameter),
@@ -312,7 +313,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
         )
         attacks.append(
             AttackCase(
-                id=_attack_id(operation.operation_id, "missing_request_body", "body"),
+                id=attack_id(operation.operation_id, "missing_request_body", "body"),
                 name="Missing request body",
                 kind="missing_request_body",
                 operation_id=operation.operation_id,
@@ -333,7 +334,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
         )
         attacks.append(
             AttackCase(
-                id=_attack_id(operation.operation_id, "malformed_json_body", "body"),
+                id=attack_id(operation.operation_id, "malformed_json_body", "body"),
                 name="Malformed JSON body",
                 kind="malformed_json_body",
                 operation_id=operation.operation_id,
@@ -355,7 +356,7 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
         )
         attacks.append(
             AttackCase(
-                id=_attack_id(operation.operation_id, "missing_auth", "auth"),
+                id=attack_id(operation.operation_id, "missing_auth", "auth"),
                 name="Missing auth",
                 kind="missing_auth",
                 operation_id=operation.operation_id,
@@ -375,8 +376,16 @@ def generate_attacks_for_operation(operation: OperationSpec) -> list[AttackCase]
     return attacks
 
 
-def generate_attack_suite(operations: list[OperationSpec], source: str) -> AttackSuite:
+def generate_attack_suite(
+    operations: list[OperationSpec],
+    source: str,
+    *,
+    extra_packs: list[LoadedAttackPack] | None = None,
+) -> AttackSuite:
     attacks: list[AttackCase] = []
+    packs = list(extra_packs or [])
     for operation in operations:
         attacks.extend(generate_attacks_for_operation(operation))
+        for pack in packs:
+            attacks.extend(pack.generate(operation))
     return AttackSuite(source=source, attacks=attacks)

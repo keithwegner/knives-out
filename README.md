@@ -103,6 +103,15 @@ Builds an `AttackSuite` JSON file from an OpenAPI document.
 knives-out generate path/to/openapi.yaml --out attacks.json
 ```
 
+You can load custom attack packs from installed entry points or local modules:
+
+```bash
+knives-out generate path/to/openapi.yaml \
+  --pack unexpected-header \
+  --pack-module examples/custom_packs/unexpected_header.py \
+  --out attacks.json
+```
+
 ### `run`
 
 Executes a saved attack suite against a base URL.
@@ -149,6 +158,69 @@ Run lint:
 ```bash
 ruff check .
 ruff format .
+```
+
+## Custom attack packs
+
+Custom attack packs let you contribute additional `AttackCase` records without forking the core generator.
+
+An attack pack can be either:
+
+- a callable `generate(operation: OperationSpec) -> list[AttackCase]`
+- an object exposed as `attack_pack` with a `name` and `generate(operation)` method
+
+The easiest helper is `make_attack_pack()` from `knives_out.attack_packs`.
+
+Local module example:
+
+```python
+from knives_out.attack_packs import make_attack_pack
+from knives_out.generator import attack_id, base_request_context
+from knives_out.models import AttackCase, OperationSpec
+
+
+def generate(operation: OperationSpec) -> list[AttackCase]:
+    path_params, query, headers, body = base_request_context(operation)
+    headers["X-Example-Custom-Pack"] = "unexpected-header"
+    return [
+        AttackCase(
+            id=attack_id(operation.operation_id, "unexpected_header", "header:X-Example"),
+            name="Unexpected header probe",
+            kind="unexpected_header",
+            operation_id=operation.operation_id,
+            method=operation.method,
+            path=operation.path,
+            description="Adds an unexpected header to probe strict header handling.",
+            path_params=path_params,
+            query=query,
+            headers=headers,
+            body_json=body,
+        )
+    ]
+
+
+attack_pack = make_attack_pack("unexpected-header", generate)
+```
+
+Load that module with:
+
+```bash
+knives-out generate examples/openapi/petstore.yaml \
+  --pack-module examples/custom_packs/unexpected_header.py \
+  --out attacks.json
+```
+
+Installed entry point example:
+
+```toml
+[project.entry-points."knives_out.attack_packs"]
+unexpected-header = "my_package.attack_packs:attack_pack"
+```
+
+Then load it with:
+
+```bash
+knives-out generate examples/openapi/petstore.yaml --pack unexpected-header --out attacks.json
 ```
 
 ## Roadmap
