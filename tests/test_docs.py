@@ -35,8 +35,8 @@ def test_readme_includes_ci_guidance() -> None:
     assert "--graphql-endpoint /api/graphql" in readme
     assert "graphql-attacks.json" in readme
     assert "examples/workflow_packs/listed_pet_lookup.py" in readme
-    assert "stronger built-in auth acquisition and refresh flows" in readme
-    assert "deeper GraphQL response validation" in readme
+    assert "**v0.9:** first-class auth and session realism" in readme
+    assert "**v0.10:** deeper GraphQL coverage" in readme
 
 
 def test_dev_environment_workflow_matches_current_cli_surface() -> None:
@@ -115,14 +115,17 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     architecture = ARCHITECTURE_DOC.read_text(encoding="utf-8")
 
     assert "## Recently completed" in roadmap
-    assert "v0.8: GraphQL support" in roadmap
-    assert "## Next planning pass" in roadmap
-    assert "built-in auth acquisition and refresh flows" in roadmap
-    assert "GraphQL response validation" in roadmap
+    assert "v0.8: GraphQL schema support" in roadmap
+    assert "## v0.9 — first-class auth and session realism" in roadmap
+    assert "client_credentials" in roadmap
+    assert "## v0.10 — deeper GraphQL coverage" in roadmap
+    assert "subscription coverage" in roadmap
     assert "LLM application and tool-misuse testing" in roadmap
 
     assert "graphql_loader.py" in architecture
     assert "spec_loader.py" in architecture
     assert "GraphQL SDL or introspection JSON" in architecture
     assert "200` response with an `errors` array" in architecture
+    assert "first-class auth/session profile strategies" in architecture
+    assert "GraphQL response-shape validation, federation awareness" in architecture
     assert "redirect-driven OAuth auth-code flows" in architecture
