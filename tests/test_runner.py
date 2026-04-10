@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 
@@ -17,7 +18,7 @@ from knives_out.models import (
     WorkflowStep,
     WorkflowStepResult,
 )
-from knives_out.reporting import render_markdown_report
+from knives_out.reporting import render_html_report, render_markdown_report
 from knives_out.runner import execute_attack_suite, execute_attack_suite_profiles
 from knives_out.suppressions import SuppressionRule
 
@@ -1154,3 +1155,65 @@ def test_render_markdown_report_shows_workflow_sections() -> None:
     assert "- Workflow phase: `setup`" in report
     assert "| Step | Operation | Method | Status | URL |" in report
     assert "List pets" in report
+
+
+def test_render_html_report_shows_artifact_index_and_profile_outcomes(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    (artifact_root / "wf_lookup.json").write_text("{}", encoding="utf-8")
+    (artifact_root / "wf_lookup-step-01.json").write_text("{}", encoding="utf-8")
+    profile_root = artifact_root / "anonymous"
+    profile_root.mkdir()
+    (profile_root / "wf_lookup.json").write_text("{}", encoding="utf-8")
+
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        profiles=["anonymous"],
+        results=[
+            AttackResult(
+                type="workflow",
+                attack_id="wf_lookup",
+                operation_id="getPet",
+                kind="wrong_type_param",
+                name="Workflow lookup",
+                method="GET",
+                url="https://example.com/pets/42",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+                response_excerpt='{"error":"boom"}',
+                profile_results=[
+                    ProfileAttackResult(
+                        profile="anonymous",
+                        level=0,
+                        anonymous=True,
+                        url="https://example.com/pets/42",
+                        status_code=500,
+                        issue="server_error",
+                        severity="high",
+                        confidence="high",
+                    )
+                ],
+                workflow_steps=[
+                    WorkflowStepResult(
+                        name="List pets",
+                        operation_id="listPets",
+                        method="GET",
+                        url="https://example.com/pets",
+                        status_code=200,
+                    )
+                ],
+            )
+        ],
+    )
+
+    report = render_html_report(results, artifact_root=artifact_root)
+
+    assert "<!DOCTYPE html>" in report
+    assert "<h2>Artifact index</h2>" in report
+    assert "wf_lookup-step-01.json" in report
+    assert "<h4>Profile outcomes</h4>" in report
+    assert "anonymous (anonymous)" in report

@@ -84,6 +84,9 @@ jobs:
           # report, verify, and promote will load it automatically.
           # To use a different file explicitly, add:
           #   --suppressions path/to/suppressions.yml
+      - name: Render HTML report
+        run: |
+          knives-out report results.json --format html --artifact-root artifacts --out report.html
       - name: Render baseline-aware report
         if: ${{ hashFiles('previous-results.json') != '' }}
         run: |
@@ -121,5 +124,6 @@ jobs:
             regression-attacks.json
             results.json
             report.md
+            report.html
             regression-report.md
             artifacts/

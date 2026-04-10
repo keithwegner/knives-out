@@ -22,6 +22,7 @@ Given an OpenAPI document, `knives-out` can:
 - execute the same suite across named auth profiles and compare their outcomes
 - run those attacks against a live base URL
 - produce a Markdown report that highlights suspicious outcomes
+- produce an HTML report with linked request and response artifacts
 - verify findings for CI gating
 - promote qualifying findings back into a reusable regression suite
 - suppress or triage known findings so CI stays focused on active risk
@@ -136,6 +137,12 @@ Create a Markdown report:
 knives-out report results.json --out report.md
 ```
 
+Or render an HTML report with an artifact index for CI review:
+
+```bash
+knives-out report results.json --format html --artifact-root artifacts --out report.html
+```
+
 Verify findings against the default CI policy:
 
 ```bash
@@ -162,9 +169,10 @@ verification step:
 1. generate attacks from a checked-in OpenAPI spec
 2. run them against a dev or staging environment
 3. render a Markdown report for review
-4. verify the results against a CI policy
-5. optionally promote qualifying findings into a smaller regression suite
-6. upload the JSON results, request artifacts, and Markdown report for triage
+4. optionally render an HTML report with linked artifacts
+5. verify the results against a CI policy
+6. optionally promote qualifying findings into a smaller regression suite
+7. upload the JSON results, reports, and request artifacts for triage
 
 A ready-to-adapt GitHub Actions example lives at `.github/workflows/dev-environment-example.yml`.
 It uses repository secrets instead of hard-coded targets:
@@ -177,6 +185,8 @@ It uses repository secrets instead of hard-coded targets:
 `knives-out run` currently exits with status `0` when the suite executes successfully, even if
 some findings are flagged in `results.json`. That keeps execution review-friendly:
 teams can always upload `results.json`, `report.md`, and per-attack artifacts for triage.
+For faster review inside CI artifacts, `knives-out report --format html --artifact-root artifacts`
+also produces a linked `report.html` with an artifact index and detailed result cards.
 
 For built-in gating, use `knives-out verify` after `run`. It can fail on qualifying findings in the
 current run, or only on new qualifying findings when you also pass `--baseline previous-results.json`.

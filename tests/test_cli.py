@@ -216,6 +216,53 @@ def test_report_command_supports_baseline(tmp_path: Path) -> None:
     assert "## Persisting findings" in report
 
 
+def test_report_command_supports_html_and_artifact_links(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    report_path = tmp_path / "report.html"
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    (artifact_root / "atk_html.json").write_text("{}", encoding="utf-8")
+
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_html",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="HTML failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            str(results_path),
+            "--format",
+            "html",
+            "--artifact-root",
+            str(artifact_root),
+            "--out",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    report = report_path.read_text(encoding="utf-8")
+    assert "<!DOCTYPE html>" in report
+    assert "<h2>Artifact index</h2>" in report
+    assert "atk_html.json" in report
+
+
 def test_run_command_passes_artifact_dir(tmp_path: Path, monkeypatch) -> None:
     attacks_path = tmp_path / "attacks.json"
     out_path = tmp_path / "results.json"

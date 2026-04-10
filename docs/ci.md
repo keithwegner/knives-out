@@ -6,10 +6,11 @@
 2. optionally opt in to workflow generation for stateful coverage
 3. run that suite against a dev or staging deployment
 4. render a Markdown report for review
-5. verify the results against a CI policy
-6. optionally promote qualifying findings into a smaller regression suite
-7. optionally maintain a checked-in suppressions file for accepted findings
-8. publish the JSON results, Markdown report, regression suite, and per-attack artifacts
+5. optionally render an HTML report with linked artifacts
+6. verify the results against a CI policy
+7. optionally promote qualifying findings into a smaller regression suite
+8. optionally maintain a checked-in suppressions file for accepted findings
+9. publish the JSON results, reports, regression suite, and per-attack artifacts
 
 The repository includes a ready-to-adapt GitHub Actions example at
 `.github/workflows/dev-environment-example.yml`.
@@ -51,6 +52,7 @@ That default behavior is intentional for review-first workflows:
 
 - `results.json` stays available for automation
 - `report.md` stays available for humans
+- `report.html` can present a linked artifact index for faster triage
 - `artifacts/` keeps one request/response record per attack for debugging
 
 `knives-out verify` is the built-in gating step. It reads `results.json`, applies severity and
@@ -251,6 +253,20 @@ You can also render a Markdown report that highlights new, resolved, and persist
     knives-out report results.json \
       --baseline previous-results.json \
       --out report.md
+```
+
+## Optional: HTML report and artifact index
+
+When you already capture per-attack request and response artifacts, `report` can also emit an
+HTML view with linked artifacts, detailed result cards, and profile/workflow sections:
+
+```yaml
+- name: Render HTML report
+  run: |
+    knives-out report results.json \
+      --format html \
+      --artifact-root artifacts \
+      --out report.html
 ```
 
 ## Optional: promote a regression suite
