@@ -550,7 +550,7 @@ def load_operations_with_warnings(path: str | Path) -> LoadedOperations:
                 )
             )
 
-    return LoadedOperations(operations=operations, warnings=warnings)
+    return LoadedOperations(source_kind="openapi", operations=operations, warnings=warnings)
 
 
 def load_operations(path: str | Path) -> list[OperationSpec]:

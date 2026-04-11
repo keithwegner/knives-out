@@ -11,6 +11,9 @@ from knives_out.models import (
     AttackCase,
     AttackSuite,
     ExtractRule,
+    LearnedBinding,
+    LearnedModel,
+    LearnedWorkflow,
     OperationSpec,
     ParameterSpec,
     WorkflowAttackCase,
@@ -19,6 +22,7 @@ from knives_out.models import (
 from knives_out.workflow_packs import LoadedWorkflowPack
 
 MAX_SAMPLE_DEPTH = 4
+_LEARNED_WORKFLOW_CONFIDENCE_THRESHOLD = 0.7
 _SCALAR_SCHEMA_TYPES = {"string", "integer", "number", "boolean"}
 _INVALID_FORMAT_VALUES = {
     "uuid": "not-a-uuid",
@@ -218,16 +222,32 @@ def base_request_context(
     query_params: dict[str, Any] = {}
     headers: dict[str, str] = {}
 
+    observed_example = _preferred_observed_example(operation)
+    if observed_example is not None:
+        path_params = deepcopy(observed_example.path_params)
+        query_params = deepcopy(observed_example.query)
+        headers = deepcopy(observed_example.headers)
+        body = deepcopy(observed_example.body_json)
+        for name in operation.auth_query_names:
+            query_params.pop(name, None)
+        for name in operation.auth_header_names:
+            headers.pop(name, None)
+    else:
+        body = None
+
     for parameter in operation.parameters:
         value = sample_value(parameter.schema_def)
         if parameter.location == "path":
-            path_params[parameter.name] = value
+            path_params.setdefault(parameter.name, value)
         elif parameter.location == "query" and parameter.required:
-            query_params[parameter.name] = value
+            query_params.setdefault(parameter.name, value)
         elif parameter.location == "header" and parameter.required:
-            headers[parameter.name] = str(value)
+            headers.setdefault(parameter.name, str(value))
 
-    body = sample_value(operation.request_body_schema) if operation.request_body_schema else None
+    if body is None:
+        body = (
+            sample_value(operation.request_body_schema) if operation.request_body_schema else None
+        )
     return path_params, query_params, headers, body
 
 
@@ -909,6 +929,287 @@ def _set_placeholder_value(attack: AttackCase, binding: _TargetBinding, placehol
         attack.body_json[binding.name] = placeholder
 
 
+def _preferred_observed_example(operation: OperationSpec):
+    if not operation.observed_examples:
+        return None
+    for example in operation.observed_examples:
+        if example.status_code is not None and example.status_code < 400:
+            return example
+    return operation.observed_examples[0]
+
+
+def _parameter_schema(operation: OperationSpec, location: str, name: str) -> dict[str, Any]:
+    for parameter in operation.parameters:
+        if parameter.location == location and parameter.name == name:
+            return parameter.schema_def
+    if location == "body":
+        schema = _normalize_schema(operation.request_body_schema)
+        return _normalize_schema(schema.get("properties", {}).get(name, {}))
+    return {}
+
+
+def _stale_binding_value(operation: OperationSpec, binding: LearnedBinding) -> Any:
+    schema = _parameter_schema(operation, binding.target, binding.target_name)
+    normalized = _normalize_schema(schema)
+    if normalized.get("enum"):
+        return invalid_enum_value(normalized)
+    schema_type = _schema_type(normalized)
+    if schema_type == "integer":
+        return 999999
+    if schema_type == "number":
+        return 999999.0
+    if normalized.get("format") == "uuid":
+        return "00000000-0000-4000-8000-ffffffffffff"
+    return "shadow-stale-reference"
+
+
+def _binding_target(binding: LearnedBinding) -> _TargetBinding:
+    return _TargetBinding(target=binding.target, name=binding.target_name)
+
+
+def _attack_has_binding(attack: AttackCase, binding: LearnedBinding) -> bool:
+    if binding.target == "path":
+        return binding.target_name in attack.path_params
+    if binding.target == "query":
+        return binding.target_name in attack.query
+    return isinstance(attack.body_json, dict) and binding.target_name in attack.body_json
+
+
+def _apply_learned_binding_value(attack: AttackCase, binding: LearnedBinding, value: Any) -> None:
+    target = _binding_target(binding)
+    if target.target == "body" and not isinstance(attack.body_json, dict):
+        attack.body_json = {}
+    _set_placeholder_value(attack, target, value)
+
+
+def _learned_workflow_attack(
+    producer: OperationSpec,
+    terminal_attack: AttackCase,
+    workflow: LearnedWorkflow,
+) -> WorkflowAttackCase | None:
+    terminal_copy = terminal_attack.model_copy(deep=True)
+    extracts: list[ExtractRule] = []
+    for binding in workflow.bindings:
+        if not _attack_has_binding(terminal_copy, binding):
+            continue
+        extracts.append(
+            ExtractRule(
+                name=binding.source_name,
+                json_pointer=binding.source_pointer,
+            )
+        )
+        _apply_learned_binding_value(
+            terminal_copy,
+            binding,
+            f"{{{{{binding.source_name}}}}}",
+        )
+
+    if not extracts:
+        return None
+
+    path_params, query, headers, body = base_request_context(producer)
+    workflow_id = attack_id(
+        terminal_attack.operation_id,
+        f"learned_workflow_{terminal_attack.kind}",
+        workflow.id,
+    )
+    return WorkflowAttackCase(
+        id=workflow_id,
+        name=f"Learned workflow via {producer.operation_id}: {terminal_attack.name}",
+        kind=terminal_attack.kind,
+        operation_id=terminal_attack.operation_id,
+        method=terminal_attack.method,
+        path=terminal_attack.path,
+        tags=list(terminal_attack.tags),
+        auth_required=terminal_attack.auth_required,
+        description=(
+            f"Uses the learned producer/consumer relationship from {producer.operation_id} "
+            f"before executing '{terminal_attack.name}'."
+        ),
+        setup_steps=[
+            WorkflowStep(
+                name=f"Setup via {producer.operation_id}",
+                operation_id=producer.operation_id,
+                method=producer.method,
+                path=producer.path,
+                path_params=path_params,
+                query=query,
+                headers=headers,
+                body_json=body,
+                extracts=extracts,
+            )
+        ],
+        terminal_attack=terminal_copy,
+    )
+
+
+def _stale_reference_workflow(
+    producer: OperationSpec,
+    delete_operation: OperationSpec,
+    consumer_operation: OperationSpec,
+    workflow: LearnedWorkflow,
+) -> WorkflowAttackCase:
+    producer_path, producer_query, producer_headers, producer_body = base_request_context(producer)
+    delete_path, delete_query, delete_headers, delete_body = base_request_context(delete_operation)
+    terminal_path, terminal_query, terminal_headers, terminal_body = base_request_context(
+        consumer_operation
+    )
+
+    extracts = [
+        ExtractRule(name=binding.source_name, json_pointer=binding.source_pointer)
+        for binding in workflow.bindings
+    ]
+    delete_attack = AttackCase(
+        id="tmp",
+        name="tmp",
+        kind="tmp",
+        operation_id=delete_operation.operation_id,
+        method=delete_operation.method,
+        path=delete_operation.path,
+        description="tmp",
+        path_params=delete_path,
+        query=delete_query,
+        headers=delete_headers,
+        body_json=delete_body,
+    )
+    for binding in workflow.delete_bindings or workflow.bindings:
+        _apply_learned_binding_value(delete_attack, binding, f"{{{{{binding.source_name}}}}}")
+    terminal_attack = AttackCase(
+        id=attack_id(consumer_operation.operation_id, "stale_resource_reference", workflow.id),
+        name=f"Stale reference after {delete_operation.operation_id}",
+        kind="stale_resource_reference",
+        operation_id=consumer_operation.operation_id,
+        method=consumer_operation.method,
+        path=consumer_operation.path,
+        tags=_tags_for_attack(consumer_operation),
+        auth_required=consumer_operation.auth_required,
+        description=(
+            f"Reuses an identifier from {producer.operation_id} after "
+            f"{delete_operation.operation_id} has invalidated it."
+        ),
+        path_params=terminal_path,
+        query=terminal_query,
+        headers=terminal_headers,
+        body_json=terminal_body,
+        response_schemas=_response_schemas_for_attack(consumer_operation),
+    )
+    for binding in workflow.bindings:
+        _apply_learned_binding_value(terminal_attack, binding, f"{{{{{binding.source_name}}}}}")
+
+    return WorkflowAttackCase(
+        id=attack_id(consumer_operation.operation_id, "stale_workflow", workflow.id),
+        name=f"Stale workflow via {producer.operation_id}: {consumer_operation.operation_id}",
+        kind="stale_resource_reference",
+        operation_id=consumer_operation.operation_id,
+        method=consumer_operation.method,
+        path=consumer_operation.path,
+        tags=_tags_for_attack(consumer_operation),
+        auth_required=consumer_operation.auth_required,
+        description=(
+            f"Creates state with {producer.operation_id}, invalidates it with "
+            f"{delete_operation.operation_id}, then reuses the stale identifier."
+        ),
+        setup_steps=[
+            WorkflowStep(
+                name=f"Setup via {producer.operation_id}",
+                operation_id=producer.operation_id,
+                method=producer.method,
+                path=producer.path,
+                path_params=producer_path,
+                query=producer_query,
+                headers=producer_headers,
+                body_json=producer_body,
+                extracts=extracts,
+            ),
+            WorkflowStep(
+                name=f"Invalidate via {delete_operation.operation_id}",
+                operation_id=delete_operation.operation_id,
+                method=delete_operation.method,
+                path=delete_operation.path,
+                path_params=delete_attack.path_params,
+                query=delete_attack.query,
+                headers=delete_attack.headers,
+                body_json=delete_attack.body_json,
+            ),
+        ],
+        terminal_attack=terminal_attack,
+    )
+
+
+def _missing_learned_setup_attack(
+    consumer_operation: OperationSpec,
+    workflow: LearnedWorkflow,
+) -> AttackCase:
+    path_params, query, headers, body = base_request_context(consumer_operation)
+    attack = AttackCase(
+        id=attack_id(consumer_operation.operation_id, "missing_learned_setup", workflow.id),
+        name=f"Missing learned setup for {consumer_operation.operation_id}",
+        kind="missing_learned_setup",
+        operation_id=consumer_operation.operation_id,
+        method=consumer_operation.method,
+        path=consumer_operation.path,
+        tags=_tags_for_attack(consumer_operation),
+        auth_required=consumer_operation.auth_required,
+        description=(
+            "Calls the learned consumer operation without the observed producer step, "
+            "using a stale or synthetic identifier instead."
+        ),
+        path_params=path_params,
+        query=query,
+        headers=headers,
+        body_json=body,
+        response_schemas=_response_schemas_for_attack(consumer_operation),
+    )
+    for binding in workflow.bindings:
+        _apply_learned_binding_value(
+            attack,
+            binding,
+            _stale_binding_value(consumer_operation, binding),
+        )
+    return attack
+
+
+def generate_learned_attacks(
+    operations: list[OperationSpec],
+    request_attacks: list[AttackCase],
+    learned_model: LearnedModel,
+) -> tuple[list[AttackCase], list[WorkflowAttackCase]]:
+    operations_by_id = {operation.operation_id: operation for operation in operations}
+    extra_attacks: list[AttackCase] = []
+    workflows: list[WorkflowAttackCase] = []
+    for workflow in learned_model.workflows:
+        producer = operations_by_id.get(workflow.producer_operation_id)
+        consumer = operations_by_id.get(workflow.consumer_operation_id)
+        if producer is None or consumer is None:
+            continue
+
+        if workflow.confidence >= _LEARNED_WORKFLOW_CONFIDENCE_THRESHOLD:
+            extra_attacks.append(_missing_learned_setup_attack(consumer, workflow))
+            for attack in request_attacks:
+                if attack.operation_id != consumer.operation_id:
+                    continue
+                learned_workflow = _learned_workflow_attack(producer, attack, workflow)
+                if learned_workflow is not None:
+                    workflows.append(learned_workflow)
+
+        if (
+            workflow.delete_operation_id
+            and workflow.confidence >= _LEARNED_WORKFLOW_CONFIDENCE_THRESHOLD
+            and consumer.method.upper() != "DELETE"
+        ):
+            delete_operation = operations_by_id.get(workflow.delete_operation_id)
+            if delete_operation is not None:
+                workflows.append(
+                    _stale_reference_workflow(
+                        producer,
+                        delete_operation,
+                        consumer,
+                        workflow,
+                    )
+                )
+    return extra_attacks, workflows
+
+
 def _workflow_attack_from_assignments(
     producer: OperationSpec,
     terminal_attack: AttackCase,
@@ -1463,6 +1764,7 @@ def generate_attack_suite(
     extra_packs: list[LoadedAttackPack] | None = None,
     auto_workflows: bool = False,
     workflow_packs: list[LoadedWorkflowPack] | None = None,
+    learned_model: LearnedModel | None = None,
 ) -> AttackSuite:
     attacks: list[AttackCase] = []
     packs = list(extra_packs or [])
@@ -1474,6 +1776,15 @@ def generate_attack_suite(
     workflows: list[WorkflowAttackCase] = []
     if auto_workflows:
         workflows.extend(generate_workflow_attacks(operations, attacks))
+
+    if learned_model is not None:
+        learned_attacks, learned_workflows = generate_learned_attacks(
+            operations,
+            attacks,
+            learned_model,
+        )
+        attacks.extend(learned_attacks)
+        workflows.extend(learned_workflows)
 
     for workflow_pack in workflow_packs or []:
         workflows.extend(workflow_pack.generate(operations, attacks))

@@ -9,6 +9,52 @@ SeverityLevel = Literal["none", "low", "medium", "high", "critical"]
 ConfidenceLevel = Literal["none", "low", "medium", "high"]
 AttackType = Literal["request", "workflow"]
 AuthEventPhase = Literal["acquire", "refresh"]
+SourceKind = Literal["openapi", "graphql", "learned"]
+CaptureSource = Literal["proxy", "har"]
+LearnedBindingTarget = Literal["path", "query", "body"]
+
+
+class CapturedRequest(BaseModel):
+    method: str
+    url: str
+    headers: dict[str, str] = Field(default_factory=dict)
+    query: dict[str, Any] = Field(default_factory=dict)
+    body_json: Any | None = None
+    raw_body: str | None = None
+    content_type: str | None = None
+
+
+class CapturedResponse(BaseModel):
+    status_code: int | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    body_json: Any | None = None
+    raw_body: str | None = None
+    content_type: str | None = None
+    duration_ms: float | None = None
+    error: str | None = None
+
+
+class CaptureEvent(BaseModel):
+    artifact_type: Literal["capture-event"] = "capture-event"
+    version: int = 1
+    captured_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    source: CaptureSource = "proxy"
+    identity_context: str | None = None
+    request: CapturedRequest
+    response: CapturedResponse | None = None
+
+
+class ObservedRequestExample(BaseModel):
+    path_params: dict[str, Any] = Field(default_factory=dict)
+    query: dict[str, Any] = Field(default_factory=dict)
+    headers: dict[str, str] = Field(default_factory=dict)
+    body_json: Any | None = None
+    raw_body: str | None = None
+    content_type: str | None = None
+    status_code: int | None = None
+    response_json: Any | None = None
+    response_content_type: str | None = None
+    identity_context: str | None = None
 
 
 class ParameterSpec(BaseModel):
@@ -27,7 +73,7 @@ class OperationSpec(BaseModel):
     operation_id: str
     method: str
     path: str
-    protocol: Literal["openapi", "graphql"] = "openapi"
+    protocol: SourceKind = "openapi"
     summary: str | None = None
     tags: list[str] = Field(default_factory=list)
     parameters: list[ParameterSpec] = Field(default_factory=list)
@@ -41,6 +87,10 @@ class OperationSpec(BaseModel):
     graphql_operation_type: Literal["query", "mutation"] | None = None
     graphql_document: str | None = None
     graphql_variables_schema: dict[str, Any] | None = None
+    observed_examples: list[ObservedRequestExample] = Field(default_factory=list)
+    learned_confidence: float | None = None
+    observation_count: int = 0
+    identity_contexts: list[str] = Field(default_factory=list)
 
 
 class PreflightWarning(BaseModel):
@@ -51,9 +101,41 @@ class PreflightWarning(BaseModel):
     path: str | None = None
 
 
+class LearnedBinding(BaseModel):
+    source_name: str
+    source_pointer: str
+    target: LearnedBindingTarget
+    target_name: str
+    confidence: float = 1.0
+
+
+class LearnedWorkflow(BaseModel):
+    id: str
+    name: str
+    producer_operation_id: str
+    consumer_operation_id: str
+    delete_operation_id: str | None = None
+    delete_bindings: list[LearnedBinding] = Field(default_factory=list)
+    bindings: list[LearnedBinding] = Field(default_factory=list)
+    confidence: float = 1.0
+    observation_count: int = 0
+
+
+class LearnedModel(BaseModel):
+    artifact_type: Literal["learned-model"] = "learned-model"
+    version: int = 1
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    source_inputs: list[str] = Field(default_factory=list)
+    operations: list[OperationSpec] = Field(default_factory=list)
+    workflows: list[LearnedWorkflow] = Field(default_factory=list)
+    warnings: list[PreflightWarning] = Field(default_factory=list)
+
+
 class LoadedOperations(BaseModel):
+    source_kind: SourceKind = "openapi"
     operations: list[OperationSpec] = Field(default_factory=list)
     warnings: list[PreflightWarning] = Field(default_factory=list)
+    learned_model: LearnedModel | None = None
 
 
 class AuthProfile(BaseModel):
