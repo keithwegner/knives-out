@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import http.client
 import json
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -9,8 +11,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
-
-import httpx
 
 from knives_out.models import CapturedRequest, CapturedResponse, CaptureEvent
 
@@ -141,6 +141,15 @@ class CaptureRecorder:
             return self._count
 
 
+@dataclass(frozen=True)
+class _ConfiguredTarget:
+    origin: str
+    base_path: str
+    scheme: str
+    host: str
+    port: int
+
+
 def _merge_identity_contexts(*values: str | None) -> str | None:
     unique = sorted({value for value in values if value})
     if not unique:
@@ -166,26 +175,53 @@ def _forwardable_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def _configured_target(target_base_url: str) -> tuple[str, str]:
+def _configured_target(target_base_url: str) -> _ConfiguredTarget:
     parsed = urlsplit(target_base_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
         raise ValueError("target_base_url must include an http(s) scheme and host.")
     origin = f"{parsed.scheme}://{parsed.netloc}"
-    return origin, parsed.path.rstrip("/")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return _ConfiguredTarget(
+        origin=origin,
+        base_path=parsed.path.rstrip("/"),
+        scheme=parsed.scheme,
+        host=parsed.hostname,
+        port=port,
+    )
 
 
-def _forward_target(
-    raw_target: str, *, target_origin: str, target_base_path: str
-) -> tuple[str, str]:
+def _forward_target(raw_target: str, *, configured_target: _ConfiguredTarget) -> tuple[str, str]:
     parsed = urlsplit(raw_target)
     request_path = parsed.path or "/"
-    combined_path = f"{target_base_path}{request_path}" if target_base_path else request_path
+    combined_path = (
+        f"{configured_target.base_path}{request_path}"
+        if configured_target.base_path
+        else request_path
+    )
     if not combined_path.startswith("/"):
         combined_path = f"/{combined_path}"
     relative_target = combined_path
     if parsed.query:
         relative_target = f"{relative_target}?{parsed.query}"
-    return relative_target, f"{target_origin}{relative_target}"
+    return relative_target, f"{configured_target.origin}{relative_target}"
+
+
+def _open_connection(
+    configured_target: _ConfiguredTarget,
+    *,
+    timeout_seconds: float,
+) -> http.client.HTTPConnection:
+    if configured_target.scheme == "https":
+        return http.client.HTTPSConnection(
+            configured_target.host,
+            configured_target.port,
+            timeout=timeout_seconds,
+        )
+    return http.client.HTTPConnection(
+        configured_target.host,
+        configured_target.port,
+        timeout=timeout_seconds,
+    )
 
 
 def serve_capture_proxy(
@@ -198,12 +234,7 @@ def serve_capture_proxy(
     max_events: int | None = None,
 ) -> None:
     recorder = CaptureRecorder(Path(output_path))
-    target_origin, target_base_path = _configured_target(target_base_url)
-    client = httpx.Client(
-        base_url=target_origin,
-        timeout=timeout_seconds,
-        follow_redirects=False,
-    )
+    configured_target = _configured_target(target_base_url)
 
     class ProxyHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -216,14 +247,13 @@ def serve_capture_proxy(
             body = self.rfile.read(content_length) if content_length else b""
             relative_target, target_url = _forward_target(
                 self.path,
-                target_origin=target_origin,
-                target_base_path=target_base_path,
+                configured_target=configured_target,
             )
             request_headers = _normalized_header_mapping(self.headers)
             request_query = {
                 key: value
                 for key, value in parse_qsl(
-                    httpx.URL(target_url).query.decode("utf-8"),
+                    urlsplit(target_url).query,
                     keep_blank_values=True,
                 )
             }
@@ -236,37 +266,45 @@ def serve_capture_proxy(
 
             forwarded_headers = _forwardable_request_headers(request_headers)
             try:
-                response = client.request(
+                connection = _open_connection(
+                    configured_target,
+                    timeout_seconds=timeout_seconds,
+                )
+                started_at = time.monotonic()
+                connection.request(
                     self.command,
                     relative_target,
+                    body=body if body else None,
                     headers=forwarded_headers,
-                    content=body if body else None,
                 )
-                response_headers = _forwardable_response_headers(response.headers)
-                response_content_type = response.headers.get("Content-Type")
+                response = connection.getresponse()
+                response_content = response.read()
+                duration_ms = (time.monotonic() - started_at) * 1000.0
+                response_headers = _forwardable_response_headers(dict(response.getheaders()))
+                response_content_type = response_headers.get("Content-Type")
                 response_body_json, response_raw_body = parse_body(
-                    response.content,
+                    response_content,
                     response_content_type,
                 )
                 if response_body_json is not None:
                     response_body_json = redact_body(response_body_json)
                 sanitized_response_headers, response_identity = redact_headers(response_headers)
 
-                self.send_response(response.status_code)
+                self.send_response(response.status)
                 for name, value in response_headers.items():
                     self.send_header(name, value)
                 self.end_headers()
-                self.wfile.write(response.content)
+                self.wfile.write(response_content)
 
                 captured_response = CapturedResponse(
-                    status_code=response.status_code,
+                    status_code=response.status,
                     headers=sanitized_response_headers,
                     body_json=response_body_json,
                     raw_body=response_raw_body,
                     content_type=response_content_type,
-                    duration_ms=response.elapsed.total_seconds() * 1000.0,
+                    duration_ms=duration_ms,
                 )
-            except httpx.HTTPError as exc:
+            except (OSError, http.client.HTTPException) as exc:
                 self.send_response(502)
                 self.send_header("Content-Type", "application/json")
                 payload = json.dumps({"error": str(exc)}).encode("utf-8")
@@ -281,6 +319,9 @@ def serve_capture_proxy(
                     content_type="application/json",
                 )
                 response_identity = None
+            finally:
+                if "connection" in locals():
+                    connection.close()
 
             event = CaptureEvent(
                 source="proxy",
@@ -329,5 +370,4 @@ def serve_capture_proxy(
     try:
         server.serve_forever()
     finally:
-        client.close()
         server.server_close()
