@@ -1463,6 +1463,7 @@ def test_render_html_report_shows_artifact_index_and_profile_outcomes(tmp_path: 
     assert "<h4>Profile outcomes</h4>" in report
     assert "anonymous (anonymous)" in report
 
+
 def test_render_html_report_shows_auth_summary() -> None:
     results = AttackResults(
         source="unit",
