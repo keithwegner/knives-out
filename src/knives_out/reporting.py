@@ -5,7 +5,7 @@ from collections import Counter
 from html import escape
 from pathlib import Path
 
-from knives_out.models import AttackResults, AuthEvent, ProfileAttackResult
+from knives_out.models import AttackResult, AttackResults, AuthEvent, ProfileAttackResult
 from knives_out.suppressions import SuppressedFinding, SuppressionRule
 from knives_out.verification import (
     ComparedFinding,
@@ -32,8 +32,18 @@ def _finding_table_rows(findings: list[ComparedFinding]) -> list[str]:
     return rows
 
 
-def _finding_group_rows(findings: list[ComparedFinding], *, attribute: str) -> list[str]:
-    counter = Counter(getattr(finding.result, attribute) or "-" for finding in findings)
+def _finding_result(finding: AttackResult | ComparedFinding) -> AttackResult:
+    if isinstance(finding, ComparedFinding):
+        return finding.result
+    return finding
+
+
+def _finding_group_rows(
+    findings: list[AttackResult] | list[ComparedFinding],
+    *,
+    attribute: str,
+) -> list[str]:
+    counter = Counter(getattr(_finding_result(finding), attribute) or "-" for finding in findings)
     rows: list[str] = []
     for group, count in sorted(counter.items()):
         rows.append(f"| {group} | {count} |")
