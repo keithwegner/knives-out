@@ -2,7 +2,7 @@
 
 `knives-out` is designed to fit a normal CI workflow:
 
-1. generate a replayable attack suite from a checked-in OpenAPI or GraphQL schema
+1. generate a replayable attack suite from a checked-in OpenAPI schema, GraphQL schema, or learned model
 2. optionally opt in to workflow generation for stateful coverage
 3. run that suite against a dev or staging deployment
 4. render a Markdown report for review
@@ -49,6 +49,8 @@ For richer checked-in examples, the repo now includes `examples/openapi/storefro
 combines exact tags, path filters, schema constraints, and a producer/consumer workflow chain.
 For GraphQL, the repo includes `examples/graphql/library.graphql`, which demonstrates query and
 mutation variable attacks from SDL input.
+When you have incomplete specs, Shadow Twin can instead learn a replayable `learned-model.json`
+from captured staging traffic and feed that into the same generate/run/report flow.
 
 ## Expected exit behavior
 
@@ -191,6 +193,30 @@ attacks target invalid variables, required-variable removal, and type coercion f
     knives-out generate examples/graphql/library.graphql \
       --graphql-endpoint /graphql \
       --out graphql-attacks.json
+```
+
+## Optional: Shadow Twin learned models
+
+Shadow Twin adds a capture/discover front end for real-behavior API learning when the checked-in
+spec is incomplete or missing workflow detail.
+
+```yaml
+- name: Capture traffic through a local proxy
+  run: |
+    knives-out capture \
+      --target-base-url "${KNIVES_OUT_BASE_URL}" \
+      --out capture.ndjson \
+      --max-events 100
+```
+
+```yaml
+- name: Discover a learned model from captured traffic
+  run: knives-out discover capture.ndjson --out learned-model.json
+```
+
+```yaml
+- name: Generate learned attacks
+  run: knives-out generate learned-model.json --out attacks.json
 ```
 
 ## Optional: tag and path filtering

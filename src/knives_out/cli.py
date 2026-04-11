@@ -17,8 +17,10 @@ from knives_out.auth_config import (
     select_auth_configs,
 )
 from knives_out.auth_plugins import PluginRuntimeError, load_auth_plugins
+from knives_out.capture import serve_capture_proxy
 from knives_out.filtering import filter_attack_suite, filter_operations
 from knives_out.generator import generate_attack_suite
+from knives_out.learned_discovery import discover_learned_model
 from knives_out.models import AttackResults, AuthProfile, PreflightWarning
 from knives_out.profiles import (
     load_auth_profiles,
@@ -216,6 +218,79 @@ def _print_compared_findings(title: str, findings: list[ComparedFinding]) -> Non
 
 
 @app.command()
+def capture(
+    target_base_url: Annotated[
+        str,
+        typer.Option(help="Base URL to proxy captured traffic to."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(help="Where to write captured NDJSON events."),
+    ] = Path("capture.ndjson"),
+    listen_host: Annotated[
+        str,
+        typer.Option(help="Host interface for the local capture proxy."),
+    ] = "127.0.0.1",
+    listen_port: Annotated[
+        int,
+        typer.Option(help="Port for the local capture proxy."),
+    ] = 8080,
+    timeout: Annotated[
+        float,
+        typer.Option(help="Forwarding timeout in seconds."),
+    ] = 30.0,
+    max_events: Annotated[
+        int | None,
+        typer.Option(help="Optional number of captured requests before the proxy exits."),
+    ] = None,
+) -> None:
+    """Run a local reverse proxy and capture redacted HTTP traffic."""
+    console.print(
+        "Shadow Twin capture proxy listening on "
+        f"[bold]http://{listen_host}:{listen_port}[/bold] "
+        f"and forwarding to [bold]{target_base_url}[/bold]."
+    )
+    console.print(f"Writing redacted capture events to [bold]{out}[/bold].")
+    if max_events is None:
+        console.print("Press Ctrl-C to stop capturing.")
+    else:
+        console.print(f"The proxy will stop automatically after {max_events} captured request(s).")
+
+    try:
+        serve_capture_proxy(
+            listen_host=listen_host,
+            listen_port=listen_port,
+            target_base_url=target_base_url,
+            output_path=out,
+            timeout_seconds=timeout,
+            max_events=max_events,
+        )
+    except KeyboardInterrupt:
+        console.print("\nCapture stopped.")
+
+
+@app.command()
+def discover(
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(help="Capture NDJSON or HAR files to learn from."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(help="Where to write the learned-model artifact."),
+    ] = Path("learned-model.json"),
+) -> None:
+    """Discover a replayable learned API model from captured traffic."""
+    learned_model = discover_learned_model(inputs)
+    out.write_text(learned_model.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
+    console.print(
+        f"Wrote learned model with {len(learned_model.operations)} operation(s) and "
+        f"{len(learned_model.workflows)} workflow(s) to [bold]{out}[/bold]."
+    )
+    _print_preflight_warnings(learned_model.warnings)
+
+
+@app.command()
 def inspect(
     spec: Path,
     graphql_endpoint: Annotated[
@@ -239,7 +314,7 @@ def inspect(
         typer.Option(help="Exclude operations for these exact OpenAPI paths. Repeatable."),
     ] = None,
 ) -> None:
-    """Show the operations discovered in an OpenAPI or GraphQL schema."""
+    """Show the operations discovered in an OpenAPI, GraphQL, or learned model."""
     loaded = load_operations_with_warnings(spec, graphql_endpoint=graphql_endpoint)
     operations = filter_operations(
         loaded.operations,
@@ -256,19 +331,31 @@ def inspect(
     table.add_column("Params")
     table.add_column("Body")
     table.add_column("Auth")
+    if loaded.source_kind == "learned":
+        table.add_column("Confidence")
 
     for operation in operations:
-        table.add_row(
+        row = [
             operation.operation_id,
             operation.method,
             operation.path,
             str(len(operation.parameters)),
             "yes" if operation.request_body_schema else "no",
             "yes" if operation.auth_required else "no",
-        )
+        ]
+        if loaded.source_kind == "learned":
+            confidence = (
+                f"{operation.learned_confidence:.2f}"
+                if operation.learned_confidence is not None
+                else "-"
+            )
+            row.append(confidence)
+        table.add_row(*row)
 
     console.print(table)
     console.print(f"\nFound {len(operations)} operations.")
+    if loaded.learned_model is not None:
+        console.print(f"Learned workflows: {len(loaded.learned_model.workflows)}.")
     _print_preflight_warnings(loaded.warnings)
 
 
@@ -349,7 +436,7 @@ def generate(
         typer.Option(help="Load custom workflow packs from local Python module paths. Repeatable."),
     ] = None,
 ) -> None:
-    """Generate a replayable attack suite from an OpenAPI or GraphQL schema.
+    """Generate a replayable attack suite from an OpenAPI, GraphQL, or learned model.
 
     Filters are applied after attack generation and before the suite is written.
     """
@@ -366,6 +453,7 @@ def generate(
         extra_packs=attack_packs,
         auto_workflows=auto_workflows,
         workflow_packs=workflow_packs,
+        learned_model=loaded.learned_model,
     )
     suite = filter_attack_suite(
         suite,

@@ -7,17 +7,20 @@
 
 Project wiki: [GitHub Wiki](https://github.com/keithwegner/knives-out/wiki)
 
-`knives-out` is a CLI for adversarial API testing from OpenAPI specs.
+`knives-out` is a CLI for adversarial API testing from API specs and observed traffic.
 
 It helps developers break their APIs on purpose before someone else does.
 
 ## What it does
 
-Given an OpenAPI or GraphQL schema, `knives-out` can:
+Given an OpenAPI spec, GraphQL schema, or learned traffic model, `knives-out` can:
 
 - inspect the operations in the spec
+- capture redacted HTTP traffic through a local reverse proxy
+- discover a replayable learned API model from `capture.ndjson` or HAR files
 - generate replayable negative test cases
 - generate schema-aware mutation attacks from declared constraints
+- generate learned invariant attacks from observed producer/consumer workflows
 - optionally chain setup requests into replayable workflow attacks
 - generate GraphQL query and mutation attacks from SDL or introspection output
 - load built-in auth configs for common bearer-token and session-cookie flows
@@ -32,7 +35,7 @@ Given an OpenAPI or GraphQL schema, `knives-out` can:
 
 The initial focus is narrow by design:
 
-- OpenAPI and GraphQL input
+- OpenAPI, GraphQL, and learned HTTP input
 - replayable JSON artifacts
 - deterministic attack generation
 - CI-friendly output
@@ -54,6 +57,7 @@ The starter scaffold generates a first wave of useful negative tests:
 - missing auth headers or query credentials when the spec declares security
 - opt-in setup-plus-terminal workflow attacks that reuse extracted response values
 - GraphQL variable type coercion, required-variable removal, and invalid enum values
+- learned missing-setup, stale-reference, and invalid lifecycle reuse attacks
 
 This is not a full fuzzing engine yet. It is a structured attack generator, runner, and CI gate.
 
@@ -69,6 +73,7 @@ That makes the architecture easier to evolve further with:
 
 - custom attack packs
 - deeper stateful workflows
+- Shadow Twin discovery from real traffic
 - LLM application testing
 - richer CI policies
 - protocol expansion beyond OpenAPI REST
@@ -96,6 +101,21 @@ knives-out generate examples/openapi/petstore.yaml --out attacks.json
 knives-out generate examples/openapi/storefront.yaml --tag orders --out attacks.json
 knives-out generate examples/graphql/library.graphql --out graphql-attacks.json
 ```
+
+Learn a model from real traffic:
+
+```bash
+knives-out capture \
+  --target-base-url http://localhost:8000 \
+  --out capture.ndjson
+
+knives-out discover capture.ndjson --out learned-model.json
+knives-out inspect learned-model.json
+knives-out generate learned-model.json --out shadow-attacks.json
+```
+
+The learned model keeps auth material redacted, records confidence-scored workflows, and feeds the
+same replayable attack suite format as spec-driven generation.
 
 If your GraphQL endpoint is not `/graphql`, pass it during inspection or generation:
 
@@ -189,7 +209,7 @@ knives-out triage results.json --out .knives-out-ignore.yml
 `knives-out` works well in CI when you follow the same generate/run/report flow and add a final
 verification step:
 
-1. generate attacks from a checked-in OpenAPI spec
+1. generate attacks from a checked-in OpenAPI spec, GraphQL schema, or learned model
 2. run them against a dev or staging environment
 3. render a Markdown report for review
 4. optionally render an HTML report with linked artifacts
@@ -228,6 +248,8 @@ want to keep only the highest-signal regressions around, follow `verify` with
 workflow, secret setup, filtering patterns, baseline-aware CI flows, and checked-in suppressions.
 GraphQL schemas follow the same `inspect` / `generate` / `run` / `report` / `verify` flow, with
 `generate` automatically emitting variable-coercion attacks from SDL or introspection input.
+Shadow Twin capture and discovery fit the same path too:
+`capture -> discover -> generate -> run -> report -> verify`.
 If you keep a `.knives-out-ignore.yml` file in the repo root, `report`, `verify`, and `promote`
 will load it automatically. Use `knives-out triage results.json` to seed new entries when you want
 to capture known findings without hand-writing YAML. For authorization-focused regression coverage,
@@ -238,7 +260,7 @@ you can also run one suite across `anonymous`, `user`, and `admin` profiles with
 
 ### `inspect`
 
-Shows a summary of operations discovered in an OpenAPI document or GraphQL schema.
+Shows a summary of operations discovered in an OpenAPI document, GraphQL schema, or learned model.
 
 ```bash
 knives-out inspect path/to/openapi.yaml
@@ -251,7 +273,13 @@ knives-out inspect examples/graphql/library.graphql --graphql-endpoint /graphql
 ```
 
 `inspect` surfaces preflight warnings for spec gaps such as missing request schemas, vague
-security declarations, and broken `$ref` pointers.
+security declarations, broken `$ref` pointers, and low-confidence learned inferences.
+
+Learned-model inputs work with the same command:
+
+```bash
+knives-out inspect learned-model.json
+```
 
 You can filter inspection to exact tags or paths:
 
@@ -263,7 +291,7 @@ knives-out inspect examples/openapi/storefront.yaml \
 
 ### `generate`
 
-Builds an `AttackSuite` JSON file from an OpenAPI document or GraphQL schema.
+Builds an `AttackSuite` JSON file from an OpenAPI document, GraphQL schema, or learned model.
 
 ```bash
 knives-out generate path/to/openapi.yaml --out attacks.json
@@ -273,6 +301,12 @@ GraphQL SDL or introspection JSON uses the same command:
 
 ```bash
 knives-out generate examples/graphql/library.graphql --out graphql-attacks.json
+```
+
+Learned-model inputs use the same command too:
+
+```bash
+knives-out generate learned-model.json --out shadow-attacks.json
 ```
 
 `generate` echoes the same preflight warnings as `inspect` because many CI flows skip an explicit
@@ -692,9 +726,10 @@ knives-out run attacks.json \
 
 ## Roadmap
 
-The built-in auth/config milestone is now shipped. The next likely milestone is:
+The built-in auth/config milestone is now shipped, and Shadow Twin learned-model capture is now
+available. The next likely milestone is:
 
-- **v0.10:** deeper GraphQL coverage with response validation, federation awareness, and
+- **v0.11:** deeper GraphQL coverage with response validation, federation awareness, and
   subscription support as staged scope
 
 After that, the likely follow-on is richer CI and report navigation for large regression programs.

@@ -6,6 +6,7 @@ from knives_out.attack_packs import load_module_attack_packs
 from knives_out.auth_config import load_auth_configs
 from knives_out.auth_plugins import load_module_auth_plugins
 from knives_out.generator import generate_attack_suite
+from knives_out.learned_discovery import discover_learned_model
 from knives_out.profiles import load_auth_profiles
 from knives_out.spec_loader import load_operations
 from knives_out.workflow_packs import load_module_workflow_packs
@@ -20,6 +21,7 @@ AUTH_PLUGIN_MODULE = ROOT / "examples" / "auth_plugins" / "login_bearer.py"
 AUTH_PROFILE_FILE = ROOT / "examples" / "auth_profiles" / "anonymous-user-admin.yml"
 AUTH_CONFIG_FILE = ROOT / "examples" / "auth_configs" / "user-admin.yml"
 CLIENT_CREDENTIALS_CONFIG_FILE = ROOT / "examples" / "auth_configs" / "client-credentials.yml"
+SHADOW_TWIN_CAPTURE = ROOT / "examples" / "shadow_twin" / "draft-orders.capture.ndjson"
 
 
 def test_checked_in_openapi_examples_load() -> None:
@@ -90,3 +92,17 @@ def test_checked_in_auth_config_examples_load() -> None:
 
     assert [config.name for config in auth_file.auth] == ["user", "admin"]
     assert client_credentials.auth[0].strategy == "client_credentials"
+
+
+def test_checked_in_shadow_twin_capture_discovers_workflows() -> None:
+    learned_model = discover_learned_model([SHADOW_TWIN_CAPTURE])
+    suite = generate_attack_suite(
+        learned_model.operations,
+        source=str(SHADOW_TWIN_CAPTURE),
+        learned_model=learned_model,
+    )
+
+    assert learned_model.workflows
+    assert any(workflow.delete_operation_id for workflow in learned_model.workflows)
+    assert any(attack.kind == "missing_learned_setup" for attack in suite.attacks)
+    assert any(attack.kind == "stale_resource_reference" for attack in suite.attacks)
