@@ -542,7 +542,7 @@ def test_render_markdown_report_shows_auth_diagnostics() -> None:
                 "phase": "refresh",
                 "success": True,
                 "trigger": "401",
-            }
+            },
         ],
         results=[],
     )
