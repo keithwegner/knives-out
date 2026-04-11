@@ -418,12 +418,7 @@ def _suppressed_finding_row_html(finding: SuppressedFinding) -> str:
 
 
 def _finding_group_row_html(group: str, count: int) -> str:
-    return (
-        "<tr>"
-        f"<td>{escape(group)}</td>"
-        f"<td>{count}</td>"
-        "</tr>"
-    )
+    return f"<tr><td>{escape(group)}</td><td>{count}</td></tr>"
 
 
 def _auth_event_row_html(event: AuthEvent) -> str:
@@ -603,18 +598,24 @@ def render_html_report(
         "</tr>"
         for finding in comparison.current_findings
     ) or ("<tr><td colspan='7' class='muted'>No active flagged findings.</td></tr>")
-    issue_group_rows = "".join(
-        _finding_group_row_html(group, count)
-        for group, count in sorted(
-            Counter(finding.issue or "-" for finding in comparison.current_findings).items()
+    issue_group_rows = (
+        "".join(
+            _finding_group_row_html(group, count)
+            for group, count in sorted(
+                Counter(finding.issue or "-" for finding in comparison.current_findings).items()
+            )
         )
-    ) or "<tr><td colspan='2' class='muted'>No active flagged findings.</td></tr>"
-    kind_group_rows = "".join(
-        _finding_group_row_html(group, count)
-        for group, count in sorted(
-            Counter(finding.kind for finding in comparison.current_findings).items()
+        or "<tr><td colspan='2' class='muted'>No active flagged findings.</td></tr>"
+    )
+    kind_group_rows = (
+        "".join(
+            _finding_group_row_html(group, count)
+            for group, count in sorted(
+                Counter(finding.kind for finding in comparison.current_findings).items()
+            )
         )
-    ) or "<tr><td colspan='2' class='muted'>No active flagged findings.</td></tr>"
+        or "<tr><td colspan='2' class='muted'>No active flagged findings.</td></tr>"
+    )
 
     suppressed_rows = (
         "".join(
