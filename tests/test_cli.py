@@ -948,32 +948,30 @@ def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "knives_out.cli.generate_attack_suite",
-        lambda operations, source, extra_packs=None, auto_workflows=False, workflow_packs=None: (
-            AttackSuite(
-                source=source,
-                attacks=[
-                    AttackCase(
-                        id="atk_get",
-                        name="GET attack",
-                        kind="missing_auth",
-                        operation_id="listPets",
-                        method="GET",
-                        path="/pets",
-                        tags=["pets", "read"],
-                        description="GET attack",
-                    ),
-                    AttackCase(
-                        id="atk_post",
-                        name="POST attack",
-                        kind="missing_request_body",
-                        operation_id="createPet",
-                        method="POST",
-                        path="/pets",
-                        tags=["pets", "write"],
-                        description="POST attack",
-                    ),
-                ],
-            )
+        lambda operations, source, **_: AttackSuite(
+            source=source,
+            attacks=[
+                AttackCase(
+                    id="atk_get",
+                    name="GET attack",
+                    kind="missing_auth",
+                    operation_id="listPets",
+                    method="GET",
+                    path="/pets",
+                    tags=["pets", "read"],
+                    description="GET attack",
+                ),
+                AttackCase(
+                    id="atk_post",
+                    name="POST attack",
+                    kind="missing_request_body",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                    tags=["pets", "write"],
+                    description="POST attack",
+                ),
+            ],
         ),
     )
 
@@ -1003,32 +1001,30 @@ def test_generate_command_filters_attacks_by_tag(tmp_path: Path, monkeypatch) ->
     )
     monkeypatch.setattr(
         "knives_out.cli.generate_attack_suite",
-        lambda operations, source, extra_packs=None, auto_workflows=False, workflow_packs=None: (
-            AttackSuite(
-                source=source,
-                attacks=[
-                    AttackCase(
-                        id="atk_read",
-                        name="Read attack",
-                        kind="missing_auth",
-                        operation_id="listPets",
-                        method="GET",
-                        path="/pets",
-                        tags=["pets", "read"],
-                        description="Read attack",
-                    ),
-                    AttackCase(
-                        id="atk_write",
-                        name="Write attack",
-                        kind="missing_request_body",
-                        operation_id="createPet",
-                        method="POST",
-                        path="/pets",
-                        tags=["pets", "write"],
-                        description="Write attack",
-                    ),
-                ],
-            )
+        lambda operations, source, **_: AttackSuite(
+            source=source,
+            attacks=[
+                AttackCase(
+                    id="atk_read",
+                    name="Read attack",
+                    kind="missing_auth",
+                    operation_id="listPets",
+                    method="GET",
+                    path="/pets",
+                    tags=["pets", "read"],
+                    description="Read attack",
+                ),
+                AttackCase(
+                    id="atk_write",
+                    name="Write attack",
+                    kind="missing_request_body",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                    tags=["pets", "write"],
+                    description="Write attack",
+                ),
+            ],
         ),
     )
 
@@ -1072,11 +1068,9 @@ def test_generate_command_echoes_preflight_warnings(tmp_path: Path, monkeypatch)
     )
     monkeypatch.setattr(
         "knives_out.cli.generate_attack_suite",
-        lambda operations, source, extra_packs=None, auto_workflows=False, workflow_packs=None: (
-            AttackSuite(
-                source=source,
-                attacks=[],
-            )
+        lambda operations, source, **_: AttackSuite(
+            source=source,
+            attacks=[],
         ),
     )
 

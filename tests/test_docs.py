@@ -17,6 +17,8 @@ def test_readme_includes_ci_guidance() -> None:
     assert "actions/workflows/main-maintenance.yml" in readme
     assert "Project wiki:" in readme
     assert "https://github.com/keithwegner/knives-out/wiki" in readme
+    assert "Shadow Twin" in readme
+    assert "observed traffic" in readme
     assert "## CI usage" in readme
     assert ".github/workflows/dev-environment-example.yml" in readme
     assert "KNIVES_OUT_BASE_URL" in readme
@@ -37,13 +39,20 @@ def test_readme_includes_ci_guidance() -> None:
     assert "examples/graphql/library.graphql" in readme
     assert "--graphql-endpoint /api/graphql" in readme
     assert "graphql-attacks.json" in readme
+    assert "knives-out capture" in readme
+    assert "knives-out discover capture.ndjson --out learned-model.json" in readme
+    assert "knives-out generate learned-model.json --out shadow-attacks.json" in readme
+    assert "capture.ndjson" in readme
+    assert "learned-model.json" in readme
+    assert "shadow-attacks.json" in readme
     assert "examples/auth_configs/user-admin.yml" in readme
     assert "examples/auth_configs/client-credentials.yml" in readme
     assert "--auth-config examples/auth_configs/user-admin.yml" in readme
     assert "--auth-profile user" in readme
     assert "examples/workflow_packs/listed_pet_lookup.py" in readme
-    assert "**v0.10:** deeper GraphQL coverage" in readme
-    assert "The built-in auth/config milestone is now shipped." in readme
+    assert "**v0.11:** deeper GraphQL coverage" in readme
+    assert "Shadow Twin learned-model capture is now" in readme
+    assert "available." in readme
 
 
 def test_dev_environment_workflow_matches_current_cli_surface() -> None:
@@ -93,6 +102,11 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "built-in auth config" in ci_doc
     assert "Optional: HTML report and artifact index" in ci_doc
     assert "Optional: GraphQL schemas" in ci_doc
+    assert "Optional: Shadow Twin learned models" in ci_doc
+    assert "learned-model.json" in ci_doc
+    assert "capture.ndjson" in ci_doc
+    assert "knives-out capture" in ci_doc
+    assert "knives-out discover capture.ndjson --out learned-model.json" in ci_doc
     assert "examples/auth_configs/user-admin.yml" in ci_doc
     assert "examples/auth_configs/client-credentials.yml" in ci_doc
     assert "examples/auth_profiles/anonymous-user-admin.yml" in ci_doc
@@ -160,17 +174,24 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "v0.8: GraphQL schema support" in roadmap
     assert "v0.9: built-in auth acquisition and refresh flows" in roadmap
     assert "client_credentials" in roadmap
-    assert "## v0.10 — deeper GraphQL coverage" in roadmap
+    assert "v0.10: Shadow Twin learned-model capture and discovery" in roadmap
+    assert "learned-model artifacts" in roadmap
+    assert "## v0.11 — deeper GraphQL coverage" in roadmap
     assert "subscription coverage" in roadmap
     assert "LLM application and tool-misuse testing" in roadmap
 
+    assert "capture.py" in architecture
+    assert "learned_discovery.py" in architecture
+    assert "learned_loader.py" in architecture
     assert "graphql_loader.py" in architecture
     assert "spec_loader.py" in architecture
     assert "auth_config.py" in architecture
     assert "builtin_auth.py" in architecture
-    assert "GraphQL SDL or introspection JSON" in architecture
+    assert "OpenAPI, GraphQL, or learned traffic in" in architecture
+    assert "learned-model.json" in architecture
     assert "`200` response" in architecture
     assert "`errors`" in architecture
     assert "built-in auth acquisition/refresh" in architecture
+    assert "Shadow Twin inference around state machines" in architecture
     assert "GraphQL response-shape validation, federation awareness" in architecture
     assert "redirect-driven OAuth auth-code flows" in architecture

@@ -191,7 +191,7 @@ def load_graphql_operations_with_warnings(
         *_operation_specs(root=schema.query_type, operation_type="query", endpoint=endpoint),
         *_operation_specs(root=schema.mutation_type, operation_type="mutation", endpoint=endpoint),
     ]
-    return LoadedOperations(operations=operations, warnings=[])
+    return LoadedOperations(source_kind="graphql", operations=operations, warnings=[])
 
 
 def load_graphql_operations(path: str | Path, *, endpoint: str = "/graphql") -> list[OperationSpec]:

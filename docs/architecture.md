@@ -4,7 +4,7 @@
 
 The project starts with a deliberately narrow architecture:
 
-- **OpenAPI in**
+- **OpenAPI, GraphQL, or learned traffic in**
 - **Replayable attack artifacts out**
 - **Deterministic execution**
 - **Simple triage**
@@ -16,11 +16,14 @@ The core idea is that generation, execution, and reporting are separate concerns
 ```text
 src/knives_out/
   cli.py             # Typer entrypoint
+  capture.py         # Reverse-proxy capture and NDJSON helpers
+  learned_discovery.py  # Capture/HAR inference into learned models
+  learned_loader.py  # Learned-model loading
   graphql_loader.py  # GraphQL SDL/introspection parsing
   models.py          # Pydantic models for operations, attacks, results, and profiles
   openapi_loader.py  # OpenAPI parsing and local $ref resolution
-  spec_loader.py     # Schema autodetection for OpenAPI or GraphQL
-  generator.py       # Request and workflow attack generation
+  spec_loader.py     # Input autodetection for OpenAPI, GraphQL, or learned models
+  generator.py       # Request, learned-invariant, and workflow attack generation
   filtering.py       # Tag and path filtering helpers
   runner.py          # HTTP execution, workflows, profiles, and auth runtime
   auth_config.py     # Built-in auth config loading and profile helpers
@@ -37,27 +40,38 @@ src/knives_out/
 
 ## Flow
 
-### 1. Load spec
+### 1. Capture and discover (optional)
 
-`spec_loader.py` autodetects whether the input is OpenAPI or GraphQL. `openapi_loader.py` reads
-YAML/JSON, resolves local `$ref` values, and extracts a simplified list of `OperationSpec`
-objects. `graphql_loader.py` does the same for GraphQL SDL or introspection JSON.
+`capture.py` runs a local reverse proxy that records redacted request/response traffic as
+`capture.ndjson`. `learned_discovery.py` then turns NDJSON or HAR inputs into a canonical
+`learned-model.json` artifact with inferred operations, request/response shapes, auth hints,
+producer/consumer workflows, lifecycle invalidation edges, and confidence-scored warnings.
 
-### 2. Generate suite
+### 2. Load input model
 
-`generator.py` turns each `OperationSpec` into a set of request and workflow attacks. Those cases
-are serialized into a stable JSON artifact.
+`spec_loader.py` autodetects whether the input is OpenAPI, GraphQL, or a learned model.
+`openapi_loader.py` reads YAML/JSON, resolves local `$ref` values, and extracts a simplified list
+of `OperationSpec` objects. `graphql_loader.py` does the same for GraphQL SDL or introspection
+JSON. `learned_loader.py` maps learned-model artifacts onto that same `OperationSpec` surface
+while preserving workflow metadata for learned generation.
+
+### 3. Generate suite
+
+`generator.py` turns each `OperationSpec` into a set of request and workflow attacks. For learned
+models, it also emits missing-setup, stale-reference, and workflow-driven attacks based on observed
+producer/consumer bindings and lifecycle invalidation. Those cases are serialized into a stable
+JSON artifact.
 
 That JSON should become the contract between future generators and future runners.
 
-### 3. Execute suite
+### 4. Execute suite
 
 `runner.py` executes the saved suite against a concrete base URL. Runtime auth, query values,
 profile-specific defaults, built-in auth acquisition/refresh, and workflow state are merged at
 this phase rather than baked into generation. For GraphQL attacks, a `200` response with an `errors`
 array is treated as an expected validation failure instead of an unexpected success.
 
-### 4. Report findings
+### 5. Report findings
 
 `reporting.py` reduces the results into Markdown or HTML. `verification.py`, `promotion.py`, and
 `suppressions.py` then build CI and triage workflows on the same result model, while auth setup
@@ -69,6 +83,7 @@ Today, a result is typically flagged when it produces:
 - a 5xx response
 - an unexpected 2xx/3xx response to a negative test
 - a response-schema mismatch
+- a learned stale-reference or missing-setup path that succeeds unexpectedly
 - a high-signal authorization comparison issue across profiles
 
 ## Why save attacks as JSON?
@@ -82,6 +97,7 @@ It gives the project:
 - stable regression suites
 - compatibility with future custom generators
 - a clean seam for CI
+- a place to land learned models without inventing a parallel runner
 
 ## Expected near-term evolution
 
@@ -89,8 +105,9 @@ The next milestone work should extend the current architecture in two directions
 
 1. stronger GraphQL response-shape validation, federation awareness, and staged subscription
    support on top of the protocol loader
-2. clearer CI and artifact navigation for large regression suites
-3. richer report ergonomics around suppressions, baselines, and auth diagnostics
+2. richer Shadow Twin inference around state machines, confidence review, and ownership-sensitive
+   workflows
+3. clearer CI and artifact navigation for large regression suites
 4. browser-free auth acquisition can keep expanding, but redirect-driven OAuth stays out of scope
 
 ## Things intentionally deferred

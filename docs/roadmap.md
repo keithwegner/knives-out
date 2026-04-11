@@ -21,8 +21,10 @@ guesswork.
 - v0.9: built-in auth acquisition and refresh flows
   - shipped strategies include `static_bearer`, `client_credentials`, `password_json`,
     `login_json_bearer`, and `login_form_cookie`
+- v0.10: Shadow Twin learned-model capture and discovery
+  - ships local reverse-proxy capture, HAR import, learned-model artifacts, and learned workflow attacks
 
-## v0.10 — deeper GraphQL coverage
+## v0.11 — deeper GraphQL coverage
 
 The next likely milestone is a GraphQL-focused expansion on top of the loader and runner we now
 have. The strongest targets are:
@@ -32,7 +34,7 @@ have. The strongest targets are:
 - staged subscription coverage that still fits the current generate/run/report pipeline
 - better protocol-aware reporting for mixed OpenAPI and GraphQL programs
 
-## v0.11 — richer CI and triage ergonomics
+## v0.12 — richer CI and triage ergonomics
 
 After the GraphQL pass, the next best leverage point is day-to-day review ergonomics:
 
