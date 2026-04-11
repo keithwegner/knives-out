@@ -4,11 +4,11 @@ import json
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
-from hashlib import sha1
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urljoin
+from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 
@@ -57,7 +57,7 @@ def _identity_context(secret_values: list[tuple[str, str]]) -> str | None:
     if not secret_values:
         return None
     normalized = "|".join(f"{key}={value}" for key, value in sorted(secret_values))
-    return f"authctx_{sha1(normalized.encode('utf-8')).hexdigest()[:12]}"
+    return f"authctx_{sha256(normalized.encode('utf-8')).hexdigest()[:12]}"
 
 
 def redact_headers(headers: Mapping[str, str]) -> tuple[dict[str, str], str | None]:
@@ -148,7 +148,7 @@ def _merge_identity_contexts(*values: str | None) -> str | None:
     return (
         unique[0]
         if len(unique) == 1
-        else f"authctx_{sha1('|'.join(unique).encode()).hexdigest()[:12]}"
+        else f"authctx_{sha256('|'.join(unique).encode()).hexdigest()[:12]}"
     )
 
 
@@ -166,6 +166,28 @@ def _forwardable_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def _configured_target(target_base_url: str) -> tuple[str, str]:
+    parsed = urlsplit(target_base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("target_base_url must include an http(s) scheme and host.")
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return origin, parsed.path.rstrip("/")
+
+
+def _forward_target(
+    raw_target: str, *, target_origin: str, target_base_path: str
+) -> tuple[str, str]:
+    parsed = urlsplit(raw_target)
+    request_path = parsed.path or "/"
+    combined_path = f"{target_base_path}{request_path}" if target_base_path else request_path
+    if not combined_path.startswith("/"):
+        combined_path = f"/{combined_path}"
+    relative_target = combined_path
+    if parsed.query:
+        relative_target = f"{relative_target}?{parsed.query}"
+    return relative_target, f"{target_origin}{relative_target}"
+
+
 def serve_capture_proxy(
     *,
     listen_host: str,
@@ -176,7 +198,12 @@ def serve_capture_proxy(
     max_events: int | None = None,
 ) -> None:
     recorder = CaptureRecorder(Path(output_path))
-    client = httpx.Client(timeout=timeout_seconds, follow_redirects=False)
+    target_origin, target_base_path = _configured_target(target_base_url)
+    client = httpx.Client(
+        base_url=target_origin,
+        timeout=timeout_seconds,
+        follow_redirects=False,
+    )
 
     class ProxyHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -187,7 +214,11 @@ def serve_capture_proxy(
         def _handle_request(self) -> None:
             content_length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(content_length) if content_length else b""
-            target_url = urljoin(target_base_url.rstrip("/") + "/", self.path.lstrip("/"))
+            relative_target, target_url = _forward_target(
+                self.path,
+                target_origin=target_origin,
+                target_base_path=target_base_path,
+            )
             request_headers = _normalized_header_mapping(self.headers)
             request_query = {
                 key: value
@@ -207,7 +238,7 @@ def serve_capture_proxy(
             try:
                 response = client.request(
                     self.command,
-                    target_url,
+                    relative_target,
                     headers=forwarded_headers,
                     content=body if body else None,
                 )
