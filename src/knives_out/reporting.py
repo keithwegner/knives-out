@@ -84,6 +84,41 @@ def _auth_event_table_rows(events: list[AuthEvent]) -> list[str]:
     return rows
 
 
+def _auth_summary_entries(events: list[AuthEvent]) -> list[dict[str, object]]:
+    grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+    for event in sorted(events, key=_auth_event_sort_key):
+        key = (event.profile or "-", event.name, event.strategy)
+        entry = grouped.setdefault(
+            key,
+            {
+                "profile": event.profile or "-",
+                "name": event.name,
+                "strategy": event.strategy,
+                "acquire": 0,
+                "refresh": 0,
+                "failures": 0,
+                "triggers": set(),
+            },
+        )
+        entry[event.phase] += 1
+        if not event.success:
+            entry["failures"] += 1
+        if event.trigger:
+            entry["triggers"].add(event.trigger)
+    return list(grouped.values())
+
+
+def _auth_summary_table_rows(events: list[AuthEvent]) -> list[str]:
+    rows: list[str] = []
+    for entry in _auth_summary_entries(events):
+        triggers = ", ".join(sorted(entry["triggers"])) or "-"
+        rows.append(
+            f"| {entry['profile']} | {entry['name']} | {entry['strategy']} | "
+            f"{entry['acquire']} | {entry['refresh']} | {entry['failures']} | {triggers} |"
+        )
+    return rows
+
+
 def _workflow_phase(result) -> str:
     if result.type != "workflow":
         return "request"
@@ -159,6 +194,15 @@ def render_markdown_report(
     lines.extend(_suppressed_table_rows(comparison.suppressed_current_findings))
     if not comparison.suppressed_current_findings:
         lines.append("| None | - | - | - | - |")
+
+    lines.append("")
+    lines.append("## Auth summary")
+    lines.append("")
+    lines.append("| Profile | Auth config | Strategy | Acquire | Refresh | Failures | Triggers |")
+    lines.append("| --- | --- | --- | ---: | ---: | ---: | --- |")
+    lines.extend(_auth_summary_table_rows(results.auth_events))
+    if not results.auth_events:
+        lines.append("| None | - | - | - | - | - | - |")
 
     lines.append("")
     lines.append("## Auth diagnostics")
@@ -365,6 +409,21 @@ def _auth_event_row_html(event: AuthEvent) -> str:
     )
 
 
+def _auth_summary_row_html(entry: dict[str, object]) -> str:
+    triggers = ", ".join(sorted(entry["triggers"])) or "-"
+    return (
+        "<tr>"
+        f"<td>{escape(str(entry['profile']))}</td>"
+        f"<td>{escape(str(entry['name']))}</td>"
+        f"<td>{escape(str(entry['strategy']))}</td>"
+        f"<td>{escape(str(entry['acquire']))}</td>"
+        f"<td>{escape(str(entry['refresh']))}</td>"
+        f"<td>{escape(str(entry['failures']))}</td>"
+        f"<td>{escape(triggers)}</td>"
+        "</tr>"
+    )
+
+
 def _result_card_html(result, *, artifact_root: Path | None) -> str:
     status = str(result.status_code) if result.status_code is not None else "-"
     issue = result.issue or "ok"
@@ -475,12 +534,14 @@ def render_html_report(
         else []
     )
     issue_counter = Counter(result.issue or "ok" for result in results.results)
+    refresh_attempts = sum(1 for event in results.auth_events if event.phase == "refresh")
 
     summary_cards = [
         ("Total results", str(len(results.results))),
         ("Active flagged", str(len(comparison.current_findings))),
         ("Suppressed", str(len(comparison.suppressed_current_findings))),
         ("Auth failures", str(sum(1 for event in results.auth_events if not event.success))),
+        ("Refresh attempts", str(refresh_attempts)),
         (
             "Profiles",
             str(len(results.profiles)) if results.profiles else "single",
@@ -521,6 +582,11 @@ def render_html_report(
             for event in sorted(results.auth_events, key=_auth_event_sort_key)
         )
         or "<tr><td colspan='8' class='muted'>No auth diagnostics recorded.</td></tr>"
+    )
+    auth_summary_entries = _auth_summary_entries(results.auth_events)
+    auth_summary_rows = (
+        "".join(_auth_summary_row_html(entry) for entry in auth_summary_entries)
+        or "<tr><td colspan='7' class='muted'>No auth summary recorded.</td></tr>"
     )
 
     outcome_rows = "".join(
@@ -766,6 +832,19 @@ def render_html_report(
         <table>
           <thead><tr><th>Attack</th><th>Issue</th><th>Reason</th><th>Owner</th><th>Expires</th></tr></thead>
           <tbody>{suppressed_rows}</tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Auth summary</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Profile</th><th>Auth config</th><th>Strategy</th><th>Acquire</th>
+              <th>Refresh</th><th>Failures</th><th>Triggers</th>
+            </tr>
+          </thead>
+          <tbody>{auth_summary_rows}</tbody>
         </table>
       </section>
 
