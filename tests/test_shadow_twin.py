@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from textwrap import dedent
@@ -40,6 +41,17 @@ def _write_capture_ndjson(path: Path, events: list[CaptureEvent]) -> None:
         "\n".join(event.model_dump_json(exclude_none=True) for event in events) + "\n",
         encoding="utf-8",
     )
+
+
+def _wait_for_port(port: int, *, timeout_seconds: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        with socket.socket() as sock:
+            sock.settimeout(0.2)
+            if sock.connect_ex(("127.0.0.1", port)) == 0:
+                return
+        time.sleep(0.05)
+    raise AssertionError(f"Timed out waiting for port {port} to accept connections.")
 
 
 def _workflow_capture_events() -> list[CaptureEvent]:
@@ -220,6 +232,7 @@ def test_capture_proxy_records_redacted_events(tmp_path: Path) -> None:
         daemon=True,
     )
     proxy_thread.start()
+    _wait_for_port(proxy_port)
 
     response = httpx.post(
         f"http://127.0.0.1:{proxy_port}/draft-orders?api_key=shadow-secret",

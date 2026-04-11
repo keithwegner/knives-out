@@ -168,17 +168,21 @@ def load_capture_inputs(paths: list[str | Path]) -> list[CaptureEvent]:
     events: list[CaptureEvent] = []
     for raw_path in paths:
         path = Path(raw_path)
-        if path.suffix.lower() == ".har":
+        suffix = path.suffix.lower()
+        if suffix == ".har":
             events.extend(_load_har_entries(path))
             continue
+        if suffix == ".ndjson":
+            events.extend(read_capture_events(path))
+            continue
 
-        text = path.read_text(encoding="utf-8")
-        stripped = text.lstrip()
-        if stripped.startswith("{"):
+        if suffix == ".json":
+            text = path.read_text(encoding="utf-8")
             payload = json.loads(text)
             if isinstance(payload, dict) and payload.get("log", {}).get("entries") is not None:
                 events.extend(_load_har_entries(path))
                 continue
+
         events.extend(read_capture_events(path))
     return events
 
