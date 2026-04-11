@@ -253,7 +253,15 @@ def _template_segments(prepared_events: list[_PreparedEvent]) -> tuple[str, ...]
     for index in range(segment_count):
         values = {event.path_segments[index] for event in prepared_events}
         if len(values) == 1:
-            template.append(next(iter(values)))
+            value = next(iter(values))
+            if index > 0 and _looks_identifierish(value):
+                previous_literal = next(
+                    (segment for segment in reversed(template) if not segment.startswith("{")),
+                    None,
+                )
+                template.append(f"{{{_path_param_name(previous_literal, index, used_names)}}}")
+            else:
+                template.append(value)
             continue
         if _looks_variable_segment(values):
             previous_literal = next(
@@ -335,7 +343,10 @@ def _extract_path_params(
     for template, actual in zip(template_segments, event.path_segments, strict=True):
         match = _PATH_PARAM_RE.fullmatch(template)
         if match:
-            params[match.group(1)] = actual
+            if actual.isdigit():
+                params[match.group(1)] = int(actual)
+            else:
+                params[match.group(1)] = actual
     return params
 
 
