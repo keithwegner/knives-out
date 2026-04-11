@@ -535,6 +535,13 @@ def test_render_markdown_report_shows_auth_diagnostics() -> None:
                 "trigger": "suite",
                 "endpoint": "/oauth/token",
                 "error": "invalid client credentials",
+            },
+            {
+                "name": "user",
+                "strategy": "client_credentials",
+                "phase": "refresh",
+                "success": True,
+                "trigger": "401",
             }
         ],
         results=[],
@@ -542,6 +549,8 @@ def test_render_markdown_report_shows_auth_diagnostics() -> None:
 
     report = render_markdown_report(results)
 
+    assert "## Auth summary" in report
+    assert "| - | user | client_credentials | 1 | 1 | 1 | 401, suite |" in report
     assert "## Auth diagnostics" in report
     assert "client_credentials" in report
     assert "invalid client credentials" in report
@@ -1447,3 +1456,40 @@ def test_render_html_report_shows_artifact_index_and_profile_outcomes(tmp_path: 
     assert "wf_lookup-step-01.json" in report
     assert "<h4>Profile outcomes</h4>" in report
     assert "anonymous (anonymous)" in report
+
+
+def test_render_html_report_shows_auth_summary() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        auth_events=[
+            {
+                "profile": "admin",
+                "name": "service",
+                "strategy": "client_credentials",
+                "phase": "acquire",
+                "success": False,
+                "trigger": "suite",
+                "error": "bad secret",
+            },
+            {
+                "profile": "admin",
+                "name": "service",
+                "strategy": "client_credentials",
+                "phase": "refresh",
+                "success": True,
+                "trigger": "401",
+            },
+        ],
+        results=[],
+    )
+
+    report = render_html_report(results)
+
+    assert "<h2>Auth summary</h2>" in report
+    assert "<td>admin</td>" in report
+    assert "<td>service</td>" in report
+    assert "<td>client_credentials</td>" in report
+    assert "<td>1</td>" in report
+    assert "Refresh attempts" in report
+    assert "401, suite" in report
