@@ -416,7 +416,8 @@ knives-out report results.json --out report.md
 ```
 
 You can include a prior `results.json` as a baseline to add regression sections for new, resolved,
-and persisting findings:
+and persisting findings. Persisting entries also show whether severity, confidence, status, or
+schema outcome drifted since the baseline:
 
 ```bash
 knives-out report results.json --baseline previous-results.json --out report.md

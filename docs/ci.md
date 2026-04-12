@@ -330,7 +330,8 @@ per-profile outcome tables for deeper authorization review.
 
 ## Optional: baseline-aware report
 
-You can also render a Markdown report that highlights new, resolved, and persisting findings:
+You can also render a Markdown report that highlights new, resolved, and persisting findings,
+including delta notes when a persisting finding changed severity, confidence, status, or schema:
 
 ```yaml
 - name: Render baseline-aware report

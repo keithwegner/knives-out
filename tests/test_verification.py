@@ -63,6 +63,32 @@ def test_compare_attack_results_classifies_new_resolved_and_persisting_findings(
     assert [finding.attack_id for finding in comparison.persisting_findings] == ["atk_shared"]
 
 
+def test_compare_attack_results_exposes_persisting_deltas() -> None:
+    current = _results(
+        _finding("atk_shared", issue="server_error", severity="high", confidence="high"),
+    )
+    baseline = _results(
+        _finding("atk_shared", issue="server_error", severity="medium", confidence="low"),
+    )
+    current.results[0].status_code = 500
+    baseline.results[0].status_code = 401
+
+    comparison = compare_attack_results(current, baseline)
+
+    assert len(comparison.persisting_findings) == 1
+    finding = comparison.persisting_findings[0]
+    assert finding.has_delta is True
+    assert finding.delta_fragments == [
+        "severity medium -> high",
+        "confidence low -> high",
+        "status 401 -> 500",
+    ]
+    assert (
+        finding.delta_summary
+        == "severity medium -> high; confidence low -> high; status 401 -> 500"
+    )
+
+
 def test_compare_attack_results_ignores_non_flagged_results() -> None:
     current = _results(
         _finding("atk_flagged", issue="server_error", severity="high", confidence="high"),
