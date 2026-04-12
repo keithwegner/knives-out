@@ -165,3 +165,29 @@ def test_filter_attack_suite_matches_workflow_tags_and_paths() -> None:
     )
 
     assert [attack.id for attack in filtered.attacks] == ["wf_post_auth"]
+
+
+def test_filter_attack_suite_applies_exclude_filters() -> None:
+    filtered = filter_attack_suite(
+        _suite(),
+        exclude_operations=["createpet"],
+        exclude_methods=["get"],
+        exclude_paths=["/pets"],
+    )
+
+    assert filtered.attacks == []
+
+
+def test_filter_attack_suite_applies_include_kind_filter() -> None:
+    filtered = filter_attack_suite(_suite(), include_kinds=["missing_auth"])
+
+    assert [attack.id for attack in filtered.attacks] == [
+        "atk_get_missing",
+        "atk_post_auth",
+    ]
+
+
+def test_filter_attack_suite_excludes_matching_tags() -> None:
+    filtered = filter_attack_suite(_suite(), exclude_tags=["write"])
+
+    assert [attack.id for attack in filtered.attacks] == ["atk_get_missing"]
