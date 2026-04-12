@@ -66,6 +66,27 @@ def test_load_graphql_operations_from_sdl(tmp_path) -> None:
         "properties": {"id": {"type": "string"}},
         "required": ["id"],
     }
+    assert book.response_schemas["200"].content_type == "application/json"
+    assert book.response_schemas["200"].schema_def == {
+        "type": "object",
+        "properties": {
+            "data": {
+                "type": "object",
+                "properties": {
+                    "book": {
+                        "type": "object",
+                        "properties": {
+                            "__typename": {"type": "string", "const": "Book"},
+                        },
+                        "required": ["__typename"],
+                        "nullable": True,
+                    }
+                },
+                "required": ["book"],
+            }
+        },
+        "required": ["data"],
+    }
 
     create_book = operations[-1]
     assert create_book.graphql_operation_type == "mutation"
@@ -83,6 +104,25 @@ def test_load_graphql_operations_from_sdl(tmp_path) -> None:
             }
         },
         "required": ["input"],
+    }
+    assert create_book.response_schemas["200"].schema_def == {
+        "type": "object",
+        "properties": {
+            "data": {
+                "type": "object",
+                "properties": {
+                    "createBook": {
+                        "type": "object",
+                        "properties": {
+                            "__typename": {"type": "string", "const": "Book"},
+                        },
+                        "required": ["__typename"],
+                    }
+                },
+                "required": ["createBook"],
+            }
+        },
+        "required": ["data"],
     }
 
 

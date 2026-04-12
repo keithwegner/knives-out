@@ -466,6 +466,12 @@ def _validate_response_schema(
     attack: AttackCase,
     response: httpx.Response,
 ) -> tuple[str | None, bool | None, str | None]:
+    if (
+        "graphql_error" in {expected.strip().lower() for expected in attack.expected_outcomes}
+        and _response_has_graphql_errors(response)
+    ):
+        return None, None, None
+
     matched_status, response_spec = _matched_response_schema(attack, response.status_code)
     if response_spec is None:
         return None, None, None

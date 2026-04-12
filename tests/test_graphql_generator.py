@@ -30,5 +30,24 @@ def test_generate_graphql_attack_suite_emits_variable_mutations() -> None:
     )
     assert wrong_type_attack.path == "/graphql"
     assert wrong_type_attack.expected_outcomes == ["graphql_error", "4xx"]
+    assert wrong_type_attack.response_schemas["200"].schema_def == {
+        "type": "object",
+        "properties": {
+            "data": {
+                "type": "object",
+                "properties": {
+                    "createBook": {
+                        "type": "object",
+                        "properties": {
+                            "__typename": {"type": "string", "const": "Book"},
+                        },
+                        "required": ["__typename"],
+                    }
+                },
+                "required": ["createBook"],
+            }
+        },
+        "required": ["data"],
+    }
     assert wrong_type_attack.body_json["query"].startswith("mutation CreateBook")
     assert "variables" in wrong_type_attack.body_json

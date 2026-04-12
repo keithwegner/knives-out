@@ -19,7 +19,7 @@ from graphql import (
     get_named_type,
 )
 
-from knives_out.models import LoadedOperations, OperationSpec, ParameterSpec
+from knives_out.models import LoadedOperations, OperationSpec, ParameterSpec, ResponseSpec
 
 
 def _load_graphql_schema(path: str | Path) -> GraphQLSchema:
@@ -79,6 +79,77 @@ def _json_schema_for_input_type(type_: Any) -> tuple[dict[str, Any], bool]:
     return {"type": "string"}, False
 
 
+def _nullable_schema(schema: dict[str, Any], *, nullable: bool) -> dict[str, Any]:
+    if not nullable:
+        return schema
+    return {**schema, "nullable": True}
+
+
+def _json_schema_for_output_type(type_: Any) -> dict[str, Any]:
+    if isinstance(type_, GraphQLNonNull):
+        schema = dict(_json_schema_for_output_type(type_.of_type))
+        schema.pop("nullable", None)
+        return schema
+
+    named_type = get_named_type(type_)
+    nullable = not isinstance(type_, GraphQLNonNull)
+
+    if isinstance(type_, GraphQLList):
+        item_schema = _json_schema_for_output_type(type_.of_type)
+        return _nullable_schema({"type": "array", "items": item_schema}, nullable=nullable)
+
+    if isinstance(named_type, GraphQLScalarType):
+        scalar_name = named_type.name
+        if scalar_name == "Int":
+            return _nullable_schema({"type": "integer"}, nullable=nullable)
+        if scalar_name == "Float":
+            return _nullable_schema({"type": "number"}, nullable=nullable)
+        if scalar_name == "Boolean":
+            return _nullable_schema({"type": "boolean"}, nullable=nullable)
+        return _nullable_schema({"type": "string"}, nullable=nullable)
+
+    if isinstance(named_type, GraphQLEnumType):
+        return _nullable_schema(
+            {"type": "string", "enum": list(named_type.values)},
+            nullable=nullable,
+        )
+
+    if isinstance(named_type, GraphQLObjectType):
+        return _nullable_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "__typename": {
+                        "type": "string",
+                        "const": named_type.name,
+                    }
+                },
+                "required": ["__typename"],
+            },
+            nullable=nullable,
+        )
+
+    if isinstance(named_type, (GraphQLInterfaceType, GraphQLUnionType)):
+        possible_types = [
+            possible.name for possible in named_type.schema.get_possible_types(named_type)
+        ]
+        typename_schema: dict[str, Any] = {"type": "string"}
+        if possible_types:
+            typename_schema["enum"] = possible_types
+        return _nullable_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "__typename": typename_schema,
+                },
+                "required": ["__typename"],
+            },
+            nullable=nullable,
+        )
+
+    return _nullable_schema({"type": "string"}, nullable=nullable)
+
+
 def _selection_set_for_output_type(type_: Any) -> str:
     named_type = get_named_type(type_)
     if isinstance(named_type, (GraphQLObjectType, GraphQLInterfaceType, GraphQLUnionType)):
@@ -135,6 +206,22 @@ def _request_body_schema(document: str, variables_schema: dict[str, Any]) -> dic
     return schema
 
 
+def _response_schema(field_name: str, field: Any) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "data": {
+                "type": "object",
+                "properties": {
+                    field_name: _json_schema_for_output_type(field.type),
+                },
+                "required": [field_name],
+            }
+        },
+        "required": ["data"],
+    }
+
+
 def _operation_specs(
     *,
     root: GraphQLObjectType | None,
@@ -172,6 +259,12 @@ def _operation_specs(
                 request_body_required=True,
                 request_body_schema=_request_body_schema(document, variables_schema),
                 request_body_content_type="application/json",
+                response_schemas={
+                    "200": ResponseSpec(
+                        content_type="application/json",
+                        schema_def=_response_schema(field_name, field),
+                    )
+                },
                 graphql_operation_type=operation_type,
                 graphql_document=document,
                 graphql_variables_schema=variables_schema,
