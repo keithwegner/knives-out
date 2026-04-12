@@ -7,9 +7,12 @@ import pytest
 from knives_out.models import AttackResult
 from knives_out.suppressions import (
     SuppressionRule,
+    SuppressionsFile,
+    load_suppressions,
     merge_suppressions,
     suppression_identity,
     triage_rule_for_result,
+    write_suppressions,
 )
 
 
@@ -67,3 +70,53 @@ def test_merge_suppressions_deduplicates_generated_entries() -> None:
 
     assert len(merged) == 1
     assert suppression_identity(merged[0]) == suppression_identity(rule)
+
+
+@pytest.mark.parametrize(
+    ("rule_kwargs", "expected"),
+    [
+        ({"issue": "unexpected_success"}, False),
+        ({"operation_id": "listWidgets"}, False),
+        ({"method": "GET"}, False),
+        ({"path": "/other"}, False),
+        ({"kind": "missing_auth"}, False),
+        ({"tags": ["admin"]}, False),
+        ({"method": "post", "issue": "server_error"}, True),
+    ],
+)
+def test_suppression_rule_matches_all_supported_selectors(
+    rule_kwargs: dict[str, object],
+    expected: bool,
+) -> None:
+    rule = SuppressionRule(reason="known issue", owner="api-team", **rule_kwargs)
+
+    assert rule.matches(_result()) is expected
+
+
+def test_load_suppressions_rejects_non_mapping_documents(tmp_path) -> None:
+    path = tmp_path / "suppressions.yml"
+    path.write_text("- invalid\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="top-level mapping"):
+        load_suppressions(path)
+
+
+def test_load_suppressions_wraps_validation_errors(tmp_path) -> None:
+    path = tmp_path / "suppressions.yml"
+    path.write_text(
+        "suppressions:\n  - reason: missing selector\n    owner: api-team\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="at least one matching selector"):
+        load_suppressions(path)
+
+
+def test_write_suppressions_round_trips_rules(tmp_path) -> None:
+    path = tmp_path / "suppressions.yml"
+    expected = triage_rule_for_result(_result())
+
+    write_suppressions(path, SuppressionsFile(suppressions=[expected]))
+    loaded = load_suppressions(path)
+
+    assert loaded.suppressions[0].attack_id == expected.attack_id

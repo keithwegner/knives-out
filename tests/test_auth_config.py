@@ -87,3 +87,85 @@ def test_load_auth_configs_validates_required_strategy_fields(tmp_path: Path) ->
 
     with pytest.raises(ValueError, match="static_bearer auth requires 'token'"):
         load_auth_configs(config_path)
+
+
+def test_load_auth_configs_rejects_conflicting_request_payload_shapes(tmp_path: Path) -> None:
+    config_path = tmp_path / "auth.yml"
+    config_path.write_text(
+        "auth:\n"
+        "  - name: broken\n"
+        "    strategy: client_credentials\n"
+        "    endpoint: /oauth/token\n"
+        "    token_pointer: /access_token\n"
+        "    request_json:\n"
+        "      grant_type: client_credentials\n"
+        "    request_form:\n"
+        "      grant_type: client_credentials\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Use only one of 'request_json' or 'request_form'"):
+        load_auth_configs(config_path)
+
+
+def test_load_auth_configs_requires_endpoint_and_token_pointer_for_token_flows(
+    tmp_path: Path,
+) -> None:
+    endpoint_path = tmp_path / "missing-endpoint.yml"
+    endpoint_path.write_text(
+        "auth:\n"
+        "  - name: broken\n"
+        "    strategy: client_credentials\n"
+        "    token_pointer: /access_token\n",
+        encoding="utf-8",
+    )
+    token_pointer_path = tmp_path / "missing-token-pointer.yml"
+    token_pointer_path.write_text(
+        "auth:\n  - name: broken\n    strategy: client_credentials\n    endpoint: /oauth/token\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="client_credentials auth requires 'endpoint'"):
+        load_auth_configs(endpoint_path)
+    with pytest.raises(ValueError, match="client_credentials auth requires 'token_pointer'"):
+        load_auth_configs(token_pointer_path)
+
+
+def test_load_auth_configs_rejects_non_mapping_documents(tmp_path: Path) -> None:
+    config_path = tmp_path / "auth.yml"
+    config_path.write_text("- just\n- a\n- list\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="top-level mapping"):
+        load_auth_configs(config_path)
+
+
+def test_load_auth_configs_rejects_duplicate_names_case_insensitively(tmp_path: Path) -> None:
+    config_path = tmp_path / "auth.yml"
+    config_path.write_text(
+        "auth:\n"
+        "  - name: User\n"
+        "    strategy: static_bearer\n"
+        "    token: user-token\n"
+        "  - name: user\n"
+        "    strategy: static_bearer\n"
+        "    token: other-token\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Duplicate auth config name 'user'"):
+        load_auth_configs(config_path)
+
+
+def test_select_auth_configs_reports_missing_names(tmp_path: Path) -> None:
+    config_path = tmp_path / "auth.yml"
+    config_path.write_text(
+        "auth:\n"
+        "  - name: user\n"
+        "    strategy: static_bearer\n"
+        "    token: user-token\n",
+        encoding="utf-8",
+    )
+    auth_file = load_auth_configs(config_path)
+
+    with pytest.raises(ValueError, match="Unknown auth config name\\(s\\): admin"):
+        select_auth_configs(auth_file, include_names=["admin"])
