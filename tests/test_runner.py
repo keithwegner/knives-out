@@ -1316,6 +1316,34 @@ def test_execute_attack_suite_treats_graphql_errors_as_expected_failures(monkeyp
                         "variables": {"id": 123},
                     },
                     expected_outcomes=["graphql_error", "4xx"],
+                    response_schemas={
+                        "200": {
+                            "content_type": "application/json",
+                            "schema_def": {
+                                "type": "object",
+                                "properties": {
+                                    "data": {
+                                        "type": "object",
+                                        "properties": {
+                                            "book": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "__typename": {
+                                                        "type": "string",
+                                                        "const": "Book",
+                                                    }
+                                                },
+                                                "required": ["__typename"],
+                                                "nullable": True,
+                                            }
+                                        },
+                                        "required": ["book"],
+                                    }
+                                },
+                                "required": ["data"],
+                            },
+                        }
+                    },
                 )
             ],
         ),
@@ -1326,6 +1354,8 @@ def test_execute_attack_suite_treats_graphql_errors_as_expected_failures(monkeyp
     assert result.flagged is False
     assert result.issue is None
     assert result.status_code == 200
+    assert result.response_schema_status is None
+    assert result.response_schema_valid is None
 
 
 def test_execute_attack_suite_flags_graphql_success_without_errors(monkeypatch) -> None:
@@ -1360,6 +1390,71 @@ def test_execute_attack_suite_flags_graphql_success_without_errors(monkeypatch) 
     result = results.results[0]
     assert result.flagged is True
     assert result.issue == "unexpected_success"
+
+
+def test_execute_attack_suite_flags_graphql_response_shape_mismatch(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(200, json={"data": {"book": {"id": "book-1"}}}),
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                AttackCase(
+                    id="atk_graphql_shape",
+                    name="Wrong-type GraphQL variable",
+                    kind="wrong_type_variable",
+                    operation_id="book",
+                    method="POST",
+                    path="/graphql",
+                    description="Wrong type for GraphQL variable.",
+                    body_json={
+                        "query": "query Book($id: ID!) { book(id: $id) { __typename } }",
+                        "variables": {"id": 123},
+                    },
+                    expected_outcomes=["graphql_error", "4xx"],
+                    response_schemas={
+                        "200": {
+                            "content_type": "application/json",
+                            "schema_def": {
+                                "type": "object",
+                                "properties": {
+                                    "data": {
+                                        "type": "object",
+                                        "properties": {
+                                            "book": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "__typename": {
+                                                        "type": "string",
+                                                        "const": "Book",
+                                                    }
+                                                },
+                                                "required": ["__typename"],
+                                                "nullable": True,
+                                            }
+                                        },
+                                        "required": ["book"],
+                                    }
+                                },
+                                "required": ["data"],
+                            },
+                        }
+                    },
+                )
+            ],
+        ),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "response_schema_mismatch"
+    assert result.response_schema_status == "200"
+    assert result.response_schema_valid is False
+    assert result.response_schema_error == "$.data.book: missing required property '__typename'"
 
 
 def test_render_markdown_report_shows_workflow_sections() -> None:
