@@ -51,6 +51,38 @@ class ComparedFinding:
             raise ValueError("ComparedFinding requires a flagged result with an issue.")
         return issue
 
+    @property
+    def delta_fragments(self) -> list[str]:
+        if self.current is None or self.baseline is None:
+            return []
+
+        fragments: list[str] = []
+        if self.baseline.severity != self.current.severity:
+            fragments.append(f"severity {self.baseline.severity} -> {self.current.severity}")
+        if self.baseline.confidence != self.current.confidence:
+            fragments.append(f"confidence {self.baseline.confidence} -> {self.current.confidence}")
+        if self.baseline.status_code != self.current.status_code:
+            previous_status = (
+                str(self.baseline.status_code) if self.baseline.status_code is not None else "-"
+            )
+            current_status = (
+                str(self.current.status_code) if self.current.status_code is not None else "-"
+            )
+            fragments.append(f"status {previous_status} -> {current_status}")
+        if self.baseline.response_schema_valid != self.current.response_schema_valid:
+            previous_schema = "mismatch" if self.baseline.response_schema_valid is False else "ok"
+            current_schema = "mismatch" if self.current.response_schema_valid is False else "ok"
+            fragments.append(f"schema {previous_schema} -> {current_schema}")
+        return fragments
+
+    @property
+    def has_delta(self) -> bool:
+        return bool(self.delta_fragments)
+
+    @property
+    def delta_summary(self) -> str:
+        return "; ".join(self.delta_fragments) or "unchanged"
+
 
 @dataclass(frozen=True)
 class ResultComparison:

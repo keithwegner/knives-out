@@ -486,6 +486,52 @@ def test_render_markdown_report_with_baseline_shows_regression_sections() -> Non
     assert "Persisting mismatch" in report
 
 
+def test_render_markdown_report_shows_persisting_deltas() -> None:
+    current = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ],
+    )
+    baseline = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=401,
+                flagged=True,
+                issue="server_error",
+                severity="medium",
+                confidence="low",
+            )
+        ],
+    )
+
+    report = render_markdown_report(current, baseline=baseline)
+
+    assert "Persisting findings with delta: **1**" in report
+    assert "severity medium -> high; confidence low -> high; status 401 -> 500" in report
+
+
 def test_render_markdown_report_shows_suppressed_findings() -> None:
     results = AttackResults(
         source="unit",
@@ -1557,6 +1603,53 @@ def test_render_html_report_shows_artifact_index_and_profile_outcomes(tmp_path: 
     assert "wf_lookup-step-01.json" in report
     assert "<h4>Profile outcomes</h4>" in report
     assert "anonymous (anonymous)" in report
+
+
+def test_render_html_report_shows_persisting_deltas() -> None:
+    current = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ],
+    )
+    baseline = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=401,
+                flagged=True,
+                issue="server_error",
+                severity="medium",
+                confidence="low",
+            )
+        ],
+    )
+
+    report = render_html_report(current, baseline=baseline)
+
+    assert "Persisting with delta" in report
+    assert "<h2>Persisting findings</h2>" in report
+    assert "severity medium -&gt; high; confidence low -&gt; high; status 401 -&gt; 500" in report
 
 
 def test_render_html_report_shows_auth_summary() -> None:

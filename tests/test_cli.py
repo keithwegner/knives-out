@@ -248,10 +248,10 @@ def test_report_command_supports_baseline(tmp_path: Path) -> None:
                 name="Persisting mismatch",
                 method="POST",
                 url="https://example.com/pets",
-                status_code=200,
+                status_code=500,
                 flagged=True,
                 issue="response_schema_mismatch",
-                severity="medium",
+                severity="high",
                 confidence="high",
             ),
         ),
@@ -266,11 +266,11 @@ def test_report_command_supports_baseline(tmp_path: Path) -> None:
                 name="Persisting mismatch",
                 method="POST",
                 url="https://example.com/pets",
-                status_code=200,
+                status_code=401,
                 flagged=True,
                 issue="response_schema_mismatch",
                 severity="medium",
-                confidence="high",
+                confidence="low",
             ),
             AttackResult(
                 attack_id="atk_old",
@@ -306,6 +306,8 @@ def test_report_command_supports_baseline(tmp_path: Path) -> None:
     assert "## New findings" in report
     assert "## Resolved findings" in report
     assert "## Persisting findings" in report
+    assert "Persisting findings with delta: **1**" in report
+    assert "severity medium -> high; confidence low -> high; status 401 -> 500" in report
 
 
 def test_report_command_supports_html_and_artifact_links(tmp_path: Path) -> None:
