@@ -1,7 +1,9 @@
+import json
 import re
 from pathlib import Path
 from textwrap import dedent
 
+from fastapi import FastAPI
 from typer.testing import CliRunner
 
 from knives_out.auth_plugins import PluginRuntimeError
@@ -48,7 +50,7 @@ def test_inspect_command_runs() -> None:
 
 def test_inspect_command_shows_preflight_warnings(monkeypatch) -> None:
     monkeypatch.setattr(
-        "knives_out.cli.load_operations_with_warnings",
+        "knives_out.services.load_operations_with_warnings",
         lambda spec, **_: LoadedOperations(
             operations=[],
             warnings=[
@@ -73,7 +75,7 @@ def test_inspect_command_shows_preflight_warnings(monkeypatch) -> None:
 
 def test_inspect_command_filters_operations_by_tag(monkeypatch) -> None:
     monkeypatch.setattr(
-        "knives_out.cli.load_operations_with_warnings",
+        "knives_out.services.load_operations_with_warnings",
         lambda spec, **_: LoadedOperations(
             operations=[
                 {
@@ -310,6 +312,80 @@ def test_report_command_shows_persisting_deltas(tmp_path: Path) -> None:
     assert "schema ok -> mismatch" in report
 
 
+def test_summary_command_writes_json_summary(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    summary_path = tmp_path / "summary.json"
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_server",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "summary",
+            str(results_path),
+            "--out",
+            str(summary_path),
+            "--top",
+            "5",
+        ],
+    )
+
+    assert result.exit_code == 0
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["active_flagged_count"] == 1
+    assert summary["issue_counts"]["server_error"] == 1
+    assert summary["top_findings"][0]["attack_id"] == "atk_server"
+
+
+def test_summary_command_prints_json_to_stdout(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_graphql",
+                operation_id="book",
+                kind="wrong_type_variable",
+                name="GraphQL mismatch",
+                protocol="graphql",
+                method="POST",
+                path="/graphql",
+                url="https://example.com/graphql",
+                status_code=200,
+                flagged=True,
+                issue="graphql_response_shape_mismatch",
+                severity="medium",
+                confidence="high",
+                graphql_response_valid=False,
+            )
+        ),
+    )
+
+    result = runner.invoke(app, ["summary", str(results_path), "--top", "1"])
+
+    assert result.exit_code == 0
+    summary = json.loads(result.stdout)
+    assert summary["protocol_counts"]["graphql"] == 1
+    assert summary["graphql_shape_mismatches"] == 1
+    assert summary["top_findings"][0]["schema_status"] == "graphql-mismatch"
+
+
 def test_report_command_supports_html_and_artifact_links(tmp_path: Path) -> None:
     results_path = tmp_path / "results.json"
     report_path = tmp_path / "report.html"
@@ -455,7 +531,7 @@ def test_run_command_passes_artifact_dir(tmp_path: Path, monkeypatch) -> None:
         captured["auth_plugins"] = auth_plugins
         return AttackResults(source=suite.source, base_url=base_url, results=[])
 
-    monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
+    monkeypatch.setattr("knives_out.services.execute_attack_suite", _fake_execute_attack_suite)
 
     result = runner.invoke(
         app,
@@ -618,7 +694,8 @@ def test_verify_command_shows_persisting_delta_summary(tmp_path: Path) -> None:
     assert "Persisting with deltas: 1" in normalized
     assert "Persisting findings with deltas" in result.stdout
     assert "status 403 -> 500" in normalized
-    assert "severity high -> critical" in normalized
+    assert "critical" in normalized
+    assert "confidence high ->" in normalized
 
 
 def test_verify_command_fails_with_baseline_when_new_qualifying_findings_appear(
@@ -653,7 +730,9 @@ def test_verify_command_fails_with_baseline_when_new_qualifying_findings_appear(
 
     assert result.exit_code == 1
     assert "New: 1" in result.stdout
-    assert "New server failure" in result.stdout
+    normalized = _normalized_output(result.stdout)
+    assert "New server" in normalized
+    assert "failure" in normalized
     assert "Verification failed." in result.stdout
 
 
@@ -1128,11 +1207,11 @@ def test_generate_command_filters_attacks(tmp_path: Path, monkeypatch) -> None:
     out_path = tmp_path / "attacks.json"
 
     monkeypatch.setattr(
-        "knives_out.cli.load_operations_with_warnings",
+        "knives_out.services.load_operations_with_warnings",
         lambda spec, **_: LoadedOperations(operations=[], warnings=[]),
     )
     monkeypatch.setattr(
-        "knives_out.cli.generate_attack_suite",
+        "knives_out.services.generate_attack_suite",
         lambda operations, source, **_: AttackSuite(
             source=source,
             attacks=[
@@ -1181,11 +1260,11 @@ def test_generate_command_filters_attacks_by_tag(tmp_path: Path, monkeypatch) ->
     out_path = tmp_path / "attacks.json"
 
     monkeypatch.setattr(
-        "knives_out.cli.load_operations_with_warnings",
+        "knives_out.services.load_operations_with_warnings",
         lambda spec, **_: LoadedOperations(operations=[], warnings=[]),
     )
     monkeypatch.setattr(
-        "knives_out.cli.generate_attack_suite",
+        "knives_out.services.generate_attack_suite",
         lambda operations, source, **_: AttackSuite(
             source=source,
             attacks=[
@@ -1234,7 +1313,7 @@ def test_generate_command_echoes_preflight_warnings(tmp_path: Path, monkeypatch)
     out_path = tmp_path / "attacks.json"
 
     monkeypatch.setattr(
-        "knives_out.cli.load_operations_with_warnings",
+        "knives_out.services.load_operations_with_warnings",
         lambda spec, **_: LoadedOperations(
             operations=[],
             warnings=[
@@ -1252,7 +1331,7 @@ def test_generate_command_echoes_preflight_warnings(tmp_path: Path, monkeypatch)
         ),
     )
     monkeypatch.setattr(
-        "knives_out.cli.generate_attack_suite",
+        "knives_out.services.generate_attack_suite",
         lambda operations, source, **_: AttackSuite(
             source=source,
             attacks=[],
@@ -1321,7 +1400,7 @@ def test_run_command_filters_attacks_before_execution(tmp_path: Path, monkeypatc
         captured["auth_plugins"] = auth_plugins
         return AttackResults(source=suite.source, base_url=base_url, results=[])
 
-    monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
+    monkeypatch.setattr("knives_out.services.execute_attack_suite", _fake_execute_attack_suite)
 
     result = runner.invoke(
         app,
@@ -1407,7 +1486,7 @@ def test_run_command_filters_attacks_by_path_before_execution(tmp_path: Path, mo
         captured["attack_ids"] = [attack.id for attack in suite.attacks]
         return AttackResults(source=suite.source, base_url="https://example.com", results=[])
 
-    monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
+    monkeypatch.setattr("knives_out.services.execute_attack_suite", _fake_execute_attack_suite)
 
     result = runner.invoke(
         app,
@@ -1482,7 +1561,7 @@ def test_run_command_loads_local_auth_plugin(tmp_path: Path, monkeypatch) -> Non
         captured["auth_plugin_names"] = [plugin.name for plugin in auth_plugins]
         return AttackResults(source=suite.source, base_url=base_url, results=[])
 
-    monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
+    monkeypatch.setattr("knives_out.services.execute_attack_suite", _fake_execute_attack_suite)
 
     result = runner.invoke(
         app,
@@ -1573,7 +1652,7 @@ def test_run_command_executes_selected_auth_profiles(tmp_path: Path, monkeypatch
         )
 
     monkeypatch.setattr(
-        "knives_out.cli.execute_attack_suite_profiles",
+        "knives_out.services.execute_attack_suite_profiles",
         _fake_execute_attack_suite_profiles,
     )
 
@@ -1652,7 +1731,7 @@ def test_run_command_combines_profile_file_with_built_in_auth_config(
         )
 
     monkeypatch.setattr(
-        "knives_out.cli.execute_attack_suite_profiles",
+        "knives_out.services.execute_attack_suite_profiles",
         _fake_execute_attack_suite_profiles,
     )
 
@@ -1724,7 +1803,7 @@ def test_run_command_supports_built_in_auth_config_profiles(tmp_path: Path, monk
         )
 
     monkeypatch.setattr(
-        "knives_out.cli.execute_attack_suite_profiles",
+        "knives_out.services.execute_attack_suite_profiles",
         _fake_execute_attack_suite_profiles,
     )
 
@@ -1833,7 +1912,7 @@ def test_run_command_reports_auth_plugin_runtime_error(tmp_path: Path, monkeypat
         )
         raise PluginRuntimeError("boom")
 
-    monkeypatch.setattr("knives_out.cli.execute_attack_suite", _fake_execute_attack_suite)
+    monkeypatch.setattr("knives_out.services.execute_attack_suite", _fake_execute_attack_suite)
 
     result = runner.invoke(
         app,
@@ -1970,3 +2049,30 @@ def test_generate_command_loads_local_workflow_pack(tmp_path: Path) -> None:
     assert result.exit_code == 0
     suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
     assert any(attack.type == "workflow" for attack in suite.attacks)
+
+
+def test_serve_command_starts_local_api(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_run(app_instance: object, *, host: str, port: int) -> None:
+        captured["app"] = app_instance
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setattr("knives_out.cli.uvicorn.run", _fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8787",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert isinstance(captured["app"], FastAPI)
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 8787

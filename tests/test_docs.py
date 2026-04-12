@@ -27,7 +27,16 @@ def test_readme_includes_ci_guidance() -> None:
     assert "status, severity, confidence, or schema outcome drifted" in readme
     assert "knives-out promote results.json" in readme
     assert "knives-out triage results.json" in readme
+    assert "knives-out summary results.json --out summary.json" in readme
+    assert "summary.json" in readme
     assert ".knives-out-ignore.yml" in readme
+    assert "## Local API" in readme
+    assert "knives-out serve --host 127.0.0.1 --port 8787" in readme
+    assert "KNIVES_OUT_API_DATA_DIR" in readme
+    assert "POST /v1/inspect" in readme
+    assert "POST /v1/summary" in readme
+    assert "POST /v1/runs" in readme
+    assert "GET /v1/jobs/{id}/artifacts" in readme
     assert "--profile-file examples/auth_profiles/anonymous-user-admin.yml" in readme
     assert "anonymous_access" in readme
     assert "--auto-workflows" in readme
@@ -117,6 +126,13 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "--baseline previous-results.json" in ci_doc
     assert "status, severity, confidence, or schema outcome changed" in ci_doc
     assert "Persisting deltas" in ci_doc
+    assert "Optional: local HTTP API" in ci_doc
+    assert "knives-out serve --host 127.0.0.1 --port 8787" in ci_doc
+    assert "POST /v1/inspect" in ci_doc
+    assert "POST /v1/summary" in ci_doc
+    assert "POST /v1/runs" in ci_doc
+    assert "KNIVES_OUT_API_DATA_DIR" in ci_doc
+    assert "knives-out summary results.json --out summary.json" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc
     assert "--tag orders" in ci_doc
     assert "--path /draft-orders/{draftId}" in ci_doc
@@ -179,14 +195,16 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "client_credentials" in roadmap
     assert "v0.10: Shadow Twin learned-model capture and discovery" in roadmap
     assert "learned-model artifacts" in roadmap
-    assert "## v0.11 — deeper GraphQL coverage" in roadmap
-    assert "subscription coverage" in roadmap
     assert "LLM application and tool-misuse testing" in roadmap
 
     assert "capture.py" in architecture
+    assert "api.py" in architecture
+    assert "api_models.py" in architecture
+    assert "api_store.py" in architecture
     assert "learned_discovery.py" in architecture
     assert "learned_loader.py" in architecture
     assert "graphql_loader.py" in architecture
+    assert "services.py" in architecture
     assert "spec_loader.py" in architecture
     assert "auth_config.py" in architecture
     assert "builtin_auth.py" in architecture
@@ -197,4 +215,13 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "built-in auth acquisition/refresh" in architecture
     assert "Shadow Twin inference around state machines" in architecture
     assert "GraphQL response-shape validation, federation awareness" in architecture
+    assert "CLI and the HTTP API now sit on top of `services.py`" in architecture
+    assert "FastAPI surface" in architecture
     assert "redirect-driven OAuth auth-code flows" in architecture
+
+    assert "v0.11: deeper GraphQL coverage" in roadmap
+    assert "response-shape validation, federation-aware diagnostics" in roadmap
+    assert "## v0.12 — local-first HTTP API" in roadmap
+    assert "FastAPI server that mirrors the current CLI surface" in roadmap
+    assert "background run jobs with polling and artifact retrieval" in roadmap
+    assert "## v0.13 — richer CI and triage ergonomics" in roadmap

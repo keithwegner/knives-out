@@ -32,6 +32,7 @@ from knives_out.models import (
     AttackSuite,
     AuthProfile,
     ConfidenceLevel,
+    GraphQLOutputShape,
     ProfileAttackResult,
     ResponseSpec,
     SeverityLevel,
@@ -46,6 +47,7 @@ ISSUE_SCORES: dict[str, tuple[SeverityLevel, ConfidenceLevel]] = {
     "server_error": ("high", "high"),
     "unexpected_success": ("high", "medium"),
     "response_schema_mismatch": ("medium", "high"),
+    "graphql_response_shape_mismatch": ("medium", "high"),
     "anonymous_access": ("high", "high"),
     "authorization_inversion": ("high", "medium"),
 }
@@ -159,6 +161,185 @@ def _response_matches_expected(
         expected.strip().lower() == "graphql_error" and _response_has_graphql_errors(response)
         for expected in expected_outcomes
     )
+
+
+def _graphql_scalar_matches(type_name: str, value: Any) -> bool:
+    if type_name in {"String", "ID"}:
+        return isinstance(value, str)
+    if type_name == "Int":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if type_name == "Float":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if type_name == "Boolean":
+        return isinstance(value, bool)
+    return True
+
+
+def _graphql_federation_hint(
+    attack: AttackCase,
+    shape: GraphQLOutputShape | None = None,
+) -> str | None:
+    if not attack.graphql_federated:
+        return None
+    if shape is not None and shape.federation_hint:
+        return shape.federation_hint
+    if attack.graphql_entity_types:
+        entity_types = ", ".join(sorted(attack.graphql_entity_types))
+        return (
+            "Schema appears federated; mismatches may reflect entity resolution or "
+            f"subgraph field ownership for {entity_types}."
+        )
+    return (
+        "Schema appears federated; mismatches around abstract or nested object selections may "
+        "reflect subgraph composition or entity resolution issues."
+    )
+
+
+def _validate_graphql_output_value(
+    value: Any,
+    shape: GraphQLOutputShape,
+    *,
+    path: str,
+) -> str | None:
+    if value is None:
+        if shape.nullable:
+            return None
+        return f"{path}: expected non-null {shape.type_name}, got null"
+
+    if shape.kind == "scalar":
+        if _graphql_scalar_matches(shape.type_name, value):
+            return None
+        return f"{path}: expected {shape.type_name}, got {_describe_value_type(value)}"
+
+    if shape.kind == "enum":
+        if isinstance(value, str):
+            return None
+        return (
+            f"{path}: expected enum string for {shape.type_name}, "
+            f"got {_describe_value_type(value)}"
+        )
+
+    if shape.kind == "list":
+        if not isinstance(value, list):
+            return f"{path}: expected list, got {_describe_value_type(value)}"
+        if shape.item_shape is None:
+            return None
+        for index, item in enumerate(value):
+            mismatch = _validate_graphql_output_value(
+                item,
+                shape.item_shape,
+                path=f"{path}[{index}]",
+            )
+            if mismatch:
+                return mismatch
+        return None
+
+    if shape.kind == "object":
+        if not isinstance(value, dict):
+            return f"{path}: expected object, got {_describe_value_type(value)}"
+        for field_name, field_shape in shape.fields.items():
+            if field_name not in value:
+                return f"{path}: missing selected field '{field_name}'"
+            mismatch = _validate_graphql_output_value(
+                value[field_name],
+                field_shape,
+                path=f"{path}.{field_name}",
+            )
+            if mismatch:
+                return mismatch
+        return None
+
+    if shape.kind in {"interface", "union"}:
+        if not isinstance(value, dict):
+            return f"{path}: expected object, got {_describe_value_type(value)}"
+        typename = value.get("__typename")
+        if not isinstance(typename, str):
+            return f"{path}.__typename: expected string, got {_describe_value_type(typename)}"
+        runtime_shape = shape.possible_types.get(typename)
+        if runtime_shape is None:
+            return (
+                f"{path}.__typename: expected one of {sorted(shape.possible_types)!r}, got "
+                f"{typename!r}"
+            )
+        return _validate_graphql_output_value(value, runtime_shape, path=path)
+
+    return None
+
+
+def _validate_graphql_response_shape(
+    attack: AttackCase,
+    response: httpx.Response,
+) -> tuple[bool | None, str | None, str | None]:
+    if attack.protocol != "graphql":
+        return None, None, None
+    if attack.graphql_output_shape is None or attack.graphql_root_field_name is None:
+        return None, None, None
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        return (
+            False,
+            f"GraphQL response body is not valid JSON: {exc}",
+            _graphql_federation_hint(attack),
+        )
+
+    if not isinstance(payload, dict):
+        return (
+            False,
+            "GraphQL response must be a JSON object.",
+            _graphql_federation_hint(attack),
+        )
+
+    errors_present = "errors" in payload
+    if errors_present and not isinstance(payload["errors"], list):
+        return (
+            False,
+            "GraphQL response field 'errors' must be a list when present.",
+            _graphql_federation_hint(attack),
+        )
+
+    if "data" not in payload:
+        if errors_present:
+            return None, None, None
+        return (
+            False,
+            "GraphQL response did not include 'data' or 'errors'.",
+            _graphql_federation_hint(attack),
+        )
+
+    data = payload["data"]
+    if data is None:
+        if errors_present:
+            return None, None, None
+        return (
+            False,
+            "GraphQL response included null 'data' without errors.",
+            _graphql_federation_hint(attack),
+        )
+    if not isinstance(data, dict):
+        return (
+            False,
+            f"$.data: expected object, got {_describe_value_type(data)}",
+            _graphql_federation_hint(attack),
+        )
+
+    root_field_name = attack.graphql_root_field_name
+    if root_field_name not in data:
+        return (
+            False,
+            f"$.data: missing selected field '{root_field_name}'",
+            _graphql_federation_hint(attack, attack.graphql_output_shape),
+        )
+
+    mismatch = _validate_graphql_output_value(
+        data[root_field_name],
+        attack.graphql_output_shape,
+        path=f"$.data.{root_field_name}",
+    )
+    if mismatch:
+        return False, mismatch, _graphql_federation_hint(attack, attack.graphql_output_shape)
+    return True, None, None
 
 
 def evaluate_result(
@@ -759,16 +940,28 @@ def _request_result(
     response_schema_status: str | None = None
     response_schema_valid: bool | None = None
     response_schema_error: str | None = None
+    graphql_response_valid: bool | None = None
+    graphql_response_error: str | None = None
+    graphql_response_hint: str | None = None
     if execution.response is not None:
         (
             response_schema_status,
             response_schema_valid,
             response_schema_error,
         ) = _validate_response_schema(attack, execution.response)
+        (
+            graphql_response_valid,
+            graphql_response_error,
+            graphql_response_hint,
+        ) = _validate_graphql_response_shape(attack, execution.response)
     if response_schema_valid is False:
         flagged = True
         if issue in {None, "unexpected_success"}:
             issue = "response_schema_mismatch"
+    if graphql_response_valid is False:
+        flagged = True
+        if issue in {None, "unexpected_success"}:
+            issue = "graphql_response_shape_mismatch"
     severity, confidence = score_result(flagged=flagged, issue=issue)
 
     return AttackResult(
@@ -777,6 +970,7 @@ def _request_result(
         operation_id=attack.operation_id,
         kind=attack.kind,
         name=attack.name,
+        protocol=attack.protocol,
         method=attack.method,
         path=attack.path,
         tags=list(attack.tags),
@@ -794,6 +988,9 @@ def _request_result(
         response_schema_status=response_schema_status,
         response_schema_valid=response_schema_valid,
         response_schema_error=response_schema_error,
+        graphql_response_valid=graphql_response_valid,
+        graphql_response_error=graphql_response_error,
+        graphql_response_hint=graphql_response_hint,
         workflow_steps=workflow_steps,
     )
 
@@ -852,6 +1049,7 @@ def _workflow_failure_result(
         operation_id=workflow.operation_id,
         kind=workflow.kind,
         name=workflow.name,
+        protocol=workflow.protocol,
         method=workflow.method,
         path=workflow.path,
         tags=list(workflow.tags),
@@ -883,6 +1081,7 @@ def _attack_result_sort_key(result: AttackResult) -> tuple[int, int, str, str]:
 
 def _profile_attack_result(profile: AuthProfile, result: AttackResult) -> ProfileAttackResult:
     return ProfileAttackResult(
+        protocol=result.protocol,
         profile=profile.name,
         level=profile.level,
         anonymous=profile.anonymous,
@@ -898,6 +1097,9 @@ def _profile_attack_result(profile: AuthProfile, result: AttackResult) -> Profil
         response_schema_status=result.response_schema_status,
         response_schema_valid=result.response_schema_valid,
         response_schema_error=result.response_schema_error,
+        graphql_response_valid=result.graphql_response_valid,
+        graphql_response_error=result.graphql_response_error,
+        graphql_response_hint=result.graphql_response_hint,
         workflow_steps=result.workflow_steps,
     )
 

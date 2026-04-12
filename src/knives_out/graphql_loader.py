@@ -6,6 +6,7 @@ from typing import Any
 
 from graphql import (
     GraphQLEnumType,
+    GraphQLField,
     GraphQLInputObjectType,
     GraphQLInterfaceType,
     GraphQLList,
@@ -14,12 +15,18 @@ from graphql import (
     GraphQLScalarType,
     GraphQLSchema,
     GraphQLUnionType,
+    Undefined,
     build_client_schema,
     build_schema,
     get_named_type,
 )
 
-from knives_out.models import LoadedOperations, OperationSpec, ParameterSpec
+from knives_out.models import (
+    GraphQLOutputShape,
+    LoadedOperations,
+    OperationSpec,
+    ParameterSpec,
+)
 
 
 def _load_graphql_schema(path: str | Path) -> GraphQLSchema:
@@ -79,11 +86,205 @@ def _json_schema_for_input_type(type_: Any) -> tuple[dict[str, Any], bool]:
     return {"type": "string"}, False
 
 
-def _selection_set_for_output_type(type_: Any) -> str:
-    named_type = get_named_type(type_)
-    if isinstance(named_type, (GraphQLObjectType, GraphQLInterfaceType, GraphQLUnionType)):
-        return "{ __typename }"
-    return ""
+def _required_argument(argument: Any) -> bool:
+    return isinstance(argument.type, GraphQLNonNull) and argument.default_value is Undefined
+
+
+def _selectable_field(field: GraphQLField) -> bool:
+    return not any(_required_argument(argument) for argument in field.args.values())
+
+
+def _federated_entity_type(type_: Any) -> bool:
+    directives = getattr(getattr(type_, "ast_node", None), "directives", None) or []
+    return any(getattr(directive.name, "value", None) == "key" for directive in directives)
+
+
+def _graphql_shape(
+    type_: Any,
+    *,
+    schema: GraphQLSchema,
+    depth: int = 0,
+    seen: tuple[str, ...] = (),
+    federated_schema: bool = False,
+) -> tuple[GraphQLOutputShape, str]:
+    nullable = not isinstance(type_, GraphQLNonNull)
+    inner_type = type_.of_type if isinstance(type_, GraphQLNonNull) else type_
+
+    if isinstance(inner_type, GraphQLList):
+        item_shape, item_selection = _graphql_shape(
+            inner_type.of_type,
+            schema=schema,
+            depth=depth,
+            seen=seen,
+            federated_schema=federated_schema,
+        )
+        return (
+            GraphQLOutputShape(
+                kind="list",
+                type_name=str(get_named_type(inner_type)),
+                nullable=nullable,
+                item_shape=item_shape,
+                federation_hint=(
+                    "Selection crosses a federated list boundary."
+                    if federated_schema and item_shape.kind in {"object", "interface", "union"}
+                    else None
+                ),
+            ),
+            item_selection,
+        )
+
+    named_type = get_named_type(inner_type)
+    if isinstance(named_type, GraphQLScalarType):
+        return (
+            GraphQLOutputShape(
+                kind="scalar",
+                type_name=named_type.name,
+                nullable=nullable,
+            ),
+            "",
+        )
+
+    if isinstance(named_type, GraphQLEnumType):
+        return (
+            GraphQLOutputShape(
+                kind="enum",
+                type_name=named_type.name,
+                nullable=nullable,
+            ),
+            "",
+        )
+
+    if isinstance(named_type, GraphQLObjectType):
+        type_name = named_type.name
+        if type_name in seen or depth >= 3:
+            fields = {
+                "__typename": GraphQLOutputShape(
+                    kind="scalar",
+                    type_name="String",
+                    nullable=False,
+                )
+            }
+            return (
+                GraphQLOutputShape(
+                    kind="object",
+                    type_name=type_name,
+                    nullable=nullable,
+                    fields=fields,
+                    federated_entity=federated_schema and _federated_entity_type(named_type),
+                    federation_hint=(
+                        f"Type '{type_name}' is revisited inside a federated schema."
+                        if federated_schema
+                        else None
+                    ),
+                ),
+                "{ __typename }",
+            )
+
+        fields: dict[str, GraphQLOutputShape] = {
+            "__typename": GraphQLOutputShape(
+                kind="scalar",
+                type_name="String",
+                nullable=False,
+            )
+        }
+        selections = ["__typename"]
+        for field_name, field in named_type.fields.items():
+            if field_name.startswith("__") or not _selectable_field(field):
+                continue
+            field_shape, field_selection = _graphql_shape(
+                field.type,
+                schema=schema,
+                depth=depth + 1,
+                seen=(*seen, type_name),
+                federated_schema=federated_schema,
+            )
+            fields[field_name] = field_shape
+            if field_selection:
+                selections.append(f"{field_name} {field_selection}")
+            else:
+                selections.append(field_name)
+        return (
+            GraphQLOutputShape(
+                kind="object",
+                type_name=type_name,
+                nullable=nullable,
+                fields=fields,
+                federated_entity=federated_schema and _federated_entity_type(named_type),
+                federation_hint=(
+                    f"Type '{type_name}' may resolve across federated entity boundaries."
+                    if federated_schema and _federated_entity_type(named_type)
+                    else None
+                ),
+            ),
+            "{ " + " ".join(selections) + " }",
+        )
+
+    if isinstance(named_type, GraphQLInterfaceType):
+        possible_types: dict[str, GraphQLOutputShape] = {}
+        fragments: list[str] = ["__typename"]
+        for possible_type in schema.get_possible_types(named_type):
+            possible_shape, possible_selection = _graphql_shape(
+                possible_type,
+                schema=schema,
+                depth=depth + 1,
+                seen=(*seen, named_type.name),
+                federated_schema=federated_schema,
+            )
+            possible_types[possible_type.name] = possible_shape
+            fragments.append(f"... on {possible_type.name} {possible_selection}")
+        return (
+            GraphQLOutputShape(
+                kind="interface",
+                type_name=named_type.name,
+                nullable=nullable,
+                possible_types=possible_types,
+                federation_hint=(
+                    f"Interface '{named_type.name}' spans possible runtime types "
+                    "in a federated schema."
+                    if federated_schema
+                    else None
+                ),
+            ),
+            "{ " + " ".join(fragments) + " }",
+        )
+
+    if isinstance(named_type, GraphQLUnionType):
+        possible_types = {}
+        fragments = ["__typename"]
+        for possible_type in named_type.types:
+            possible_shape, possible_selection = _graphql_shape(
+                possible_type,
+                schema=schema,
+                depth=depth + 1,
+                seen=(*seen, named_type.name),
+                federated_schema=federated_schema,
+            )
+            possible_types[possible_type.name] = possible_shape
+            fragments.append(f"... on {possible_type.name} {possible_selection}")
+        return (
+            GraphQLOutputShape(
+                kind="union",
+                type_name=named_type.name,
+                nullable=nullable,
+                possible_types=possible_types,
+                federation_hint=(
+                    f"Union '{named_type.name}' crosses runtime type boundaries "
+                    "in a federated schema."
+                    if federated_schema
+                    else None
+                ),
+            ),
+            "{ " + " ".join(fragments) + " }",
+        )
+
+    return (
+        GraphQLOutputShape(
+            kind="scalar",
+            type_name=str(named_type),
+            nullable=nullable,
+        ),
+        "",
+    )
 
 
 def _graphql_document(
@@ -91,6 +292,8 @@ def _graphql_document(
     operation_type: str,
     field_name: str,
     field: Any,
+    schema: GraphQLSchema,
+    federated_schema: bool,
 ) -> str:
     variable_definitions: list[str] = []
     argument_bindings: list[str] = []
@@ -101,9 +304,18 @@ def _graphql_document(
     operation_name = field_name[:1].upper() + field_name[1:]
     definitions = f"({', '.join(variable_definitions)})" if variable_definitions else ""
     bindings = f"({', '.join(argument_bindings)})" if argument_bindings else ""
-    selection_set = _selection_set_for_output_type(field.type)
+    _, selection_set = _graphql_shape(
+        field.type,
+        schema=schema,
+        federated_schema=federated_schema,
+    )
     selection = f" {selection_set}" if selection_set else ""
     return f"{operation_type} {operation_name}{definitions} {{ {field_name}{bindings}{selection} }}"
+
+
+def _graphql_schema_is_federated(schema: GraphQLSchema) -> bool:
+    query_fields = schema.query_type.fields if schema.query_type is not None else {}
+    return "_service" in query_fields or "_entities" in query_fields or "_Entity" in schema.type_map
 
 
 def _variables_schema(field: Any) -> dict[str, Any]:
@@ -137,6 +349,7 @@ def _request_body_schema(document: str, variables_schema: dict[str, Any]) -> dic
 
 def _operation_specs(
     *,
+    schema: GraphQLSchema,
     root: GraphQLObjectType | None,
     operation_type: str,
     endpoint: str,
@@ -144,14 +357,29 @@ def _operation_specs(
     if root is None:
         return []
 
+    federated_schema = _graphql_schema_is_federated(schema)
     operations: list[OperationSpec] = []
     for field_name, field in root.fields.items():
         variables_schema = _variables_schema(field)
+        output_shape, _ = _graphql_shape(
+            field.type,
+            schema=schema,
+            federated_schema=federated_schema,
+        )
         document = _graphql_document(
             operation_type=operation_type,
             field_name=field_name,
             field=field,
+            schema=schema,
+            federated_schema=federated_schema,
         )
+        entity_types = sorted(
+            type_name
+            for type_name, shape in output_shape.possible_types.items()
+            if shape.federated_entity
+        )
+        if output_shape.federated_entity:
+            entity_types.append(output_shape.type_name)
         operations.append(
             OperationSpec(
                 operation_id=field_name,
@@ -175,6 +403,10 @@ def _operation_specs(
                 graphql_operation_type=operation_type,
                 graphql_document=document,
                 graphql_variables_schema=variables_schema,
+                graphql_root_field_name=field_name,
+                graphql_output_shape=output_shape,
+                graphql_federated=federated_schema,
+                graphql_entity_types=sorted(set(entity_types)),
             )
         )
 
@@ -188,8 +420,18 @@ def load_graphql_operations_with_warnings(
 ) -> LoadedOperations:
     schema = _load_graphql_schema(path)
     operations = [
-        *_operation_specs(root=schema.query_type, operation_type="query", endpoint=endpoint),
-        *_operation_specs(root=schema.mutation_type, operation_type="mutation", endpoint=endpoint),
+        *_operation_specs(
+            schema=schema,
+            root=schema.query_type,
+            operation_type="query",
+            endpoint=endpoint,
+        ),
+        *_operation_specs(
+            schema=schema,
+            root=schema.mutation_type,
+            operation_type="mutation",
+            endpoint=endpoint,
+        ),
     ]
     return LoadedOperations(source_kind="graphql", operations=operations, warnings=[])
 
