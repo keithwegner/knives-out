@@ -217,6 +217,33 @@ def _print_compared_findings(title: str, findings: list[ComparedFinding]) -> Non
     console.print(table)
 
 
+def _print_persisting_delta_findings(findings: list[ComparedFinding]) -> None:
+    delta_findings = [
+        finding for finding in findings if finding.delta is not None and finding.delta.changed
+    ]
+    if not delta_findings:
+        return
+
+    table = Table(title="Persisting findings with deltas")
+    table.add_column("Attack")
+    table.add_column("Issue")
+    table.add_column("Changes")
+
+    for finding in delta_findings:
+        changes = ", ".join(
+            f"{change.field} {change.baseline} -> {change.current}"
+            for change in (finding.delta.changes if finding.delta is not None else [])
+        )
+        table.add_row(
+            finding.result.name,
+            finding.result.issue or "-",
+            changes,
+        )
+
+    console.print("")
+    console.print(table)
+
+
 @app.command()
 def capture(
     target_base_url: Annotated[
@@ -771,17 +798,24 @@ def verify(
     )
     _print_suppression_summary(suppressions_path, suppression_rules)
     if verification.baseline_used:
+        persisting_deltas = [
+            finding
+            for finding in comparison.persisting_findings
+            if finding.delta is not None and finding.delta.changed
+        ]
         console.print(
             "Compared current findings against a baseline. "
             f"New: {len(comparison.new_findings)}, "
             f"Resolved: {len(comparison.resolved_findings)}, "
             f"Persisting: {len(comparison.persisting_findings)}, "
+            f"Persisting with deltas: {len(persisting_deltas)}, "
             f"Suppressed current: {len(comparison.suppressed_current_findings)}."
         )
         _print_compared_findings(
             "New findings meeting policy",
             verification.failing_findings,
         )
+        _print_persisting_delta_findings(comparison.persisting_findings)
     else:
         console.print(
             "Evaluated current flagged findings only. "

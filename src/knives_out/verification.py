@@ -9,6 +9,7 @@ from knives_out.suppressions import SuppressedFinding, SuppressionRule
 SeverityThreshold = Literal["low", "medium", "high", "critical"]
 ConfidenceThreshold = Literal["low", "medium", "high"]
 FindingChange = Literal["new", "resolved", "persisting"]
+FindingDeltaFieldName = Literal["status", "severity", "confidence", "schema"]
 
 SEVERITY_ORDER = {
     "none": 0,
@@ -50,6 +51,28 @@ class ComparedFinding:
         if issue is None:
             raise ValueError("ComparedFinding requires a flagged result with an issue.")
         return issue
+
+    @property
+    def delta(self) -> FindingDelta | None:
+        if self.current is None or self.baseline is None:
+            return None
+        return finding_delta(self.current, self.baseline)
+
+
+@dataclass(frozen=True)
+class FindingDeltaChange:
+    field: FindingDeltaFieldName
+    baseline: str
+    current: str
+
+
+@dataclass(frozen=True)
+class FindingDelta:
+    changes: list[FindingDeltaChange]
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.changes)
 
 
 @dataclass(frozen=True)
@@ -96,6 +119,40 @@ def compared_finding_sort_key(finding: ComparedFinding) -> tuple[int, int, str, 
 
 def suppressed_finding_sort_key(finding: SuppressedFinding) -> tuple[int, int, str, str]:
     return attack_result_sort_key(finding.result)
+
+
+def _status_value(result: AttackResult) -> str:
+    return str(result.status_code) if result.status_code is not None else "-"
+
+
+def _schema_value(result: AttackResult) -> str:
+    if result.response_schema_valid is True:
+        return "ok"
+    if result.response_schema_valid is False:
+        return "mismatch"
+    if result.response_schema_status:
+        return result.response_schema_status
+    return "-"
+
+
+def finding_delta(current: AttackResult, baseline: AttackResult) -> FindingDelta:
+    changes: list[FindingDeltaChange] = []
+    values = [
+        ("status", _status_value(baseline), _status_value(current)),
+        ("severity", baseline.severity, current.severity),
+        ("confidence", baseline.confidence, current.confidence),
+        ("schema", _schema_value(baseline), _schema_value(current)),
+    ]
+    for field, baseline_value, current_value in values:
+        if baseline_value != current_value:
+            changes.append(
+                FindingDeltaChange(
+                    field=field,
+                    baseline=baseline_value,
+                    current=current_value,
+                )
+            )
+    return FindingDelta(changes=changes)
 
 
 def _matching_suppression(

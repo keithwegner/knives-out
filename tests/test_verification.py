@@ -96,6 +96,53 @@ def test_compare_attack_results_treats_issue_changes_as_resolved_and_new() -> No
     assert comparison.persisting_findings == []
 
 
+def test_compare_attack_results_tracks_persisting_deltas() -> None:
+    current = _results(
+        AttackResult(
+            attack_id="atk_shared",
+            operation_id="createPet",
+            kind="wrong_type_param",
+            name="Shared finding",
+            method="POST",
+            url="https://example.com/pets/atk_shared",
+            status_code=500,
+            flagged=True,
+            issue="server_error",
+            severity="critical",
+            confidence="medium",
+            response_schema_valid=False,
+        )
+    )
+    baseline = _results(
+        AttackResult(
+            attack_id="atk_shared",
+            operation_id="createPet",
+            kind="wrong_type_param",
+            name="Shared finding",
+            method="POST",
+            url="https://example.com/pets/atk_shared",
+            status_code=403,
+            flagged=True,
+            issue="server_error",
+            severity="high",
+            confidence="high",
+            response_schema_valid=True,
+        )
+    )
+
+    comparison = compare_attack_results(current, baseline)
+
+    assert len(comparison.persisting_findings) == 1
+    delta = comparison.persisting_findings[0].delta
+    assert delta is not None
+    assert [(change.field, change.baseline, change.current) for change in delta.changes] == [
+        ("status", "403", "500"),
+        ("severity", "high", "critical"),
+        ("confidence", "high", "medium"),
+        ("schema", "ok", "mismatch"),
+    ]
+
+
 def test_evaluate_verification_without_baseline_filters_by_thresholds() -> None:
     current = _results(
         _finding("atk_high", issue="server_error", severity="high", confidence="high"),

@@ -245,6 +245,71 @@ def test_report_command_supports_baseline(tmp_path: Path) -> None:
     assert "## Persisting findings" in report
 
 
+def test_report_command_shows_persisting_deltas(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.json"
+    baseline_path = tmp_path / "baseline.json"
+    report_path = tmp_path / "report.md"
+
+    _write_results(
+        current_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="response_schema_mismatch",
+                severity="high",
+                confidence="medium",
+                response_schema_valid=False,
+            )
+        ),
+    )
+    _write_results(
+        baseline_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=200,
+                flagged=True,
+                issue="response_schema_mismatch",
+                severity="medium",
+                confidence="high",
+                response_schema_valid=True,
+            )
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            str(current_path),
+            "--baseline",
+            str(baseline_path),
+            "--out",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    report = report_path.read_text(encoding="utf-8")
+    assert "## Persisting deltas" in report
+    assert "status 200 -> 500" in report
+    assert "severity medium -> high" in report
+    assert "confidence high -> medium" in report
+    assert "schema ok -> mismatch" in report
+
+
 def test_report_command_supports_html_and_artifact_links(tmp_path: Path) -> None:
     results_path = tmp_path / "results.json"
     report_path = tmp_path / "report.html"
@@ -290,6 +355,71 @@ def test_report_command_supports_html_and_artifact_links(tmp_path: Path) -> None
     assert "<!DOCTYPE html>" in report
     assert "<h2>Artifact index</h2>" in report
     assert "atk_html.json" in report
+
+
+def test_report_command_supports_html_persisting_deltas(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.json"
+    baseline_path = tmp_path / "baseline.json"
+    report_path = tmp_path / "report.html"
+
+    _write_results(
+        current_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="response_schema_mismatch",
+                severity="high",
+                confidence="medium",
+                response_schema_valid=False,
+            )
+        ),
+    )
+    _write_results(
+        baseline_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=200,
+                flagged=True,
+                issue="response_schema_mismatch",
+                severity="medium",
+                confidence="high",
+                response_schema_valid=True,
+            )
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "report",
+            str(current_path),
+            "--baseline",
+            str(baseline_path),
+            "--format",
+            "html",
+            "--out",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    report = report_path.read_text(encoding="utf-8")
+    assert "<h2>Persisting deltas</h2>" in report
+    assert "Persisting with deltas" in report
+    assert "status 200 -&gt; 500" in report
 
 
 def test_run_command_passes_artifact_dir(tmp_path: Path, monkeypatch) -> None:
@@ -434,6 +564,61 @@ def test_verify_command_passes_with_baseline_when_findings_only_persist(tmp_path
     normalized = _normalized_output(result.stdout)
     assert "Persisting: 1" in normalized
     assert "Verification passed." in normalized
+
+
+def test_verify_command_shows_persisting_delta_summary(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.json"
+    baseline_path = tmp_path / "baseline.json"
+    _write_results(
+        current_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Shared failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="critical",
+                confidence="medium",
+                response_schema_valid=False,
+            )
+        ),
+    )
+    _write_results(
+        baseline_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Shared failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=403,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+                response_schema_valid=True,
+            )
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        ["verify", str(current_path), "--baseline", str(baseline_path)],
+    )
+
+    assert result.exit_code == 0
+    normalized = _normalized_output(result.stdout)
+    assert "Persisting with deltas: 1" in normalized
+    assert "Persisting findings with deltas" in result.stdout
+    assert "status 403 -> 500" in normalized
+    assert "severity high -> critical" in normalized
 
 
 def test_verify_command_fails_with_baseline_when_new_qualifying_findings_appear(

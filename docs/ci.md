@@ -102,6 +102,8 @@ findings:
 
 The tool does not fetch that baseline for you. Your workflow is responsible for placing
 `previous-results.json` in the workspace before this step.
+When you use a baseline, `verify` also prints a compact summary for persisting findings whose
+status, severity, confidence, or schema outcome changed between runs.
 
 ## Optional: checked-in suppressions
 
@@ -339,6 +341,9 @@ You can also render a Markdown report that highlights new, resolved, and persist
       --baseline previous-results.json \
       --out report.md
 ```
+
+That baseline-aware report includes the usual new/resolved/persisting sections plus a
+`Persisting deltas` section for persisting findings that drifted between runs.
 
 ## Optional: HTML report and artifact index
 

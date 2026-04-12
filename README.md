@@ -236,6 +236,8 @@ also produces a linked `report.html` with an artifact index and detailed result 
 
 For built-in gating, use `knives-out verify` after `run`. It can fail on qualifying findings in the
 current run, or only on new qualifying findings when you also pass `--baseline previous-results.json`.
+With a baseline, both `verify` and baseline-aware `report` also summarize persisting findings whose
+status, severity, confidence, or schema outcome drifted between runs.
 When you want stateful coverage, generate with `--auto-workflows` first, then add
 `--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py` or your own custom pack as
 you move from generic coverage to app-specific journeys. For protected APIs, keep simple static
@@ -416,7 +418,7 @@ knives-out report results.json --out report.md
 ```
 
 You can include a prior `results.json` as a baseline to add regression sections for new, resolved,
-and persisting findings:
+and persisting findings, plus a delta summary when a persisting finding changed:
 
 ```bash
 knives-out report results.json --baseline previous-results.json --out report.md

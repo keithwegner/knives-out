@@ -32,6 +32,30 @@ def _finding_table_rows(findings: list[ComparedFinding]) -> list[str]:
     return rows
 
 
+def _persisting_delta_findings(findings: list[ComparedFinding]) -> list[ComparedFinding]:
+    return [finding for finding in findings if finding.delta is not None and finding.delta.changed]
+
+
+def _delta_summary(finding: ComparedFinding) -> str:
+    delta = finding.delta
+    if delta is None or not delta.changed:
+        return "unchanged"
+    return ", ".join(
+        f"{change.field} {change.baseline} -> {change.current}" for change in delta.changes
+    )
+
+
+def _persisting_delta_rows(findings: list[ComparedFinding]) -> list[str]:
+    rows: list[str] = []
+    for finding in _persisting_delta_findings(findings):
+        result = finding.result
+        rows.append(
+            f"| {result.name} | {result.kind} | {result.issue or '-'} | "
+            f"{_delta_summary(finding)} | `{result.url}` |"
+        )
+    return rows
+
+
 def _suppressed_table_rows(findings: list[SuppressedFinding]) -> list[str]:
     rows: list[str] = []
     for finding in findings:
@@ -216,6 +240,7 @@ def render_markdown_report(
         lines.append("| None | - | - | - | - | - | - | - |")
 
     if baseline is not None:
+        persisting_deltas = _persisting_delta_findings(comparison.persisting_findings)
         lines.append("")
         lines.append("## Verification summary")
         lines.append("")
@@ -223,6 +248,7 @@ def render_markdown_report(
         lines.append(f"- New findings: **{len(comparison.new_findings)}**")
         lines.append(f"- Resolved findings: **{len(comparison.resolved_findings)}**")
         lines.append(f"- Persisting findings: **{len(comparison.persisting_findings)}**")
+        lines.append(f"- Persisting findings with deltas: **{len(persisting_deltas)}**")
         lines.append(
             f"- Suppressed current findings: **{len(comparison.suppressed_current_findings)}**"
         )
@@ -253,6 +279,15 @@ def render_markdown_report(
         lines.extend(_finding_table_rows(comparison.persisting_findings))
         if not comparison.persisting_findings:
             lines.append("| None | - | - | - | - | - | - | - |")
+
+        lines.append("")
+        lines.append("## Persisting deltas")
+        lines.append("")
+        lines.append("| Attack | Kind | Issue | Changes | URL |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        lines.extend(_persisting_delta_rows(comparison.persisting_findings))
+        if not persisting_deltas:
+            lines.append("| None | - | - | - | - |")
 
     lines.append("")
     lines.append("## Detailed results")
@@ -420,6 +455,19 @@ def _auth_summary_row_html(entry: dict[str, object]) -> str:
         f"<td>{escape(str(entry['refresh']))}</td>"
         f"<td>{escape(str(entry['failures']))}</td>"
         f"<td>{escape(triggers)}</td>"
+        "</tr>"
+    )
+
+
+def _persisting_delta_row_html(finding: ComparedFinding) -> str:
+    result = finding.result
+    return (
+        "<tr>"
+        f"<td>{escape(result.name)}</td>"
+        f"<td>{escape(result.kind)}</td>"
+        f"<td>{escape(result.issue or '-')}</td>"
+        f"<td>{escape(_delta_summary(finding))}</td>"
+        f"<td><code>{escape(result.url)}</code></td>"
         "</tr>"
     )
 
@@ -610,6 +658,11 @@ def render_html_report(
 
     diff_panels = ""
     if baseline is not None:
+        persisting_deltas = _persisting_delta_findings(comparison.persisting_findings)
+        persisting_delta_rows = (
+            "".join(_persisting_delta_row_html(finding) for finding in persisting_deltas)
+            or "<tr><td colspan='5' class='muted'>No persisting deltas detected.</td></tr>"
+        )
         diff_panels = (
             "<section class='panel'>"
             "<h2>Regression summary</h2>"
@@ -618,7 +671,14 @@ def render_html_report(
             f"{_summary_card_html('New findings', str(len(comparison.new_findings)))}"
             f"{_summary_card_html('Resolved findings', str(len(comparison.resolved_findings)))}"
             f"{_summary_card_html('Persisting findings', str(len(comparison.persisting_findings)))}"
+            f"{_summary_card_html('Persisting with deltas', str(len(persisting_deltas)))}"
             "</div></section>"
+            "<section class='panel'>"
+            "<h2>Persisting deltas</h2>"
+            "<table>"
+            "<thead><tr><th>Attack</th><th>Kind</th><th>Issue</th><th>Changes</th><th>URL</th></tr></thead>"
+            f"<tbody>{persisting_delta_rows}</tbody>"
+            "</table></section>"
         )
 
     cards_html = "".join(

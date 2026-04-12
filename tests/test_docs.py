@@ -24,6 +24,7 @@ def test_readme_includes_ci_guidance() -> None:
     assert "KNIVES_OUT_BASE_URL" in readme
     assert "`knives-out run` currently exits with status `0`" in readme
     assert "knives-out verify results.json" in readme
+    assert "status, severity, confidence, or schema outcome drifted" in readme
     assert "knives-out promote results.json" in readme
     assert "knives-out triage results.json" in readme
     assert ".knives-out-ignore.yml" in readme
@@ -114,6 +115,8 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "knives-out triage results.json --out .knives-out-ignore.yml" in ci_doc
     assert ".knives-out-ignore.yml" in ci_doc
     assert "--baseline previous-results.json" in ci_doc
+    assert "status, severity, confidence, or schema outcome changed" in ci_doc
+    assert "Persisting deltas" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc
     assert "--tag orders" in ci_doc
     assert "--path /draft-orders/{draftId}" in ci_doc
