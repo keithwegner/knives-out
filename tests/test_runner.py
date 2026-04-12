@@ -394,6 +394,12 @@ def test_render_markdown_report_sorts_flagged_findings_by_score() -> None:
     report = render_markdown_report(results)
 
     assert "Response schema mismatches" in report
+    assert "### By issue" in report
+    assert "| server_error | 1 |" in report
+    assert "| response_schema_mismatch | 1 |" in report
+    assert "### By attack kind" in report
+    assert "| missing_auth | 2 |" in report
+    assert "| wrong_type_param | 1 |" in report
     assert "| Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |" in report
     assert "response_schema_mismatch" in report
     assert "mismatch" in report
@@ -1356,6 +1362,34 @@ def test_execute_attack_suite_treats_graphql_errors_as_expected_failures(monkeyp
                         "variables": {"id": 123},
                     },
                     expected_outcomes=["graphql_error", "4xx"],
+                    response_schemas={
+                        "200": {
+                            "content_type": "application/json",
+                            "schema_def": {
+                                "type": "object",
+                                "properties": {
+                                    "data": {
+                                        "type": "object",
+                                        "properties": {
+                                            "book": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "__typename": {
+                                                        "type": "string",
+                                                        "const": "Book",
+                                                    }
+                                                },
+                                                "required": ["__typename"],
+                                                "nullable": True,
+                                            }
+                                        },
+                                        "required": ["book"],
+                                    }
+                                },
+                                "required": ["data"],
+                            },
+                        }
+                    },
                 )
             ],
         ),
@@ -1366,6 +1400,8 @@ def test_execute_attack_suite_treats_graphql_errors_as_expected_failures(monkeyp
     assert result.flagged is False
     assert result.issue is None
     assert result.status_code == 200
+    assert result.response_schema_status is None
+    assert result.response_schema_valid is None
 
 
 def test_execute_attack_suite_flags_graphql_success_without_errors(monkeypatch) -> None:
@@ -1400,6 +1436,71 @@ def test_execute_attack_suite_flags_graphql_success_without_errors(monkeypatch) 
     result = results.results[0]
     assert result.flagged is True
     assert result.issue == "unexpected_success"
+
+
+def test_execute_attack_suite_flags_graphql_response_shape_mismatch(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(200, json={"data": {"book": {"id": "book-1"}}}),
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                AttackCase(
+                    id="atk_graphql_shape",
+                    name="Wrong-type GraphQL variable",
+                    kind="wrong_type_variable",
+                    operation_id="book",
+                    method="POST",
+                    path="/graphql",
+                    description="Wrong type for GraphQL variable.",
+                    body_json={
+                        "query": "query Book($id: ID!) { book(id: $id) { __typename } }",
+                        "variables": {"id": 123},
+                    },
+                    expected_outcomes=["graphql_error", "4xx"],
+                    response_schemas={
+                        "200": {
+                            "content_type": "application/json",
+                            "schema_def": {
+                                "type": "object",
+                                "properties": {
+                                    "data": {
+                                        "type": "object",
+                                        "properties": {
+                                            "book": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "__typename": {
+                                                        "type": "string",
+                                                        "const": "Book",
+                                                    }
+                                                },
+                                                "required": ["__typename"],
+                                                "nullable": True,
+                                            }
+                                        },
+                                        "required": ["book"],
+                                    }
+                                },
+                                "required": ["data"],
+                            },
+                        }
+                    },
+                )
+            ],
+        ),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "response_schema_mismatch"
+    assert result.response_schema_status == "200"
+    assert result.response_schema_valid is False
+    assert result.response_schema_error == "$.data.book: missing required property '__typename'"
 
 
 def test_render_markdown_report_shows_workflow_sections() -> None:
@@ -1586,3 +1687,60 @@ def test_render_html_report_shows_auth_summary() -> None:
     assert "<td>1</td>" in report
     assert "Refresh attempts" in report
     assert "401, suite" in report
+
+
+def test_render_html_report_shows_grouped_flagged_findings() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_one",
+                operation_id="listPets",
+                kind="missing_auth",
+                name="Server failure",
+                method="GET",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            ),
+            AttackResult(
+                attack_id="atk_two",
+                operation_id="listPets",
+                kind="missing_auth",
+                name="Unexpected success",
+                method="GET",
+                url="https://example.com/pets",
+                status_code=200,
+                flagged=True,
+                issue="unexpected_success",
+                severity="high",
+                confidence="medium",
+            ),
+            AttackResult(
+                attack_id="atk_three",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Schema mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=201,
+                flagged=True,
+                issue="response_schema_mismatch",
+                severity="medium",
+                confidence="high",
+            ),
+        ],
+    )
+
+    report = render_html_report(results)
+
+    assert "<h3>By issue</h3>" in report
+    assert "<h3>By attack kind</h3>" in report
+    assert "<td>server_error</td>" in report
+    assert "<td>unexpected_success</td>" in report
+    assert "<td>missing_auth</td>" in report
+    assert "<td>wrong_type_param</td>" in report

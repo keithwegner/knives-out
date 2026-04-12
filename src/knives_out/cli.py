@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
@@ -80,6 +81,11 @@ class ReportFormatOption(StrEnum):
     html = "html"
 
 
+class InspectFormatOption(StrEnum):
+    text = "text"
+    json = "json"
+
+
 def _parse_key_value(items: list[str] | None, *, separator: str) -> dict[str, Any]:
     parsed: dict[str, Any] = {}
     for item in items or []:
@@ -116,6 +122,26 @@ def _print_preflight_warnings(warnings: list[PreflightWarning]) -> None:
 
     console.print("")
     console.print(table)
+
+
+def _inspect_payload(
+    *,
+    spec: Path,
+    source_kind: str,
+    operation_count: int,
+    operations: list[Any],
+    warnings: list[PreflightWarning],
+    learned_workflow_count: int,
+) -> dict[str, Any]:
+    return {
+        "source": str(spec),
+        "source_kind": source_kind,
+        "operation_count": operation_count,
+        "operations": [operation.model_dump(mode="json") for operation in operations],
+        "warning_count": len(warnings),
+        "warnings": [warning.model_dump(mode="json") for warning in warnings],
+        "learned_workflow_count": learned_workflow_count,
+    }
 
 
 def _load_attack_results_or_error(path: Path, *, label: str) -> AttackResults:
@@ -313,6 +339,10 @@ def inspect(
         list[str] | None,
         typer.Option(help="Exclude operations for these exact OpenAPI paths. Repeatable."),
     ] = None,
+    format: Annotated[
+        InspectFormatOption,
+        typer.Option(help="Output format for inspection results."),
+    ] = InspectFormatOption.text,
 ) -> None:
     """Show the operations discovered in an OpenAPI, GraphQL, or learned model."""
     loaded = load_operations_with_warnings(spec, graphql_endpoint=graphql_endpoint)
@@ -323,6 +353,21 @@ def inspect(
         include_tags=tag,
         exclude_tags=exclude_tag,
     )
+    learned_workflow_count = (
+        len(loaded.learned_model.workflows) if loaded.learned_model is not None else 0
+    )
+
+    if format == InspectFormatOption.json:
+        payload = _inspect_payload(
+            spec=spec,
+            source_kind=loaded.source_kind,
+            operation_count=len(operations),
+            operations=operations,
+            warnings=loaded.warnings,
+            learned_workflow_count=learned_workflow_count,
+        )
+        typer.echo(json.dumps(payload, indent=2))
+        return
 
     table = Table(title=f"knives-out inspect: {spec}")
     table.add_column("Operation ID")
@@ -355,7 +400,7 @@ def inspect(
     console.print(table)
     console.print(f"\nFound {len(operations)} operations.")
     if loaded.learned_model is not None:
-        console.print(f"Learned workflows: {len(loaded.learned_model.workflows)}.")
+        console.print(f"Learned workflows: {learned_workflow_count}.")
     _print_preflight_warnings(loaded.warnings)
 
 

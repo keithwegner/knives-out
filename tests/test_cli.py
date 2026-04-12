@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 from textwrap import dedent
@@ -115,6 +116,68 @@ def test_inspect_command_supports_graphql_schema(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "Found 4 operations." in result.stdout
     assert "/api/graphql" in result.stdout
+
+
+def test_inspect_command_supports_json_output(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "knives_out.cli.load_operations_with_warnings",
+        lambda spec, **_: LoadedOperations(
+            source_kind="learned",
+            operations=[
+                {
+                    "operation_id": "listPets",
+                    "method": "GET",
+                    "path": "/pets",
+                    "tags": ["pets", "read"],
+                    "parameters": [{"name": "limit", "location": "query"}],
+                    "auth_required": False,
+                    "learned_confidence": 0.75,
+                },
+                {
+                    "operation_id": "createPet",
+                    "method": "POST",
+                    "path": "/pets",
+                    "tags": ["pets", "write"],
+                    "request_body_schema": {"type": "object"},
+                    "auth_required": True,
+                },
+            ],
+            warnings=[
+                PreflightWarning(
+                    code="missing_request_schema",
+                    message="Request body is declared but no usable schema was found.",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                )
+            ],
+            learned_model={
+                "workflows": [
+                    {
+                        "id": "wf_create_pet",
+                        "name": "Create pet flow",
+                        "producer_operation_id": "createPet",
+                        "consumer_operation_id": "listPets",
+                    }
+                ]
+            },
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        ["inspect", str(EXAMPLE_SPEC), "--tag", "write", "--format", "json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["source"] == str(EXAMPLE_SPEC)
+    assert payload["source_kind"] == "learned"
+    assert payload["operation_count"] == 1
+    assert payload["warning_count"] == 1
+    assert payload["learned_workflow_count"] == 1
+    assert [operation["operation_id"] for operation in payload["operations"]] == ["createPet"]
+    assert payload["warnings"][0]["code"] == "missing_request_schema"
 
 
 def test_generate_command_writes_attack_suite(tmp_path: Path) -> None:

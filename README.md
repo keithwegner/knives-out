@@ -92,6 +92,7 @@ Inspect the sample specs:
 knives-out inspect examples/openapi/petstore.yaml
 knives-out inspect examples/openapi/storefront.yaml --tag orders
 knives-out inspect examples/graphql/library.graphql
+knives-out inspect examples/openapi/storefront.yaml --tag orders --format json
 ```
 
 Generate attacks:
@@ -287,6 +288,14 @@ You can filter inspection to exact tags or paths:
 knives-out inspect examples/openapi/storefront.yaml \
   --tag orders \
   --path /draft-orders/{draftId}
+```
+
+When you want to hand the inventory to CI or wrapper tooling, switch to JSON output:
+
+```bash
+knives-out inspect examples/openapi/storefront.yaml \
+  --tag orders \
+  --format json
 ```
 
 ### `generate`
