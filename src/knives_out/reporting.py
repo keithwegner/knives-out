@@ -5,7 +5,7 @@ from collections import Counter
 from html import escape
 from pathlib import Path
 
-from knives_out.models import AttackResults, AuthEvent, ProfileAttackResult
+from knives_out.models import AttackResult, AttackResults, AuthEvent, ProfileAttackResult
 from knives_out.suppressions import SuppressedFinding, SuppressionRule
 from knives_out.verification import (
     ComparedFinding,
@@ -29,6 +29,24 @@ def _finding_table_rows(findings: list[ComparedFinding]) -> list[str]:
             f"{result.issue or '-'} | {result.severity} | {result.confidence} | "
             f"{schema} | `{result.url}` |"
         )
+    return rows
+
+
+def _finding_result(finding: AttackResult | ComparedFinding) -> AttackResult:
+    if isinstance(finding, ComparedFinding):
+        return finding.result
+    return finding
+
+
+def _finding_group_rows(
+    findings: list[AttackResult] | list[ComparedFinding],
+    *,
+    attribute: str,
+) -> list[str]:
+    counter = Counter(getattr(_finding_result(finding), attribute) or "-" for finding in findings)
+    rows: list[str] = []
+    for group, count in sorted(counter.items()):
+        rows.append(f"| {group} | {count} |")
     return rows
 
 
@@ -168,6 +186,24 @@ def render_markdown_report(
 
     lines.append("")
     lines.append("## Flagged findings")
+    lines.append("")
+    lines.append("### By issue")
+    lines.append("")
+    lines.append("| Issue | Count |")
+    lines.append("| --- | ---: |")
+    lines.extend(_finding_group_rows(comparison.current_findings, attribute="issue"))
+    if not comparison.current_findings:
+        lines.append("| None | 0 |")
+
+    lines.append("")
+    lines.append("### By attack kind")
+    lines.append("")
+    lines.append("| Kind | Count |")
+    lines.append("| --- | ---: |")
+    lines.extend(_finding_group_rows(comparison.current_findings, attribute="kind"))
+    if not comparison.current_findings:
+        lines.append("| None | 0 |")
+
     lines.append("")
     lines.append("| Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |")
     lines.append("| --- | --- | ---: | --- | --- | --- | --- | --- |")
@@ -391,6 +427,10 @@ def _suppressed_finding_row_html(finding: SuppressedFinding) -> str:
     )
 
 
+def _finding_group_row_html(group: str, count: int) -> str:
+    return f"<tr><td>{escape(group)}</td><td>{count}</td></tr>"
+
+
 def _auth_event_row_html(event: AuthEvent) -> str:
     profile = event.profile or "-"
     status = str(event.status_code) if event.status_code is not None else "-"
@@ -568,6 +608,24 @@ def render_html_report(
         "</tr>"
         for finding in comparison.current_findings
     ) or ("<tr><td colspan='7' class='muted'>No active flagged findings.</td></tr>")
+    issue_group_rows = (
+        "".join(
+            _finding_group_row_html(group, count)
+            for group, count in sorted(
+                Counter(finding.issue or "-" for finding in comparison.current_findings).items()
+            )
+        )
+        or "<tr><td colspan='2' class='muted'>No active flagged findings.</td></tr>"
+    )
+    kind_group_rows = (
+        "".join(
+            _finding_group_row_html(group, count)
+            for group, count in sorted(
+                Counter(finding.kind for finding in comparison.current_findings).items()
+            )
+        )
+        or "<tr><td colspan='2' class='muted'>No active flagged findings.</td></tr>"
+    )
 
     suppressed_rows = (
         "".join(
@@ -821,10 +879,28 @@ def render_html_report(
 
       <section class="panel">
         <h2>Flagged findings</h2>
+        <div class="summary-grid">
+          <div>
+            <h3>By issue</h3>
+            <table>
+              <thead><tr><th>Issue</th><th>Count</th></tr></thead>
+              <tbody>{issue_group_rows}</tbody>
+            </table>
+          </div>
+          <div>
+            <h3>By attack kind</h3>
+            <table>
+              <thead><tr><th>Kind</th><th>Count</th></tr></thead>
+              <tbody>{kind_group_rows}</tbody>
+            </table>
+          </div>
+        </div>
+        <div class="subsection">
         <table>
           <thead><tr><th>Attack</th><th>Kind</th><th>Status</th><th>Issue</th><th>Severity</th><th>Confidence</th><th>Artifacts</th></tr></thead>
           <tbody>{flagged_rows}</tbody>
         </table>
+        </div>
       </section>
 
       <section class="panel">
