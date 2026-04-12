@@ -159,10 +159,7 @@ def test_load_auth_configs_rejects_duplicate_names_case_insensitively(tmp_path: 
 def test_select_auth_configs_reports_missing_names(tmp_path: Path) -> None:
     config_path = tmp_path / "auth.yml"
     config_path.write_text(
-        "auth:\n"
-        "  - name: user\n"
-        "    strategy: static_bearer\n"
-        "    token: user-token\n",
+        "auth:\n  - name: user\n    strategy: static_bearer\n    token: user-token\n",
         encoding="utf-8",
     )
     auth_file = load_auth_configs(config_path)
