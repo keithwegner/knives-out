@@ -32,6 +32,7 @@ def test_readme_includes_ci_guidance() -> None:
     assert "--auto-workflows" in readme
     assert "--tag orders" in readme
     assert "--path /draft-orders/{draftId}" in readme
+    assert "--format json" in readme
     assert "knives-out report results.json --format html" in readme
     assert "--artifact-root artifacts" in readme
     assert "report.html" in readme
