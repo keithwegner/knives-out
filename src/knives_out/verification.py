@@ -60,9 +60,7 @@ class ComparedFinding:
         if self.baseline.severity != self.current.severity:
             fragments.append(f"severity {self.baseline.severity} -> {self.current.severity}")
         if self.baseline.confidence != self.current.confidence:
-            fragments.append(
-                f"confidence {self.baseline.confidence} -> {self.current.confidence}"
-            )
+            fragments.append(f"confidence {self.baseline.confidence} -> {self.current.confidence}")
         if self.baseline.status_code != self.current.status_code:
             previous_status = (
                 str(self.baseline.status_code) if self.baseline.status_code is not None else "-"
@@ -72,9 +70,7 @@ class ComparedFinding:
             )
             fragments.append(f"status {previous_status} -> {current_status}")
         if self.baseline.response_schema_valid != self.current.response_schema_valid:
-            previous_schema = (
-                "mismatch" if self.baseline.response_schema_valid is False else "ok"
-            )
+            previous_schema = "mismatch" if self.baseline.response_schema_valid is False else "ok"
             current_schema = "mismatch" if self.current.response_schema_valid is False else "ok"
             fragments.append(f"schema {previous_schema} -> {current_schema}")
         return fragments

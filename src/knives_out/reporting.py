@@ -652,9 +652,12 @@ def render_html_report(
         persisting_delta_count = sum(
             1 for finding in comparison.persisting_findings if finding.has_delta
         )
-        persisting_rows = "".join(
-            _persisting_finding_row_html(finding) for finding in comparison.persisting_findings
-        ) or "<tr><td colspan='9' class='muted'>No persisting findings.</td></tr>"
+        persisting_rows = (
+            "".join(
+                _persisting_finding_row_html(finding) for finding in comparison.persisting_findings
+            )
+            or "<tr><td colspan='9' class='muted'>No persisting findings.</td></tr>"
+        )
         diff_panels = (
             "<section class='panel'>"
             "<h2>Regression summary</h2>"
