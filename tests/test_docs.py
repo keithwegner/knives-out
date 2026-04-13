@@ -45,6 +45,8 @@ def test_readme_includes_ci_guidance() -> None:
     assert "--auto-workflows" in readme
     assert "--tag orders" in readme
     assert "--path /draft-orders/{draftId}" in readme
+    assert "--kind missing_auth" in readme
+    assert "--exclude-kind malformed_json_body" in readme
     assert "--format json" in readme
     assert "knives-out report results.json --format html" in readme
     assert "--artifact-root artifacts" in readme
@@ -146,6 +148,8 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "Generate attacks with built-in workflows" in ci_doc
     assert "--tag orders" in ci_doc
     assert "--path /draft-orders/{draftId}" in ci_doc
+    assert "--kind missing_auth" in ci_doc
+    assert "--exclude-kind malformed_json_body" in ci_doc
     assert "Promote qualifying findings" in ci_doc
     assert "pytest --cov=src/knives_out --cov-report=term-missing" in ci_doc
     assert "coverage-badge.json" in ci_doc

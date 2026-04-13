@@ -251,9 +251,10 @@ spec is incomplete or missing workflow detail.
   run: knives-out generate learned-model.json --out attacks.json
 ```
 
-## Optional: tag and path filtering
+## Optional: tag, path, and kind filtering
 
-The same exact-match filters work in `inspect`, `generate`, and `run`:
+The same exact-match filters work in `inspect`, `generate`, and `run`, and `generate` also
+supports repeatable attack-kind filters for narrowing or muting specific attack categories:
 
 ```yaml
 - name: Generate only order-related attacks
@@ -272,6 +273,22 @@ The same exact-match filters work in `inspect`, `generate`, and `run`:
       --tag orders \
       --path /draft-orders/{draftId} \
       --out results.json
+```
+
+```yaml
+- name: Generate only auth-focused attacks
+  run: |
+    knives-out generate "$SPEC_PATH" \
+      --kind missing_auth \
+      --out attacks.json
+```
+
+```yaml
+- name: Exclude noisy malformed-body attacks
+  run: |
+    knives-out generate "$SPEC_PATH" \
+      --exclude-kind malformed_json_body \
+      --out attacks.json
 ```
 
 ## Optional: auth/session plugins
