@@ -223,8 +223,14 @@ class JobStatusResponse(BaseModel):
     error: str | None = None
     result_available: bool = False
     artifact_names: list[str] = Field(default_factory=list)
+    result_summary: ResultsSummary | None = None
 
 
 class ArtifactListResponse(BaseModel):
     job_id: str
     artifacts: list[str] = Field(default_factory=list)
+
+
+class JobListResponse(BaseModel):
+    count: int
+    jobs: list[JobStatusResponse] = Field(default_factory=list)

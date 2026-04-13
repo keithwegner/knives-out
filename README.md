@@ -239,9 +239,14 @@ The synchronous endpoints mirror the short CLI flows:
 Longer execution runs use a job resource instead:
 
 - `POST /v1/runs`
+- `GET /v1/jobs`
 - `GET /v1/jobs/{id}`
 - `GET /v1/jobs/{id}/result`
 - `GET /v1/jobs/{id}/artifacts`
+
+The job collection and per-job status routes include a compact `result_summary` payload whenever a
+run has finished writing `result.json`, so local tools can triage recent runs without downloading
+the full result body first.
 
 The API accepts uploaded source content and JSON artifacts in the request body. It does not expose
 arbitrary server-side file reads. FastAPI also publishes the schema at `/openapi.json` and the

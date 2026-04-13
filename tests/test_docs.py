@@ -36,7 +36,9 @@ def test_readme_includes_ci_guidance() -> None:
     assert "POST /v1/inspect" in readme
     assert "POST /v1/summary" in readme
     assert "POST /v1/runs" in readme
+    assert "GET /v1/jobs" in readme
     assert "GET /v1/jobs/{id}/artifacts" in readme
+    assert "result_summary" in readme
     assert "--profile-file examples/auth_profiles/anonymous-user-admin.yml" in readme
     assert "anonymous_access" in readme
     assert "--auto-workflows" in readme
@@ -124,6 +126,8 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "capture.ndjson" in ci_doc
     assert "knives-out capture" in ci_doc
     assert "knives-out discover capture.ndjson --out learned-model.json" in ci_doc
+    assert "GET /v1/jobs" in ci_doc
+    assert "result_summary" in ci_doc
     assert "examples/auth_configs/user-admin.yml" in ci_doc
     assert "examples/auth_configs/client-credentials.yml" in ci_doc
     assert "examples/auth_profiles/anonymous-user-admin.yml" in ci_doc

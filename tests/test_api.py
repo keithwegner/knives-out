@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from textwrap import dedent
 
 import httpx
@@ -9,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from knives_out.api import create_app
-from knives_out.api_models import JobRecord
+from knives_out.api_models import ApiJobStatus, JobRecord
 from knives_out.api_store import JobStore
 from knives_out.models import AttackCase, AttackResult, AttackResults, AttackSuite, LearnedModel
 
@@ -223,6 +224,8 @@ def test_run_job_lifecycle_and_artifacts(tmp_path, monkeypatch) -> None:
     assert status_payload["status"] == "completed"
     assert status_payload["result_available"] is True
     assert status_payload["artifact_names"] == ["atk_api.json"]
+    assert status_payload["result_summary"] is not None
+    assert status_payload["result_summary"]["total_results"] == 1
 
     result_response = client.get(f"/v1/jobs/{job_id}/result")
     assert result_response.status_code == 200
@@ -286,9 +289,61 @@ def test_run_job_failure_is_reported(tmp_path, monkeypatch) -> None:
     assert status_payload["result_available"] is False
     assert status_payload["artifact_names"] == []
     assert status_payload["error"] == "runner exploded"
+    assert status_payload["result_summary"] is None
 
     result_response = client.get(f"/v1/jobs/{job_id}/result")
     assert result_response.status_code == 404
+
+
+def test_job_list_endpoint_returns_recent_jobs_and_filters_status(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+
+    base_time = datetime(2026, 4, 13, 12, 0, tzinfo=UTC)
+    completed_record = store.create_job(
+        JobRecord(base_url="https://completed.example", attack_count=1).model_copy(
+            update={
+                "status": ApiJobStatus.completed,
+                "created_at": base_time,
+                "started_at": base_time,
+                "completed_at": base_time + timedelta(seconds=1),
+            }
+        )
+    )
+    store.write_result(
+        completed_record.id,
+        _flagged_results().model_copy(update={"base_url": "https://completed.example"}),
+    )
+
+    failed_record = store.create_job(
+        JobRecord(base_url="https://failed.example", attack_count=2).model_copy(
+            update={
+                "status": ApiJobStatus.failed,
+                "created_at": base_time + timedelta(minutes=5),
+                "started_at": base_time + timedelta(minutes=5),
+                "completed_at": base_time + timedelta(minutes=5, seconds=1),
+                "error": "boom",
+            }
+        )
+    )
+
+    response = client.get("/v1/jobs")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    assert [job["id"] for job in payload["jobs"]] == [failed_record.id, completed_record.id]
+    assert payload["jobs"][0]["result_summary"] is None
+    assert payload["jobs"][1]["result_summary"]["active_flagged_count"] == 1
+    assert payload["jobs"][1]["result_summary"]["top_findings"][0]["attack_id"] == "atk_api"
+
+    filtered_response = client.get("/v1/jobs", params=[("status", "completed"), ("limit", "1")])
+
+    assert filtered_response.status_code == 200
+    filtered_payload = filtered_response.json()
+    assert filtered_payload["count"] == 1
+    assert [job["id"] for job in filtered_payload["jobs"]] == [completed_record.id]
 
 
 def test_job_store_lists_nested_artifacts_and_rejects_path_traversal(tmp_path) -> None:

@@ -4,8 +4,9 @@ import os
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from knives_out.api_models import (
@@ -19,6 +20,7 @@ from knives_out.api_models import (
     GenerateResponse,
     InspectRequest,
     InspectResponse,
+    JobListResponse,
     JobRecord,
     JobStatusResponse,
     PromoteRequest,
@@ -34,7 +36,7 @@ from knives_out.api_models import (
     VerifyResponse,
 )
 from knives_out.api_store import JobNotFoundError, JobStore
-from knives_out.models import AttackResults
+from knives_out.models import AttackResults, ResultsSummary
 from knives_out.services import (
     InlineInput,
     discover_model_inline,
@@ -47,6 +49,8 @@ from knives_out.services import (
     triage_results_from_model,
     verify_results_from_models,
 )
+
+JOB_SUMMARY_TOP_LIMIT = 3
 
 
 def _finding_summary(finding) -> FindingSummaryResponse:
@@ -105,6 +109,31 @@ def _default_data_dir() -> Path:
     if configured:
         return Path(configured)
     return Path.cwd() / ".knives-out-api"
+
+
+def _job_result_summary(job_store: JobStore, job_id: str) -> ResultsSummary:
+    return summarize_results_from_models(
+        job_store.load_result(job_id),
+        top_limit=JOB_SUMMARY_TOP_LIMIT,
+    )
+
+
+def _job_status_response(job_store: JobStore, record: JobRecord) -> JobStatusResponse:
+    result_available = job_store.result_exists(record.id)
+    return JobStatusResponse(
+        id=record.id,
+        kind=record.kind,
+        status=record.status,
+        created_at=record.created_at,
+        started_at=record.started_at,
+        completed_at=record.completed_at,
+        base_url=record.base_url,
+        attack_count=record.attack_count,
+        error=record.error,
+        result_available=result_available,
+        artifact_names=job_store.list_artifacts(record.id),
+        result_summary=_job_result_summary(job_store, record.id) if result_available else None,
+    )
 
 
 def _run_job_worker(job_store: JobStore, job_id: str, request: RunRequest) -> None:
@@ -284,13 +313,26 @@ def create_app(*, data_dir: Path | None = None) -> FastAPI:
             daemon=True,
         )
         thread.start()
-        return job_store.job_status_response(record.id)
+        return _job_status_response(job_store, record)
+
+    @app.get("/v1/jobs", response_model=JobListResponse)
+    def list_jobs(
+        status: Annotated[list[ApiJobStatus] | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> JobListResponse:
+        job_store: JobStore = app.state.job_store
+        records = job_store.list_jobs(
+            statuses=set(status) if status else None,
+            limit=limit,
+        )
+        jobs = [_job_status_response(job_store, record) for record in records]
+        return JobListResponse(count=len(jobs), jobs=jobs)
 
     @app.get("/v1/jobs/{job_id}", response_model=JobStatusResponse)
     def get_job(job_id: str) -> JobStatusResponse:
         job_store: JobStore = app.state.job_store
         try:
-            return job_store.job_status_response(job_id)
+            return _job_status_response(job_store, job_store.load_job(job_id))
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found.") from exc
 
