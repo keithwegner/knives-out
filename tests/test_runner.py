@@ -7,10 +7,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
+import pytest
 from websockets.sync.server import serve
 
 from knives_out.auth_config import BuiltInAuthConfig
-from knives_out.auth_plugins import RuntimePlugin
+from knives_out.auth_plugins import PreparedRequest, RuntimePlugin
 from knives_out.models import (
     AttackCase,
     AttackResult,
@@ -25,7 +26,13 @@ from knives_out.models import (
     WorkflowStepResult,
 )
 from knives_out.reporting import render_html_report, render_markdown_report, summarize_results
-from knives_out.runner import execute_attack_suite, execute_attack_suite_profiles
+from knives_out.runner import (
+    _graphql_subscription_payload,
+    _graphql_subscription_url,
+    _recv_graphql_subscription_frame,
+    execute_attack_suite,
+    execute_attack_suite_profiles,
+)
 from knives_out.suppressions import SuppressionRule
 
 
@@ -284,6 +291,22 @@ def _graphql_subscription_attack_case(
     )
 
 
+def _prepared_subscription_request(**overrides: object) -> PreparedRequest:
+    request = PreparedRequest(
+        phase="request",
+        attack_id="atk_graphql_subscription",
+        name="GraphQL subscription",
+        kind="subscription_probe",
+        operation_id="bookEvents",
+        method="SUBSCRIBE",
+        path="/graphql",
+        description="GraphQL subscription probe.",
+    )
+    for field_name, value in overrides.items():
+        setattr(request, field_name, value)
+    return request
+
+
 @contextmanager
 def _graphql_subscription_server(handler) -> Iterator[str]:
     with serve(
@@ -301,6 +324,114 @@ def _graphql_subscription_server(handler) -> Iterator[str]:
         finally:
             server.shutdown()
             thread.join(timeout=1)
+
+
+class _StubSubscriptionWebSocket:
+    def __init__(self, frame_or_error: object) -> None:
+        self._frame_or_error = frame_or_error
+
+    def recv(self, timeout: float) -> object:
+        assert timeout > 0
+        if isinstance(self._frame_or_error, BaseException):
+            raise self._frame_or_error
+        return self._frame_or_error
+
+
+def test_graphql_subscription_url_rewrites_scheme_and_query() -> None:
+    assert _graphql_subscription_url(
+        "https://example.com/graphql",
+        {"tag": ["books", "events"], "cursor": "abc123"},
+    ) == ("wss://example.com/graphql?tag=books&tag=events&cursor=abc123")
+
+
+@pytest.mark.parametrize(
+    ("request", "request_kwargs", "expected"),
+    [
+        pytest.param(
+            _prepared_subscription_request(omit_body=True),
+            None,
+            (False, None),
+            id="omit-body",
+        ),
+        pytest.param(
+            _prepared_subscription_request(body_json={"query": "ignored"}),
+            {"json": {"query": "subscription { bookEvents { id } }"}},
+            (True, {"query": "subscription { bookEvents { id } }"}),
+            id="request-kwargs-json",
+        ),
+        pytest.param(
+            _prepared_subscription_request(body_json={"query": "ignored"}),
+            {"content": '{"query":"subscription { bookEvents { id } }"}'},
+            (True, '{"query":"subscription { bookEvents { id } }"}'),
+            id="request-kwargs-content",
+        ),
+        pytest.param(
+            _prepared_subscription_request(
+                body_json={"query": "subscription { bookEvents { id } }"}
+            ),
+            None,
+            (True, {"query": "subscription { bookEvents { id } }"}),
+            id="body-json",
+        ),
+        pytest.param(
+            _prepared_subscription_request(
+                raw_body='{"query":"subscription { bookEvents { id } }"}'
+            ),
+            None,
+            (True, '{"query":"subscription { bookEvents { id } }"}'),
+            id="raw-body",
+        ),
+        pytest.param(
+            _prepared_subscription_request(),
+            None,
+            (False, None),
+            id="no-payload",
+        ),
+    ],
+)
+def test_graphql_subscription_payload_selects_expected_body(
+    request: PreparedRequest,
+    request_kwargs: dict[str, object] | None,
+    expected: tuple[bool, object | None],
+) -> None:
+    assert _graphql_subscription_payload(request, request_kwargs) == expected
+
+
+def test_recv_graphql_subscription_frame_accepts_valid_json_object() -> None:
+    frame = _recv_graphql_subscription_frame(
+        _StubSubscriptionWebSocket('{"type":"next","payload":{"data":{"bookEvents":{"id":"1"}}}}'),
+        timeout_seconds=0.5,
+    )
+
+    assert frame["type"] == "next"
+    assert frame["payload"]["data"]["bookEvents"]["id"] == "1"
+
+
+@pytest.mark.parametrize(
+    ("frame_or_error", "message"),
+    [
+        pytest.param(
+            TimeoutError(), "timed out waiting for a subscription protocol frame", id="timeout"
+        ),
+        pytest.param(b"\x00\x01", "received a non-text subscription frame", id="non-text"),
+        pytest.param("{", "received invalid JSON frame", id="invalid-json"),
+        pytest.param("[]", "received a non-object JSON subscription frame", id="non-object"),
+        pytest.param(
+            '{"payload":{}}',
+            "received a subscription frame without a string 'type'",
+            id="missing-type",
+        ),
+    ],
+)
+def test_recv_graphql_subscription_frame_rejects_invalid_frames(
+    frame_or_error: object,
+    message: str,
+) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        _recv_graphql_subscription_frame(
+            _StubSubscriptionWebSocket(frame_or_error),
+            timeout_seconds=0.5,
+        )
 
 
 def test_execute_attack_suite_flags_response_schema_mismatch(monkeypatch) -> None:
