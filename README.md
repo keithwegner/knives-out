@@ -99,6 +99,8 @@ Generate attacks:
 ```bash
 knives-out generate examples/openapi/petstore.yaml --out attacks.json
 knives-out generate examples/openapi/storefront.yaml --tag orders --out attacks.json
+knives-out generate examples/openapi/petstore.yaml --kind missing_auth --out auth-attacks.json
+knives-out generate examples/openapi/petstore.yaml --exclude-kind malformed_json_body --out quieter-attacks.json
 knives-out generate examples/graphql/library.graphql --out graphql-attacks.json
 ```
 
