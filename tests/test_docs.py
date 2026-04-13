@@ -50,6 +50,8 @@ def test_readme_includes_ci_guidance() -> None:
     assert "examples/graphql/library.graphql" in readme
     assert "--graphql-endpoint /api/graphql" in readme
     assert "graphql-attacks.json" in readme
+    assert "SUBSCRIBE" in readme
+    assert "graphql-transport-ws" in readme
     assert "knives-out capture" in readme
     assert "knives-out discover capture.ndjson --out learned-model.json" in readme
     assert "knives-out generate learned-model.json --out shadow-attacks.json" in readme
@@ -113,6 +115,8 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "built-in auth config" in ci_doc
     assert "Optional: HTML report and artifact index" in ci_doc
     assert "Optional: GraphQL schemas" in ci_doc
+    assert "SUBSCRIBE" in ci_doc
+    assert "graphql-transport-ws" in ci_doc
     assert "Optional: Shadow Twin learned models" in ci_doc
     assert "learned-model.json" in ci_doc
     assert "capture.ndjson" in ci_doc
@@ -197,6 +201,7 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "v0.10: Shadow Twin learned-model capture and discovery" in roadmap
     assert "learned-model artifacts" in roadmap
     assert "v0.11: deeper GraphQL coverage" in roadmap
+    assert "v0.15: staged GraphQL subscription coverage" in roadmap
     assert "## v0.14 — smoke-test integration coverage" in roadmap
     assert "deterministic fixture apps and checked-in inputs only" in roadmap
     assert "#58: CLI happy path against a local API fixture" in roadmap
@@ -220,6 +225,7 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "built-in auth acquisition/refresh" in architecture
     assert "Shadow Twin inference around state machines" in architecture
     assert "GraphQL response-shape validation, federation awareness" in architecture
+    assert "staged subscription attacks now use `graphql-transport-ws`" in architecture
     assert "CLI and the HTTP API now sit on top of `services.py`" in architecture
     assert "FastAPI surface" in architecture
     assert "redirect-driven OAuth auth-code flows" in architecture

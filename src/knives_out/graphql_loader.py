@@ -22,6 +22,7 @@ from graphql import (
 )
 
 from knives_out.models import (
+    GraphQLOperationType,
     GraphQLOutputShape,
     LoadedOperations,
     OperationSpec,
@@ -437,7 +438,7 @@ def _operation_specs(
     *,
     schema: GraphQLSchema,
     root: GraphQLObjectType | None,
-    operation_type: str,
+    operation_type: GraphQLOperationType,
     endpoint: str,
 ) -> list[OperationSpec]:
     if root is None:
@@ -469,7 +470,7 @@ def _operation_specs(
         operations.append(
             OperationSpec(
                 operation_id=field_name,
-                method="POST",
+                method="SUBSCRIBE" if operation_type == "subscription" else "POST",
                 path=endpoint,
                 protocol="graphql",
                 summary=getattr(field, "description", None),
@@ -522,6 +523,12 @@ def load_graphql_operations_with_warnings(
             schema=schema,
             root=schema.mutation_type,
             operation_type="mutation",
+            endpoint=endpoint,
+        ),
+        *_operation_specs(
+            schema=schema,
+            root=schema.subscription_type,
+            operation_type="subscription",
             endpoint=endpoint,
         ),
     ]

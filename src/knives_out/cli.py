@@ -487,7 +487,7 @@ def run(
     ] = None,
     timeout: Annotated[
         float,
-        typer.Option(help="HTTP timeout in seconds."),
+        typer.Option(help="HTTP or subscription timeout in seconds."),
     ] = 10.0,
     artifact_dir: Annotated[
         Path | None,
