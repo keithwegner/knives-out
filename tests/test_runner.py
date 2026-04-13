@@ -1775,6 +1775,46 @@ def test_execute_attack_suite_runs_graphql_subscription_over_websocket() -> None
     assert result.url.endswith("/graphql")
 
 
+def test_execute_attack_suite_handles_graphql_subscription_ping_frames() -> None:
+    def _handler(websocket) -> None:
+        assert json.loads(websocket.recv()) == {"type": "connection_init"}
+        websocket.send(json.dumps({"type": "connection_ack"}))
+
+        subscribe_frame = json.loads(websocket.recv())
+        websocket.send(json.dumps({"type": "ping", "payload": {"cursor": "1"}}))
+        assert json.loads(websocket.recv()) == {"type": "pong", "payload": {"cursor": "1"}}
+        websocket.send(
+            json.dumps(
+                {
+                    "id": subscribe_frame["id"],
+                    "type": "next",
+                    "payload": {
+                        "data": {
+                            "bookEvents": {
+                                "__typename": "Book",
+                                "id": "1",
+                                "title": "Dune",
+                                "rating": 5,
+                            }
+                        }
+                    },
+                }
+            )
+        )
+
+    with _graphql_subscription_server(_handler) as base_url:
+        results = execute_attack_suite(
+            AttackSuite(source="unit", attacks=[_graphql_subscription_attack_case()]),
+            base_url=base_url,
+            timeout_seconds=0.5,
+        )
+
+    result = results.results[0]
+    assert result.flagged is False
+    assert result.issue is None
+    assert result.status_code == 200
+
+
 def test_execute_attack_suite_accepts_graphql_subscription_error_frames() -> None:
     def _handler(websocket) -> None:
         assert json.loads(websocket.recv()) == {"type": "connection_init"}
@@ -1819,6 +1859,39 @@ def test_execute_attack_suite_accepts_graphql_subscription_error_frames() -> Non
     assert "Variable '$id' must be an ID." in result.response_excerpt
 
 
+def test_execute_attack_suite_accepts_graphql_subscription_error_object_frames() -> None:
+    def _handler(websocket) -> None:
+        assert json.loads(websocket.recv()) == {"type": "connection_init"}
+        websocket.send(json.dumps({"type": "connection_ack"}))
+
+        subscribe_frame = json.loads(websocket.recv())
+        websocket.send(
+            json.dumps(
+                {
+                    "id": subscribe_frame["id"],
+                    "type": "error",
+                    "payload": {"message": "Subscription denied."},
+                }
+            )
+        )
+
+    with _graphql_subscription_server(_handler) as base_url:
+        results = execute_attack_suite(
+            AttackSuite(
+                source="unit",
+                attacks=[_graphql_subscription_attack_case(expected_outcomes=["graphql_error"])],
+            ),
+            base_url=base_url,
+            timeout_seconds=0.5,
+        )
+
+    result = results.results[0]
+    assert result.flagged is False
+    assert result.issue is None
+    assert result.response_excerpt is not None
+    assert "Subscription denied." in result.response_excerpt
+
+
 def test_execute_attack_suite_flags_graphql_subscription_protocol_errors() -> None:
     def _handler(websocket) -> None:
         assert json.loads(websocket.recv()) == {"type": "connection_init"}
@@ -1837,6 +1910,35 @@ def test_execute_attack_suite_flags_graphql_subscription_protocol_errors() -> No
     assert result.graphql_response_valid is None
     assert result.error is not None
     assert "connection_ack" in result.error
+
+
+def test_execute_attack_suite_flags_graphql_subscription_completion_without_result() -> None:
+    def _handler(websocket) -> None:
+        assert json.loads(websocket.recv()) == {"type": "connection_init"}
+        websocket.send(json.dumps({"type": "connection_ack"}))
+
+        subscribe_frame = json.loads(websocket.recv())
+        websocket.send(
+            json.dumps(
+                {
+                    "id": subscribe_frame["id"],
+                    "type": "complete",
+                }
+            )
+        )
+
+    with _graphql_subscription_server(_handler) as base_url:
+        results = execute_attack_suite(
+            AttackSuite(source="unit", attacks=[_graphql_subscription_attack_case()]),
+            base_url=base_url,
+            timeout_seconds=0.5,
+        )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "graphql_subscription_protocol_error"
+    assert result.error is not None
+    assert "completed without a result payload" in result.error
 
 
 def test_render_markdown_report_shows_workflow_sections() -> None:
