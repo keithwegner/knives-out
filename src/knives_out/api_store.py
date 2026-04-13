@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from knives_out.api_models import ArtifactListResponse, JobRecord, JobStatusResponse
+from knives_out.api_models import ApiJobStatus, ArtifactListResponse, JobRecord, JobStatusResponse
 from knives_out.models import AttackResults
 
 
@@ -99,6 +99,29 @@ class JobStore:
 
     def result_exists(self, job_id: str) -> bool:
         return self.result_path(job_id).exists()
+
+    def list_jobs(
+        self,
+        *,
+        statuses: set[ApiJobStatus] | None = None,
+        limit: int | None = None,
+    ) -> list[JobRecord]:
+        records: list[JobRecord] = []
+        for path in self.jobs_dir.iterdir():
+            if not path.is_dir():
+                continue
+            record_path = path / "job.json"
+            if not record_path.exists():
+                continue
+            record = self.load_job(path.name)
+            if statuses is not None and record.status not in statuses:
+                continue
+            records.append(record)
+
+        records.sort(key=lambda record: record.created_at, reverse=True)
+        if limit is not None:
+            return records[:limit]
+        return records
 
     def list_artifacts(self, job_id: str) -> list[str]:
         artifact_dir = self.artifact_dir(job_id)

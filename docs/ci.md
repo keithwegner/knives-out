@@ -209,7 +209,10 @@ server on loopback:
 
 The API mirrors the same JSON artifacts through `POST /v1/inspect`, `POST /v1/generate`,
 `POST /v1/discover`, `POST /v1/report`, `POST /v1/summary`, `POST /v1/verify`, `POST /v1/promote`,
-`POST /v1/triage`, and background `POST /v1/runs` jobs with `GET /v1/jobs/{id}` polling.
+`POST /v1/triage`, and background `POST /v1/runs` jobs with `GET /v1/jobs` browsing and
+`GET /v1/jobs/{id}` polling.
+Completed jobs expose a compact `result_summary` on the collection and status responses so
+downstream local tools can rank recent runs before fetching full result payloads.
 Use `KNIVES_OUT_API_DATA_DIR` when you want the job store somewhere other than `.knives-out-api/`.
 
 ## Optional: machine-readable summary export
