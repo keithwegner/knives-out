@@ -183,6 +183,9 @@ You can add app-specific journeys by loading a workflow pack module or entry poi
 
 GraphQL SDL or introspection JSON follows the same generate/run/report/verify flow. The generated
 attacks target invalid variables, required-variable removal, and type coercion failures.
+When the schema includes subscriptions, the generated suite also includes staged `SUBSCRIBE`
+attacks that use `graphql-transport-ws`, wait only up to the normal run timeout for the first
+event or error frame, and report protocol failures separately from application findings.
 
 ```yaml
 - name: Inspect a GraphQL schema

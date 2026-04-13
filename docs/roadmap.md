@@ -25,6 +25,9 @@ guesswork.
   - ships local reverse-proxy capture, HAR import, learned-model artifacts, and learned workflow attacks
 - v0.11: deeper GraphQL coverage
   - ships response-shape validation, federation-aware diagnostics, and protocol-aware reporting
+- v0.15: staged GraphQL subscription coverage
+  - ships subscription-root discovery plus bounded `graphql-transport-ws` execution in the
+    existing generate/run/report pipeline
 
 ## v0.12 — local-first HTTP API
 

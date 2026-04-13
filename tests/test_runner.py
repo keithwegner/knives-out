@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
+from websockets.sync.server import serve
 
 from knives_out.auth_config import BuiltInAuthConfig
 from knives_out.auth_plugins import RuntimePlugin
@@ -248,6 +252,55 @@ def _graphql_attack_case(
         graphql_federated=federated,
         graphql_entity_types=list(entity_types or []),
     )
+
+
+def _graphql_subscription_attack_case(
+    *,
+    body_json: dict[str, object] | None = None,
+    expected_outcomes: list[str] | None = None,
+) -> AttackCase:
+    return AttackCase(
+        id="atk_graphql_subscription",
+        name="GraphQL subscription",
+        kind="subscription_probe",
+        operation_id="bookEvents",
+        protocol="graphql",
+        method="SUBSCRIBE",
+        path="/graphql",
+        description="GraphQL subscription probe.",
+        body_json=body_json
+        or {
+            "query": (
+                "subscription BookEvents($id: ID!) { "
+                "bookEvents(id: $id) { __typename id title rating } "
+                "}"
+            ),
+            "variables": {"id": "1"},
+        },
+        expected_outcomes=list(expected_outcomes or ["2xx"]),
+        graphql_operation_type="subscription",
+        graphql_root_field_name="bookEvents",
+        graphql_output_shape=_graphql_shape_book(),
+    )
+
+
+@contextmanager
+def _graphql_subscription_server(handler) -> Iterator[str]:
+    with serve(
+        handler,
+        "127.0.0.1",
+        0,
+        subprotocols=["graphql-transport-ws"],
+        compression=None,
+    ) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        host, port = server.socket.getsockname()[:2]
+        try:
+            yield f"http://{host}:{port}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=1)
 
 
 def test_execute_attack_suite_flags_response_schema_mismatch(monkeypatch) -> None:
@@ -502,6 +555,34 @@ def test_render_markdown_report_shows_graphql_protocol_details() -> None:
     assert "graphql_response_shape_mismatch" in report
     assert "graphql-mismatch" in report
     assert "GraphQL federation hint" in report
+
+
+def test_render_markdown_report_shows_graphql_subscription_protocol_issue() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_graphql_subscription",
+                operation_id="bookEvents",
+                kind="subscription_probe",
+                name="GraphQL subscription protocol error",
+                protocol="graphql",
+                method="SUBSCRIBE",
+                url="https://example.com/graphql",
+                flagged=True,
+                issue="graphql_subscription_protocol_error",
+                severity="low",
+                confidence="high",
+                error="expected 'connection_ack', got 'pong'",
+            )
+        ],
+    )
+
+    report = render_markdown_report(results)
+
+    assert "graphql_subscription_protocol_error" in report
+    assert "expected 'connection_ack', got 'pong'" in report
 
 
 def test_render_markdown_report_with_baseline_shows_regression_sections() -> None:
@@ -1649,6 +1730,113 @@ def test_execute_attack_suite_validates_graphql_union_typename(monkeypatch) -> N
     assert result.flagged is True
     assert result.issue == "graphql_response_shape_mismatch"
     assert "expected one of ['Book']" in (result.graphql_response_error or "")
+
+
+def test_execute_attack_suite_runs_graphql_subscription_over_websocket() -> None:
+    def _handler(websocket) -> None:
+        init_frame = json.loads(websocket.recv())
+        assert init_frame == {"type": "connection_init"}
+        websocket.send(json.dumps({"type": "connection_ack"}))
+
+        subscribe_frame = json.loads(websocket.recv())
+        assert subscribe_frame["type"] == "subscribe"
+        assert subscribe_frame["payload"]["variables"] == {"id": "1"}
+        websocket.send(
+            json.dumps(
+                {
+                    "id": subscribe_frame["id"],
+                    "type": "next",
+                    "payload": {
+                        "data": {
+                            "bookEvents": {
+                                "__typename": "Book",
+                                "id": "1",
+                                "title": "Dune",
+                                "rating": 5,
+                            }
+                        }
+                    },
+                }
+            )
+        )
+
+    with _graphql_subscription_server(_handler) as base_url:
+        results = execute_attack_suite(
+            AttackSuite(source="unit", attacks=[_graphql_subscription_attack_case()]),
+            base_url=base_url,
+            timeout_seconds=0.5,
+        )
+
+    result = results.results[0]
+    assert result.flagged is False
+    assert result.issue is None
+    assert result.status_code == 200
+    assert result.graphql_response_valid is True
+    assert result.url.endswith("/graphql")
+
+
+def test_execute_attack_suite_accepts_graphql_subscription_error_frames() -> None:
+    def _handler(websocket) -> None:
+        assert json.loads(websocket.recv()) == {"type": "connection_init"}
+        websocket.send(json.dumps({"type": "connection_ack"}))
+
+        subscribe_frame = json.loads(websocket.recv())
+        websocket.send(
+            json.dumps(
+                {
+                    "id": subscribe_frame["id"],
+                    "type": "error",
+                    "payload": [{"message": "Variable '$id' must be an ID."}],
+                }
+            )
+        )
+
+    with _graphql_subscription_server(_handler) as base_url:
+        results = execute_attack_suite(
+            AttackSuite(
+                source="unit",
+                attacks=[
+                    _graphql_subscription_attack_case(
+                        body_json={
+                            "query": (
+                                "subscription BookEvents($id: ID!) { bookEvents(id: $id) { id } }"
+                            ),
+                            "variables": {"id": 123},
+                        },
+                        expected_outcomes=["graphql_error"],
+                    )
+                ],
+            ),
+            base_url=base_url,
+            timeout_seconds=0.5,
+        )
+
+    result = results.results[0]
+    assert result.flagged is False
+    assert result.issue is None
+    assert result.graphql_response_valid is None
+    assert result.response_excerpt is not None
+    assert "Variable '$id' must be an ID." in result.response_excerpt
+
+
+def test_execute_attack_suite_flags_graphql_subscription_protocol_errors() -> None:
+    def _handler(websocket) -> None:
+        assert json.loads(websocket.recv()) == {"type": "connection_init"}
+        websocket.send(json.dumps({"type": "pong"}))
+
+    with _graphql_subscription_server(_handler) as base_url:
+        results = execute_attack_suite(
+            AttackSuite(source="unit", attacks=[_graphql_subscription_attack_case()]),
+            base_url=base_url,
+            timeout_seconds=0.5,
+        )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "graphql_subscription_protocol_error"
+    assert result.graphql_response_valid is None
+    assert result.error is not None
+    assert "connection_ack" in result.error
 
 
 def test_render_markdown_report_shows_workflow_sections() -> None:

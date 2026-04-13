@@ -569,6 +569,7 @@ def _issue_badge_class(issue: str | None) -> str:
         "unexpected_success",
         "response_schema_mismatch",
         "graphql_response_shape_mismatch",
+        "graphql_subscription_protocol_error",
     }:
         return "warning"
     return "neutral"

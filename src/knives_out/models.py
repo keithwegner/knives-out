@@ -13,6 +13,7 @@ SourceKind = Literal["openapi", "graphql", "learned"]
 CaptureSource = Literal["proxy", "har"]
 LearnedBindingTarget = Literal["path", "query", "body"]
 GraphQLOutputKind = Literal["scalar", "enum", "object", "list", "interface", "union"]
+GraphQLOperationType = Literal["query", "mutation", "subscription"]
 
 
 class CapturedRequest(BaseModel):
@@ -96,7 +97,7 @@ class OperationSpec(BaseModel):
     auth_header_names: list[str] = Field(default_factory=list)
     auth_query_names: list[str] = Field(default_factory=list)
     response_schemas: dict[str, ResponseSpec] = Field(default_factory=dict)
-    graphql_operation_type: Literal["query", "mutation"] | None = None
+    graphql_operation_type: GraphQLOperationType | None = None
     graphql_document: str | None = None
     graphql_variables_schema: dict[str, Any] | None = None
     graphql_root_field_name: str | None = None
@@ -203,6 +204,7 @@ class AttackCase(BaseModel):
     omit_query_names: list[str] = Field(default_factory=list)
     expected_outcomes: list[str] = Field(default_factory=lambda: ["4xx"])
     response_schemas: dict[str, ResponseSpec] = Field(default_factory=dict)
+    graphql_operation_type: GraphQLOperationType | None = None
     graphql_root_field_name: str | None = None
     graphql_output_shape: GraphQLOutputShape | None = None
     graphql_federated: bool = False
