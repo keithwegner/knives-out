@@ -224,6 +224,49 @@ def test_generate_command_writes_attack_suite(tmp_path: Path) -> None:
     assert all(attack.type == "request" for attack in suite.attacks)
 
 
+def test_generate_command_filters_attacks_by_kind(tmp_path: Path) -> None:
+    out_path = tmp_path / "auth-attacks.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            str(EXAMPLE_SPEC),
+            "--kind",
+            "missing_auth",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert len(suite.attacks) == 1
+    assert {attack.kind for attack in suite.attacks} == {"missing_auth"}
+    assert [attack.operation_id for attack in suite.attacks] == ["createPet"]
+
+
+def test_generate_command_excludes_attacks_by_kind(tmp_path: Path) -> None:
+    out_path = tmp_path / "filtered-attacks.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            str(EXAMPLE_SPEC),
+            "--exclude-kind",
+            "missing_auth",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert suite.attacks
+    assert all(attack.kind != "missing_auth" for attack in suite.attacks)
+
+
 def test_generate_command_supports_graphql_schema(tmp_path: Path) -> None:
     out_path = tmp_path / "graphql-attacks.json"
     result = runner.invoke(app, ["generate", str(GRAPHQL_EXAMPLE_SPEC), "--out", str(out_path)])
