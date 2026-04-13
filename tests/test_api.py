@@ -139,6 +139,37 @@ def _baseline_results() -> AttackResults:
     )
 
 
+def _stored_job(
+    store: JobStore,
+    *,
+    status: ApiJobStatus,
+    created_at: datetime,
+    completed_at: datetime | None = None,
+    base_url: str = "https://example.com",
+    attack_count: int = 1,
+    error: str | None = None,
+    with_result: bool = False,
+    with_artifact: bool = False,
+) -> JobRecord:
+    record = store.create_job(
+        JobRecord(base_url=base_url, attack_count=attack_count).model_copy(
+            update={
+                "status": status,
+                "created_at": created_at,
+                "started_at": created_at,
+                "completed_at": completed_at,
+                "error": error,
+            }
+        )
+    )
+    if with_result:
+        store.write_result(record.id, _flagged_results().model_copy(update={"base_url": base_url}))
+    if with_artifact:
+        artifact_path = store.artifact_dir(record.id) / "atk_api.json"
+        artifact_path.write_text('{"attack":{"id":"atk_api"}}', encoding="utf-8")
+    return record
+
+
 def test_create_app_uses_env_data_dir_and_healthz_endpoint(tmp_path, monkeypatch) -> None:
     configured = tmp_path / "api-data"
     monkeypatch.setenv("KNIVES_OUT_API_DATA_DIR", str(configured))
@@ -295,6 +326,136 @@ def test_run_job_failure_is_reported(tmp_path, monkeypatch) -> None:
     assert result_response.status_code == 404
 
 
+def test_delete_job_removes_completed_job_and_related_artifacts(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    completed_at = datetime(2026, 4, 13, 12, 0, tzinfo=UTC)
+    record = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=completed_at - timedelta(minutes=1),
+        completed_at=completed_at,
+        with_result=True,
+        with_artifact=True,
+    )
+
+    response = client.delete(f"/v1/jobs/{record.id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["deleted"]["id"] == record.id
+    assert payload["deleted"]["status"] == "completed"
+    assert payload["deleted"]["result_available"] is True
+    assert payload["deleted"]["artifact_names"] == ["atk_api.json"]
+    assert not store.job_dir(record.id).exists()
+
+    assert client.get(f"/v1/jobs/{record.id}").status_code == 404
+    assert client.get(f"/v1/jobs/{record.id}/result").status_code == 404
+    assert client.get(f"/v1/jobs/{record.id}/artifacts").status_code == 404
+
+
+def test_delete_job_rejects_active_jobs(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    record = _stored_job(
+        store,
+        status=ApiJobStatus.running,
+        created_at=datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
+    )
+
+    response = client.delete(f"/v1/jobs/{record.id}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Active jobs cannot be deleted; wait for completion or failure first."
+    )
+    assert store.job_dir(record.id).exists()
+
+
+def test_prune_jobs_supports_dry_run_and_completed_before_filter(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    cutoff = datetime(2026, 4, 13, 12, 0, tzinfo=UTC)
+    old_completed = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=cutoff - timedelta(hours=2),
+        completed_at=cutoff - timedelta(hours=1),
+        with_result=True,
+    )
+    old_failed = _stored_job(
+        store,
+        status=ApiJobStatus.failed,
+        created_at=cutoff - timedelta(hours=3),
+        completed_at=cutoff - timedelta(hours=2),
+        error="boom",
+        with_artifact=True,
+    )
+    _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=cutoff - timedelta(minutes=10),
+        completed_at=cutoff + timedelta(minutes=5),
+        with_result=True,
+    )
+    _stored_job(
+        store,
+        status=ApiJobStatus.running,
+        created_at=cutoff - timedelta(minutes=2),
+    )
+
+    dry_run = client.post(
+        "/v1/jobs/prune",
+        json={
+            "statuses": ["completed", "failed"],
+            "completed_before": cutoff.isoformat(),
+            "limit": 10,
+            "dry_run": True,
+        },
+    )
+
+    assert dry_run.status_code == 200
+    dry_payload = dry_run.json()
+    assert dry_payload["dry_run"] is True
+    assert dry_payload["matched_count"] == 2
+    assert dry_payload["deleted_count"] == 0
+    assert [job["id"] for job in dry_payload["jobs"]] == [old_completed.id, old_failed.id]
+    assert store.job_dir(old_completed.id).exists()
+    assert store.job_dir(old_failed.id).exists()
+
+    response = client.post(
+        "/v1/jobs/prune",
+        json={
+            "statuses": ["completed", "failed"],
+            "completed_before": cutoff.isoformat(),
+            "limit": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dry_run"] is False
+    assert payload["matched_count"] == 2
+    assert payload["deleted_count"] == 2
+    assert [job["id"] for job in payload["jobs"]] == [old_completed.id, old_failed.id]
+    assert not store.job_dir(old_completed.id).exists()
+    assert not store.job_dir(old_failed.id).exists()
+
+
+def test_prune_jobs_rejects_active_status_filters(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path))
+
+    response = client.post("/v1/jobs/prune", json={"statuses": ["running"]})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Only completed and failed jobs can be pruned. Received unsupported statuses: running."
+    )
+
+
 def test_job_list_endpoint_returns_recent_jobs_and_filters_status(tmp_path) -> None:
     app = create_app(data_dir=tmp_path)
     client = TestClient(app)
@@ -364,6 +525,13 @@ def test_job_store_lists_nested_artifacts_and_rejects_path_traversal(tmp_path) -
 
     with pytest.raises(FileNotFoundError):
         store.artifact_path_for_name(record.id, "missing.json")
+
+
+def test_job_store_delete_rejects_path_traversal(tmp_path) -> None:
+    store = JobStore(tmp_path)
+
+    with pytest.raises(FileNotFoundError):
+        store.delete_job("../job.json")
 
 
 def test_discover_endpoint_supports_inline_inputs(tmp_path, monkeypatch) -> None:

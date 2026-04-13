@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from shutil import rmtree
 from time import monotonic, sleep
 from uuid import uuid4
 
@@ -12,6 +14,17 @@ from knives_out.models import AttackResults
 
 class JobNotFoundError(FileNotFoundError):
     pass
+
+
+class ActiveJobDeletionError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class DeletedJob:
+    record: JobRecord
+    result_available: bool
+    artifact_names: list[str]
 
 
 class JobStore:
@@ -123,6 +136,9 @@ class JobStore:
             return records[:limit]
         return records
 
+    def list_job_records(self) -> list[JobRecord]:
+        return self.list_jobs()
+
     def list_artifacts(self, job_id: str) -> list[str]:
         artifact_dir = self.artifact_dir(job_id)
         if not artifact_dir.exists():
@@ -144,6 +160,26 @@ class JobStore:
         if not candidate.exists() or not candidate.is_file():
             raise FileNotFoundError(name)
         return candidate
+
+    def _job_dir_path_for_delete(self, job_id: str) -> Path:
+        jobs_root = self.jobs_dir.resolve()
+        candidate = (self.jobs_dir / job_id).resolve()
+        if candidate.parent != jobs_root or not candidate.exists() or not candidate.is_dir():
+            raise JobNotFoundError(job_id)
+        return candidate
+
+    def delete_job(self, job_id: str) -> DeletedJob:
+        record = self.load_job(job_id)
+        if record.status in {ApiJobStatus.pending, ApiJobStatus.running}:
+            raise ActiveJobDeletionError(job_id)
+
+        deleted = DeletedJob(
+            record=record,
+            result_available=self.result_exists(job_id),
+            artifact_names=self.list_artifacts(job_id),
+        )
+        rmtree(self._job_dir_path_for_delete(job_id))
+        return deleted
 
     def job_status_response(self, job_id: str) -> JobStatusResponse:
         record = self.load_job(job_id)

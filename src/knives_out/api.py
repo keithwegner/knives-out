@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from knives_out.api_models import (
     ApiJobStatus,
     ArtifactListResponse,
+    DeleteJobResponse,
     DeltaChangeResponse,
     DiscoverRequest,
     DiscoverResponse,
@@ -22,9 +23,12 @@ from knives_out.api_models import (
     InspectResponse,
     JobListResponse,
     JobRecord,
+    JobRetentionEntry,
     JobStatusResponse,
     PromoteRequest,
     PromoteResponse,
+    PruneJobsRequest,
+    PruneJobsResponse,
     ReportRequest,
     ReportResponse,
     RunRequest,
@@ -35,7 +39,7 @@ from knives_out.api_models import (
     VerifyRequest,
     VerifyResponse,
 )
-from knives_out.api_store import JobNotFoundError, JobStore
+from knives_out.api_store import ActiveJobDeletionError, DeletedJob, JobNotFoundError, JobStore
 from knives_out.models import AttackResults, ResultsSummary
 from knives_out.services import (
     InlineInput,
@@ -50,6 +54,7 @@ from knives_out.services import (
     verify_results_from_models,
 )
 
+PRUNEABLE_JOB_STATUSES = frozenset({ApiJobStatus.completed, ApiJobStatus.failed})
 JOB_SUMMARY_TOP_LIMIT = 3
 
 
@@ -134,6 +139,34 @@ def _job_status_response(job_store: JobStore, record: JobRecord) -> JobStatusRes
         artifact_names=job_store.list_artifacts(record.id),
         result_summary=_job_result_summary(job_store, record.id) if result_available else None,
     )
+
+
+def _retention_entry(deleted: DeletedJob) -> JobRetentionEntry:
+    record = deleted.record
+    return JobRetentionEntry(
+        id=record.id,
+        status=record.status,
+        created_at=record.created_at,
+        completed_at=record.completed_at,
+        base_url=record.base_url,
+        attack_count=record.attack_count,
+        error=record.error,
+        result_available=deleted.result_available,
+        artifact_names=deleted.artifact_names,
+    )
+
+
+def _validate_prune_statuses(statuses: list[ApiJobStatus]) -> None:
+    invalid = [status.value for status in statuses if status not in PRUNEABLE_JOB_STATUSES]
+    if invalid:
+        joined = ", ".join(sorted(invalid))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only completed and failed jobs can be pruned. "
+                f"Received unsupported statuses: {joined}."
+            ),
+        )
 
 
 def _run_job_worker(job_store: JobStore, job_id: str, request: RunRequest) -> None:
@@ -335,6 +368,68 @@ def create_app(*, data_dir: Path | None = None) -> FastAPI:
             return _job_status_response(job_store, job_store.load_job(job_id))
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found.") from exc
+
+    @app.delete("/v1/jobs/{job_id}", response_model=DeleteJobResponse)
+    def delete_job(job_id: str) -> DeleteJobResponse:
+        job_store: JobStore = app.state.job_store
+        try:
+            deleted = job_store.delete_job(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found.") from exc
+        except ActiveJobDeletionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Active jobs cannot be deleted; wait for completion or failure first.",
+            ) from exc
+        return DeleteJobResponse(deleted=_retention_entry(deleted))
+
+    @app.post("/v1/jobs/prune", response_model=PruneJobsResponse)
+    def prune_jobs(request: PruneJobsRequest) -> PruneJobsResponse:
+        _validate_prune_statuses(request.statuses)
+        job_store: JobStore = app.state.job_store
+
+        matched_records = []
+        for record in job_store.list_job_records():
+            if record.status not in request.statuses:
+                continue
+            if request.completed_before is not None:
+                if record.completed_at is None or record.completed_at > request.completed_before:
+                    continue
+            matched_records.append(record)
+            if len(matched_records) >= request.limit:
+                break
+
+        if request.dry_run:
+            jobs = [
+                JobRetentionEntry(
+                    id=record.id,
+                    status=record.status,
+                    created_at=record.created_at,
+                    completed_at=record.completed_at,
+                    base_url=record.base_url,
+                    attack_count=record.attack_count,
+                    error=record.error,
+                    result_available=job_store.result_exists(record.id),
+                    artifact_names=job_store.list_artifacts(record.id),
+                )
+                for record in matched_records
+            ]
+            return PruneJobsResponse(
+                dry_run=True,
+                matched_count=len(jobs),
+                deleted_count=0,
+                jobs=jobs,
+            )
+
+        deleted_jobs = [
+            _retention_entry(job_store.delete_job(record.id)) for record in matched_records
+        ]
+        return PruneJobsResponse(
+            dry_run=False,
+            matched_count=len(matched_records),
+            deleted_count=len(deleted_jobs),
+            jobs=deleted_jobs,
+        )
 
     @app.get("/v1/jobs/{job_id}/result", response_model=AttackResults)
     def get_job_result(job_id: str) -> AttackResults:

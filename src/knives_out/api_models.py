@@ -234,3 +234,35 @@ class ArtifactListResponse(BaseModel):
 class JobListResponse(BaseModel):
     count: int
     jobs: list[JobStatusResponse] = Field(default_factory=list)
+
+
+class JobRetentionEntry(BaseModel):
+    id: str
+    status: ApiJobStatus
+    created_at: datetime
+    completed_at: datetime | None = None
+    base_url: str
+    attack_count: int
+    error: str | None = None
+    result_available: bool = False
+    artifact_names: list[str] = Field(default_factory=list)
+
+
+class DeleteJobResponse(BaseModel):
+    deleted: JobRetentionEntry
+
+
+class PruneJobsRequest(BaseModel):
+    statuses: list[ApiJobStatus] = Field(
+        default_factory=lambda: [ApiJobStatus.completed, ApiJobStatus.failed]
+    )
+    completed_before: datetime | None = None
+    limit: int = Field(default=100, ge=1, le=500)
+    dry_run: bool = False
+
+
+class PruneJobsResponse(BaseModel):
+    dry_run: bool = False
+    matched_count: int = 0
+    deleted_count: int = 0
+    jobs: list[JobRetentionEntry] = Field(default_factory=list)
