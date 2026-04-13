@@ -449,8 +449,7 @@ def test_prune_jobs_rejects_active_status_filters(tmp_path) -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == (
-        "Only completed and failed jobs can be pruned. "
-        "Received unsupported statuses: running."
+        "Only completed and failed jobs can be pruned. Received unsupported statuses: running."
     )
 
 
