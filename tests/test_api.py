@@ -342,7 +342,8 @@ def test_job_store_retries_transient_empty_job_records(tmp_path) -> None:
     store.record_path(record.id).write_text("", encoding="utf-8")
 
     def _repair_record() -> None:
-        time.sleep(0.01)
+        # Give the loader enough time to exercise the retry path on slower CI workers.
+        time.sleep(0.06)
         store.update_job(record)
 
     repair_thread = threading.Thread(target=_repair_record)
