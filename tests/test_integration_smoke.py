@@ -28,9 +28,7 @@ runner = CliRunner()
 _FIXED_DRAFT_ID = "00000000-0000-4000-8000-000000000000"
 _FIXED_EMAIL = "smoke@example.com"
 _FIXED_SKU = "00000000-0000-4000-8000-000000000001"
-_UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-)
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 
 class _StatefulHTTPServer(ThreadingHTTPServer):
