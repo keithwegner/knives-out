@@ -4,6 +4,7 @@ import os
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -316,8 +317,8 @@ def create_app(*, data_dir: Path | None = None) -> FastAPI:
 
     @app.get("/v1/jobs", response_model=JobListResponse)
     def list_jobs(
-        status: list[ApiJobStatus] | None = Query(default=None),
-        limit: int = Query(default=20, ge=1, le=100),
+        status: Annotated[list[ApiJobStatus] | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> JobListResponse:
         job_store: JobStore = app.state.job_store
         records = job_store.list_jobs(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from textwrap import dedent
 
 import httpx
@@ -300,7 +300,7 @@ def test_job_list_endpoint_returns_recent_jobs_and_filters_status(tmp_path) -> N
     client = TestClient(app)
     store = app.state.job_store
 
-    base_time = datetime(2026, 4, 13, 12, 0, tzinfo=timezone.utc)
+    base_time = datetime(2026, 4, 13, 12, 0, tzinfo=UTC)
     completed_record = store.create_job(
         JobRecord(base_url="https://completed.example", attack_count=1).model_copy(
             update={
