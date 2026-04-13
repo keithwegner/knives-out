@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -45,17 +45,26 @@ class JobStore:
         temp_path.write_text(content, encoding="utf-8")
         temp_path.replace(path)
 
-    def _load_json_with_retries(self, path: Path, model):
-        last_error: ValidationError | None = None
-        for attempt in range(5):
-            raw = path.read_text(encoding="utf-8")
+    def _load_json_with_retries(
+        self,
+        path: Path,
+        model,
+        *,
+        timeout_seconds: float = 0.2,
+        retry_delay_seconds: float = 0.01,
+    ):
+        last_error: ValidationError | OSError | None = None
+        deadline = monotonic() + timeout_seconds
+
+        while True:
             try:
+                raw = path.read_text(encoding="utf-8")
                 return model.model_validate_json(raw)
-            except ValidationError as exc:
+            except (OSError, ValidationError) as exc:
                 last_error = exc
-                if attempt == 4:
+                if monotonic() >= deadline:
                     raise
-                sleep(0.01)
+                sleep(retry_delay_seconds)
         if last_error is not None:
             raise last_error
         raise RuntimeError(f"Unable to load JSON from {path}.")
