@@ -5,12 +5,13 @@ import time
 from textwrap import dedent
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from knives_out.api import create_app
 from knives_out.api_models import JobRecord
 from knives_out.api_store import JobStore
-from knives_out.models import AttackCase, AttackResult, AttackResults, AttackSuite
+from knives_out.models import AttackCase, AttackResult, AttackResults, AttackSuite, LearnedModel
 
 OPENAPI_SPEC = dedent(
     """
@@ -114,6 +115,42 @@ def _flagged_results() -> AttackResults:
     )
 
 
+def _baseline_results() -> AttackResults:
+    return AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_api",
+                operation_id="getSecret",
+                kind="missing_auth",
+                name="Server failure",
+                method="GET",
+                path="/secrets",
+                url="https://example.com/secrets",
+                status_code=401,
+                flagged=True,
+                issue="server_error",
+                severity="medium",
+                confidence="medium",
+            )
+        ],
+    )
+
+
+def test_create_app_uses_env_data_dir_and_healthz_endpoint(tmp_path, monkeypatch) -> None:
+    configured = tmp_path / "api-data"
+    monkeypatch.setenv("KNIVES_OUT_API_DATA_DIR", str(configured))
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert app.state.job_store.root == configured
+
+
 def test_inspect_endpoint_supports_inline_graphql_schema(tmp_path) -> None:
     client = TestClient(create_app(data_dir=tmp_path))
 
@@ -206,8 +243,96 @@ def test_run_job_status_endpoints_404_for_missing_job(tmp_path) -> None:
     response = client.get("/v1/jobs/missing")
     assert response.status_code == 404
 
+    response = client.get("/v1/jobs/missing/result")
+    assert response.status_code == 404
+
     response = client.get("/v1/jobs/missing/artifacts")
     assert response.status_code == 404
+
+    response = client.get("/v1/jobs/missing/artifacts/missing.json")
+    assert response.status_code == 404
+
+
+def test_run_job_failure_is_reported(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "knives_out.api.run_suite_from_inline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("runner exploded")),
+    )
+    client = TestClient(create_app(data_dir=tmp_path))
+
+    response = client.post(
+        "/v1/runs",
+        json={
+            "suite": _attack_suite().model_dump(mode="json"),
+            "base_url": "https://example.com",
+            "store_artifacts": False,
+        },
+    )
+
+    assert response.status_code == 200
+    job_id = response.json()["id"]
+
+    status_payload = None
+    for _ in range(50):
+        status_response = client.get(f"/v1/jobs/{job_id}")
+        assert status_response.status_code == 200
+        status_payload = status_response.json()
+        if status_payload["status"] == "failed":
+            break
+        time.sleep(0.02)
+
+    assert status_payload is not None
+    assert status_payload["status"] == "failed"
+    assert status_payload["result_available"] is False
+    assert status_payload["artifact_names"] == []
+    assert status_payload["error"] == "runner exploded"
+
+    result_response = client.get(f"/v1/jobs/{job_id}/result")
+    assert result_response.status_code == 404
+
+
+def test_job_store_lists_nested_artifacts_and_rejects_path_traversal(tmp_path) -> None:
+    store = JobStore(tmp_path)
+    record = store.create_job(JobRecord(base_url="https://example.com", attack_count=1))
+    artifact_path = store.artifact_dir(record.id) / "profiles" / "atk_api.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text('{"attack":{"id":"atk_api"}}', encoding="utf-8")
+
+    assert store.list_artifacts(record.id) == ["profiles/atk_api.json"]
+    assert store.artifact_list_response(record.id).artifacts == ["profiles/atk_api.json"]
+    assert (
+        store.artifact_path_for_name(record.id, "profiles/atk_api.json") == artifact_path.resolve()
+    )
+
+    with pytest.raises(FileNotFoundError):
+        store.artifact_path_for_name(record.id, "../job.json")
+
+    with pytest.raises(FileNotFoundError):
+        store.artifact_path_for_name(record.id, "missing.json")
+
+
+def test_discover_endpoint_supports_inline_inputs(tmp_path, monkeypatch) -> None:
+    discovered = {}
+
+    def _fake_discover(inputs):
+        discovered["names"] = [current.name for current in inputs]
+        discovered["contents"] = [current.content for current in inputs]
+        return LearnedModel(source_inputs=discovered["names"])
+
+    monkeypatch.setattr("knives_out.api.discover_model_inline", _fake_discover)
+    client = TestClient(create_app(data_dir=tmp_path))
+
+    response = client.post(
+        "/v1/discover",
+        json={
+            "inputs": [{"name": "capture.ndjson", "content": '{"artifact_type":"capture-event"}'}]
+        },
+    )
+
+    assert response.status_code == 200
+    assert discovered["names"] == ["capture.ndjson"]
+    assert discovered["contents"] == ['{"artifact_type":"capture-event"}']
+    assert response.json()["learned_model"]["source_inputs"] == ["capture.ndjson"]
 
 
 def test_job_store_retries_transient_empty_job_records(tmp_path) -> None:
@@ -277,3 +402,46 @@ def test_report_verify_promote_and_triage_endpoints(tmp_path) -> None:
     )
     assert promote_response.status_code == 200
     assert promote_response.json()["promoted_attack_ids"] == ["atk_api"]
+
+
+def test_verify_endpoint_reports_delta_changes_and_report_supports_html(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path))
+    current = _flagged_results()
+    baseline = _baseline_results()
+
+    verify_response = client.post(
+        "/v1/verify",
+        json={
+            "results": current.model_dump(mode="json"),
+            "baseline": baseline.model_dump(mode="json"),
+            "min_severity": "medium",
+            "min_confidence": "medium",
+        },
+    )
+
+    assert verify_response.status_code == 200
+    verify_payload = verify_response.json()
+    assert verify_payload["baseline_used"] is True
+    assert verify_payload["persisting_findings_count"] == 1
+    assert verify_payload["persisting_findings"][0]["protocol"] == "rest"
+    assert [
+        change["field"] for change in verify_payload["persisting_findings"][0]["delta_changes"]
+    ] == [
+        "severity",
+        "confidence",
+        "status",
+    ]
+
+    report_response = client.post(
+        "/v1/report",
+        json={
+            "results": current.model_dump(mode="json"),
+            "baseline": baseline.model_dump(mode="json"),
+            "format": "html",
+        },
+    )
+
+    assert report_response.status_code == 200
+    report_payload = report_response.json()
+    assert report_payload["format"] == "html"
+    assert "<!DOCTYPE html>" in report_payload["content"]
