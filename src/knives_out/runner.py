@@ -6,9 +6,11 @@ import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 import httpx
+from websockets.exceptions import ConnectionClosed, InvalidHandshake
+from websockets.sync.client import connect as websocket_connect
 
 from knives_out.auth_config import BuiltInAuthConfig
 from knives_out.auth_plugins import (
@@ -43,6 +45,7 @@ from knives_out.models import (
 
 ISSUE_SCORES: dict[str, tuple[SeverityLevel, ConfidenceLevel]] = {
     "transport_error": ("low", "low"),
+    "graphql_subscription_protocol_error": ("low", "high"),
     "no_status": ("low", "low"),
     "server_error": ("high", "high"),
     "unexpected_success": ("high", "medium"),
@@ -54,6 +57,8 @@ ISSUE_SCORES: dict[str, tuple[SeverityLevel, ConfidenceLevel]] = {
 
 _PLACEHOLDER_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 _EXACT_PLACEHOLDER_RE = re.compile(r"^\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}$")
+_GRAPHQL_SUBSCRIPTION_SUBPROTOCOL = "graphql-transport-ws"
+_GRAPHQL_SUBSCRIPTION_ID = "1"
 _SEVERITY_ORDER = {
     "none": 0,
     "low": 1,
@@ -193,6 +198,160 @@ def _graphql_federation_hint(
         "Schema appears federated; mismatches around abstract or nested object selections may "
         "reflect subgraph composition or entity resolution issues."
     )
+
+
+def _graphql_subscription_url(url: str, query: dict[str, Any]) -> str:
+    parsed = urlsplit(url)
+    scheme = {"http": "ws", "https": "wss"}.get(parsed.scheme, parsed.scheme)
+    query_string = urlencode(query, doseq=True)
+    return urlunsplit((scheme, parsed.netloc, parsed.path, query_string, parsed.fragment))
+
+
+def _graphql_subscription_payload(
+    request: PreparedRequest,
+    request_kwargs: dict[str, Any] | None,
+) -> tuple[bool, Any]:
+    if request.omit_body:
+        return False, None
+    if request_kwargs and "json" in request_kwargs:
+        return True, request_kwargs["json"]
+    if request_kwargs and "content" in request_kwargs:
+        return True, request_kwargs["content"]
+    if request.body_json is not None:
+        return True, request.body_json
+    if request.raw_body is not None:
+        return True, request.raw_body
+    return False, None
+
+
+def _graphql_subscription_response(url: str, payload: dict[str, Any]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"Content-Type": "application/json"},
+        json=payload,
+        request=httpx.Request("POST", url),
+    )
+
+
+def _recv_graphql_subscription_frame(
+    websocket,
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    try:
+        raw_message = websocket.recv(timeout=timeout_seconds)
+    except TimeoutError as exc:
+        raise RuntimeError("timed out waiting for a subscription protocol frame") from exc
+    if not isinstance(raw_message, str):
+        raise RuntimeError("received a non-text subscription frame")
+    try:
+        frame = json.loads(raw_message)
+    except ValueError as exc:
+        raise RuntimeError(f"received invalid JSON frame: {exc}") from exc
+    if not isinstance(frame, dict):
+        raise RuntimeError("received a non-object JSON subscription frame")
+    frame_type = frame.get("type")
+    if not isinstance(frame_type, str):
+        raise RuntimeError("received a subscription frame without a string 'type'")
+    return frame
+
+
+def _execute_graphql_subscription(
+    request: PreparedRequest,
+    *,
+    url: str,
+    headers: dict[str, str],
+    query: dict[str, Any],
+    request_kwargs: dict[str, Any] | None,
+    timeout_seconds: float,
+) -> httpx.Response:
+    websocket_url = _graphql_subscription_url(url, query)
+    payload_present, payload = _graphql_subscription_payload(request, request_kwargs)
+    timeout_budget = max(timeout_seconds, 0.1)
+    deadline = time.perf_counter() + timeout_budget
+
+    def _remaining_timeout() -> float:
+        return max(deadline - time.perf_counter(), 0.01)
+
+    try:
+        with websocket_connect(
+            websocket_url,
+            subprotocols=[_GRAPHQL_SUBSCRIPTION_SUBPROTOCOL],
+            additional_headers=headers,
+            compression=None,
+            proxy=None,
+            open_timeout=timeout_budget,
+            close_timeout=min(timeout_budget, 1.0),
+            ping_interval=None,
+            ping_timeout=None,
+        ) as websocket:
+            if websocket.subprotocol != _GRAPHQL_SUBSCRIPTION_SUBPROTOCOL:
+                raise RuntimeError(
+                    "server did not negotiate the 'graphql-transport-ws' subprotocol"
+                )
+
+            websocket.send(json.dumps({"type": "connection_init"}))
+            ack_frame = _recv_graphql_subscription_frame(
+                websocket,
+                timeout_seconds=_remaining_timeout(),
+            )
+            if ack_frame["type"] != "connection_ack":
+                raise RuntimeError(f"expected 'connection_ack', got {ack_frame['type']!r}")
+
+            subscribe_frame: dict[str, Any] = {
+                "id": _GRAPHQL_SUBSCRIPTION_ID,
+                "type": "subscribe",
+            }
+            if payload_present:
+                subscribe_frame["payload"] = payload
+            websocket.send(json.dumps(subscribe_frame))
+
+            while True:
+                frame = _recv_graphql_subscription_frame(
+                    websocket,
+                    timeout_seconds=_remaining_timeout(),
+                )
+                frame_type = frame["type"]
+                if frame_type == "ping":
+                    pong_frame: dict[str, Any] = {"type": "pong"}
+                    if "payload" in frame:
+                        pong_frame["payload"] = frame["payload"]
+                    websocket.send(json.dumps(pong_frame))
+                    continue
+                if frame_type == "pong":
+                    continue
+                if frame_type == "next":
+                    result_payload = frame.get("payload")
+                    if not isinstance(result_payload, dict):
+                        raise RuntimeError("received a 'next' frame without an object payload")
+                    try:
+                        websocket.send(
+                            json.dumps(
+                                {
+                                    "id": _GRAPHQL_SUBSCRIPTION_ID,
+                                    "type": "complete",
+                                }
+                            )
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return _graphql_subscription_response(url, result_payload)
+                if frame_type == "error":
+                    error_payload = frame.get("payload")
+                    if isinstance(error_payload, list):
+                        errors = error_payload
+                    elif isinstance(error_payload, dict):
+                        errors = [error_payload]
+                    else:
+                        errors = [{"message": str(error_payload or "subscription error")}]
+                    return _graphql_subscription_response(url, {"errors": errors})
+                if frame_type == "complete":
+                    raise RuntimeError("subscription completed without a result payload")
+                raise RuntimeError(f"received unexpected frame type {frame_type!r}")
+    except InvalidHandshake as exc:
+        raise RuntimeError(f"websocket handshake failed: {exc}") from exc
+    except ConnectionClosed as exc:
+        raise RuntimeError(f"connection closed before a result frame was received: {exc}") from exc
 
 
 def _validate_graphql_output_value(
@@ -809,6 +968,7 @@ def _execute_request(
     context: RuntimeContext,
     default_headers: dict[str, str],
     default_query: dict[str, Any],
+    timeout_seconds: float,
     artifact_root: Path | None,
     artifact_filename: str | None,
     artifact_metadata: dict[str, Any] | None,
@@ -883,7 +1043,17 @@ def _execute_request(
 
         start = time.perf_counter()
         try:
-            execution.response = client.request(request.method, execution.url, **request_kwargs)
+            if request.method.casefold() == "subscribe":
+                execution.response = _execute_graphql_subscription(
+                    request,
+                    url=execution.url,
+                    headers=headers,
+                    query=query,
+                    request_kwargs=request_kwargs,
+                    timeout_seconds=timeout_seconds,
+                )
+            else:
+                execution.response = client.request(request.method, execution.url, **request_kwargs)
         except Exception as exc:  # noqa: BLE001
             execution.error = str(exc)
         execution.duration_ms = (time.perf_counter() - start) * 1000.0
@@ -947,6 +1117,9 @@ def _request_result(
     graphql_response_valid: bool | None = None
     graphql_response_error: str | None = None
     graphql_response_hint: str | None = None
+    if attack.graphql_operation_type == "subscription" and execution.error is not None:
+        flagged = True
+        issue = "graphql_subscription_protocol_error"
     if execution.response is not None:
         (
             response_schema_status,
@@ -1280,6 +1453,7 @@ def _execute_workflow_attack(
                 context=context,
                 default_headers=default_headers,
                 default_query=default_query,
+                timeout_seconds=timeout_seconds,
                 artifact_root=artifact_root,
                 artifact_filename=f"{workflow.id}-step-{index:02d}.json" if artifact_root else None,
                 artifact_metadata=(
@@ -1350,6 +1524,7 @@ def _execute_workflow_attack(
             context=context,
             default_headers=default_headers,
             default_query=default_query,
+            timeout_seconds=timeout_seconds,
             artifact_root=artifact_root,
             artifact_filename=f"{workflow.id}.json" if artifact_root else None,
             artifact_metadata=(
@@ -1456,6 +1631,7 @@ def execute_attack_suite(
                 context=suite_context,
                 default_headers=default_headers,
                 default_query=default_query,
+                timeout_seconds=timeout_seconds,
                 artifact_root=artifact_root,
                 artifact_filename=f"{attack.id}.json" if artifact_root else None,
                 artifact_metadata=(

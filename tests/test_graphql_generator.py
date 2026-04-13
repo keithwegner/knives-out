@@ -1,11 +1,32 @@
 from __future__ import annotations
 
 from pathlib import Path
+from textwrap import dedent
 
 from knives_out.generator import generate_attack_suite
 from knives_out.spec_loader import load_operations
 
 GRAPHQL_SPEC = Path(__file__).resolve().parents[1] / "examples" / "graphql" / "library.graphql"
+
+
+def _graphql_subscription_schema_text() -> str:
+    return dedent(
+        """
+        type Query {
+          health: String!
+        }
+
+        type Subscription {
+          bookEvents(id: ID!): Book!
+        }
+
+        type Book {
+          id: ID!
+          title: String!
+          rating: Int
+        }
+        """
+    ).strip()
 
 
 def test_generate_graphql_attack_suite_emits_variable_mutations() -> None:
@@ -55,3 +76,28 @@ def test_generate_graphql_attack_suite_emits_variable_mutations() -> None:
     assert wrong_type_attack.graphql_output_shape is not None
     assert "__typename" in wrong_type_attack.graphql_output_shape.fields
     assert "variables" in wrong_type_attack.body_json
+
+
+def test_generate_graphql_attack_suite_includes_subscription_attacks(tmp_path) -> None:
+    schema_path = tmp_path / "subscriptions.graphql"
+    schema_path.write_text(_graphql_subscription_schema_text(), encoding="utf-8")
+
+    suite = generate_attack_suite(
+        load_operations(schema_path),
+        source=str(schema_path),
+    )
+
+    subscription_attacks = [
+        attack for attack in suite.attacks if attack.operation_id == "bookEvents"
+    ]
+    kinds = {attack.kind for attack in subscription_attacks}
+
+    assert "missing_request_body" in kinds
+    assert "malformed_json_body" in kinds
+    assert "wrong_type_variable" in kinds
+    assert all(attack.method == "SUBSCRIBE" for attack in subscription_attacks)
+    assert all(attack.graphql_operation_type == "subscription" for attack in subscription_attacks)
+    wrong_type_attack = next(
+        attack for attack in subscription_attacks if attack.kind == "wrong_type_variable"
+    )
+    assert wrong_type_attack.body_json["query"].startswith("subscription BookEvents")

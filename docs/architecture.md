@@ -74,10 +74,11 @@ That JSON should become the contract between future generators and future runner
 
 `runner.py` executes the saved suite against a concrete base URL. Runtime auth, query values,
 profile-specific defaults, built-in auth acquisition/refresh, and workflow state are merged at
-this phase rather than baked into generation. For GraphQL attacks, a `200` response with an `errors`
-array is treated as an expected validation failure instead of an unexpected success, and
-GraphQL response-shape validation now checks returned `data` against the generated selection shape
-with federation-aware hints when mismatches cross entity or abstract-type boundaries.
+this phase rather than baked into generation. For GraphQL attacks, a `200` response with an
+`errors` array is treated as an expected validation failure instead of an unexpected success,
+staged subscription attacks now use `graphql-transport-ws` with a bounded first-event timeout,
+and GraphQL response-shape validation now checks returned `data` against the generated selection
+shape with federation-aware hints when mismatches cross entity or abstract-type boundaries.
 That shipped GraphQL response-shape validation, federation awareness, and clearer mixed-protocol
 diagnostics without changing the core pipeline shape.
 

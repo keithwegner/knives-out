@@ -47,6 +47,26 @@ def _graphql_schema_text() -> str:
     ).strip()
 
 
+def _graphql_subscription_schema_text() -> str:
+    return dedent(
+        """
+        type Query {
+          health: String!
+        }
+
+        type Subscription {
+          bookEvents(id: ID!): Book!
+        }
+
+        type Book {
+          id: ID!
+          title: String!
+          rating: Int
+        }
+        """
+    ).strip()
+
+
 def test_load_graphql_operations_from_sdl(tmp_path) -> None:
     schema_path = tmp_path / "library.graphql"
     schema_path.write_text(_graphql_schema_text(), encoding="utf-8")
@@ -146,6 +166,29 @@ def test_load_graphql_operations_from_sdl(tmp_path) -> None:
     assert "Book" in node.graphql_output_shape.possible_types
 
 
+def test_load_graphql_operations_includes_subscription_roots(tmp_path) -> None:
+    schema_path = tmp_path / "subscriptions.graphql"
+    schema_path.write_text(_graphql_subscription_schema_text(), encoding="utf-8")
+
+    operations = load_graphql_operations(schema_path, endpoint="/api/graphql")
+
+    subscription = next(
+        operation for operation in operations if operation.operation_id == "bookEvents"
+    )
+
+    assert subscription.graphql_operation_type == "subscription"
+    assert subscription.method == "SUBSCRIBE"
+    assert subscription.tags == ["graphql", "subscription"]
+    assert subscription.graphql_document == (
+        "subscription BookEvents($id: ID!) { bookEvents(id: $id) { __typename id title rating } }"
+    )
+    assert subscription.graphql_variables_schema == {
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+        "required": ["id"],
+    }
+
+
 def test_spec_loader_detects_graphql_introspection_json(tmp_path) -> None:
     schema = build_schema(_graphql_schema_text())
     introspection_path = tmp_path / "library-introspection.json"
@@ -164,6 +207,28 @@ def test_spec_loader_detects_graphql_introspection_json(tmp_path) -> None:
         "node",
         "createBook",
     }
+
+
+def test_spec_loader_detects_graphql_subscription_introspection_json(tmp_path) -> None:
+    schema = build_schema(_graphql_subscription_schema_text())
+    introspection_path = tmp_path / "subscription-introspection.json"
+    introspection_path.write_text(
+        json.dumps({"data": introspection_from_schema(schema)}),
+        encoding="utf-8",
+    )
+
+    loaded = load_operations_with_warnings(introspection_path)
+
+    assert loaded.warnings == []
+    assert {operation.operation_id for operation in loaded.operations} == {
+        "health",
+        "bookEvents",
+    }
+    subscription = next(
+        operation for operation in loaded.operations if operation.operation_id == "bookEvents"
+    )
+    assert subscription.graphql_operation_type == "subscription"
+    assert subscription.method == "SUBSCRIBE"
 
 
 def test_load_graphql_operations_detects_federation_hints(tmp_path) -> None:

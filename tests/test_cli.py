@@ -25,6 +25,26 @@ GRAPHQL_EXAMPLE_SPEC = (
 )
 
 
+def _graphql_subscription_schema_text() -> str:
+    return dedent(
+        """
+        type Query {
+          health: String!
+        }
+
+        type Subscription {
+          bookEvents(id: ID!): Book!
+        }
+
+        type Book {
+          id: ID!
+          title: String!
+          rating: Int
+        }
+        """
+    ).strip()
+
+
 def _write_results(path: Path, results: AttackResults) -> None:
     path.write_text(results.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
 
@@ -119,6 +139,18 @@ def test_inspect_command_supports_graphql_schema(tmp_path: Path) -> None:
     assert "/api/graphql" in result.stdout
 
 
+def test_inspect_command_supports_graphql_subscription_schema(tmp_path: Path) -> None:
+    schema_path = tmp_path / "subscriptions.graphql"
+    schema_path.write_text(_graphql_subscription_schema_text(), encoding="utf-8")
+
+    result = runner.invoke(app, ["inspect", str(schema_path)])
+
+    assert result.exit_code == 0
+    assert "Found 2 operations." in result.stdout
+    assert "bookEvents" in result.stdout
+    assert "SUBSCRIBE" in result.stdout
+
+
 def test_inspect_command_supports_json_output(monkeypatch) -> None:
     monkeypatch.setattr(
         "knives_out.services.load_operations_with_warnings",
@@ -192,6 +224,49 @@ def test_generate_command_writes_attack_suite(tmp_path: Path) -> None:
     assert all(attack.type == "request" for attack in suite.attacks)
 
 
+def test_generate_command_filters_attacks_by_kind(tmp_path: Path) -> None:
+    out_path = tmp_path / "auth-attacks.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            str(EXAMPLE_SPEC),
+            "--kind",
+            "missing_auth",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert len(suite.attacks) == 1
+    assert {attack.kind for attack in suite.attacks} == {"missing_auth"}
+    assert [attack.operation_id for attack in suite.attacks] == ["createPet"]
+
+
+def test_generate_command_excludes_attacks_by_kind(tmp_path: Path) -> None:
+    out_path = tmp_path / "filtered-attacks.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            str(EXAMPLE_SPEC),
+            "--exclude-kind",
+            "missing_auth",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert suite.attacks
+    assert all(attack.kind != "missing_auth" for attack in suite.attacks)
+
+
 def test_generate_command_supports_graphql_schema(tmp_path: Path) -> None:
     out_path = tmp_path / "graphql-attacks.json"
     result = runner.invoke(app, ["generate", str(GRAPHQL_EXAMPLE_SPEC), "--out", str(out_path)])
@@ -200,6 +275,19 @@ def test_generate_command_supports_graphql_schema(tmp_path: Path) -> None:
     suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
     assert any(attack.kind == "wrong_type_variable" for attack in suite.attacks)
     assert all(attack.path == "/graphql" for attack in suite.attacks)
+
+
+def test_generate_command_supports_graphql_subscription_schema(tmp_path: Path) -> None:
+    schema_path = tmp_path / "subscriptions.graphql"
+    schema_path.write_text(_graphql_subscription_schema_text(), encoding="utf-8")
+    out_path = tmp_path / "graphql-subscriptions.json"
+
+    result = runner.invoke(app, ["generate", str(schema_path), "--out", str(out_path)])
+
+    assert result.exit_code == 0
+    suite = AttackSuite.model_validate_json(out_path.read_text(encoding="utf-8"))
+    assert any(attack.method == "SUBSCRIBE" for attack in suite.attacks)
+    assert any(attack.graphql_operation_type == "subscription" for attack in suite.attacks)
 
 
 def test_generate_command_supports_auto_workflows(tmp_path: Path) -> None:

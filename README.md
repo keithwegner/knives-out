@@ -99,6 +99,8 @@ Generate attacks:
 ```bash
 knives-out generate examples/openapi/petstore.yaml --out attacks.json
 knives-out generate examples/openapi/storefront.yaml --tag orders --out attacks.json
+knives-out generate examples/openapi/petstore.yaml --kind missing_auth --out auth-attacks.json
+knives-out generate examples/openapi/petstore.yaml --exclude-kind malformed_json_body --out quieter-attacks.json
 knives-out generate examples/graphql/library.graphql --out graphql-attacks.json
 ```
 
@@ -299,6 +301,9 @@ want to keep only the highest-signal regressions around, follow `verify` with
 workflow, secret setup, filtering patterns, baseline-aware CI flows, and checked-in suppressions.
 GraphQL schemas follow the same `inspect` / `generate` / `run` / `report` / `verify` flow, with
 `generate` automatically emitting variable-coercion attacks from SDL or introspection input.
+Subscription roots are now staged into the same artifact flow as `SUBSCRIBE` attacks when the
+schema exposes them, using the `graphql-transport-ws` protocol and capturing the first event or
+error frame within the normal `--timeout` budget.
 Shadow Twin capture and discovery fit the same path too:
 `capture -> discover -> generate -> run -> report -> verify`.
 If you want to drive that workflow from another local tool instead of shelling out, `knives-out serve`
