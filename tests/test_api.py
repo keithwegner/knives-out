@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from textwrap import dedent
 
@@ -7,6 +8,8 @@ import httpx
 from fastapi.testclient import TestClient
 
 from knives_out.api import create_app
+from knives_out.api_models import JobRecord
+from knives_out.api_store import JobStore
 from knives_out.models import AttackCase, AttackResult, AttackResults, AttackSuite
 
 OPENAPI_SPEC = dedent(
@@ -205,6 +208,25 @@ def test_run_job_status_endpoints_404_for_missing_job(tmp_path) -> None:
 
     response = client.get("/v1/jobs/missing/artifacts")
     assert response.status_code == 404
+
+
+def test_job_store_retries_transient_empty_job_records(tmp_path) -> None:
+    store = JobStore(tmp_path)
+    record = JobRecord(base_url="https://example.com", attack_count=1)
+    store.job_dir(record.id).mkdir(parents=True, exist_ok=True)
+    store.record_path(record.id).write_text("", encoding="utf-8")
+
+    def _repair_record() -> None:
+        time.sleep(0.01)
+        store.update_job(record)
+
+    repair_thread = threading.Thread(target=_repair_record)
+    repair_thread.start()
+    loaded = store.load_job(record.id)
+    repair_thread.join()
+
+    assert loaded.id == record.id
+    assert loaded.base_url == "https://example.com"
 
 
 def test_report_verify_promote_and_triage_endpoints(tmp_path) -> None:

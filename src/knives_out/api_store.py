@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import sleep
+from uuid import uuid4
+
+from pydantic import ValidationError
 
 from knives_out.api_models import ArtifactListResponse, JobRecord, JobStatusResponse
 from knives_out.models import AttackResults
@@ -35,33 +39,54 @@ class JobStore:
     def result_path(self, job_id: str) -> Path:
         return self.job_dir(job_id) / "result.json"
 
+    def _write_json_atomic(self, path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+        temp_path.write_text(content, encoding="utf-8")
+        temp_path.replace(path)
+
+    def _load_json_with_retries(self, path: Path, model):
+        last_error: ValidationError | None = None
+        for attempt in range(5):
+            raw = path.read_text(encoding="utf-8")
+            try:
+                return model.model_validate_json(raw)
+            except ValidationError as exc:
+                last_error = exc
+                if attempt == 4:
+                    raise
+                sleep(0.01)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"Unable to load JSON from {path}.")
+
     def _write_record(self, record: JobRecord) -> None:
-        self.record_path(record.id).write_text(
+        self._write_json_atomic(
+            self.record_path(record.id),
             record.model_dump_json(indent=2, exclude_none=True),
-            encoding="utf-8",
         )
 
     def load_job(self, job_id: str) -> JobRecord:
         path = self.record_path(job_id)
         if not path.exists():
             raise JobNotFoundError(job_id)
-        return JobRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        return self._load_json_with_retries(path, JobRecord)
 
     def update_job(self, record: JobRecord) -> JobRecord:
         self._write_record(record)
         return record
 
     def write_result(self, job_id: str, results: AttackResults) -> None:
-        self.result_path(job_id).write_text(
+        self._write_json_atomic(
+            self.result_path(job_id),
             results.model_dump_json(indent=2, exclude_none=True),
-            encoding="utf-8",
         )
 
     def load_result(self, job_id: str) -> AttackResults:
         path = self.result_path(job_id)
         if not path.exists():
             raise JobNotFoundError(job_id)
-        return AttackResults.model_validate_json(path.read_text(encoding="utf-8"))
+        return self._load_json_with_retries(path, AttackResults)
 
     def result_exists(self, job_id: str) -> bool:
         return self.result_path(job_id).exists()
