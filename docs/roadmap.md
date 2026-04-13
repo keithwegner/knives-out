@@ -43,6 +43,23 @@ After the GraphQL pass, the next best leverage point is day-to-day review ergono
 - clearer auth diagnostic summaries in HTML and Markdown reports
 - smaller, higher-signal CI summaries for long-lived regression programs
 
+## v0.13 — smoke-test integration coverage
+
+Before we grow a broad end-to-end matrix, the better next step is a tiny local-only smoke-test
+layer aimed at product-critical flows. The goal is confidence, not exhaustive scenario coverage:
+
+- deterministic fixture apps and checked-in inputs only
+- no external services, sleeps, or timing-sensitive assertions
+- a few high-signal scenarios that protect the main user journeys
+
+Initial issue-backed scenarios:
+
+- #58: CLI happy path against a local API fixture
+- #59: workflow attack execution against a local stateful API
+- #60: multi-profile authorization comparison with anonymous/user/admin behavior
+- #61: built-in auth acquisition against a fake local token endpoint
+- #62: Shadow Twin capture -> discover -> generate smoke coverage
+
 ## Still deferred
 
 These remain interesting, but they should not displace the next planning pass:

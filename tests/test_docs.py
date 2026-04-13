@@ -178,6 +178,9 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "v0.10: Shadow Twin learned-model capture and discovery" in roadmap
     assert "learned-model artifacts" in roadmap
     assert "## v0.11 — deeper GraphQL coverage" in roadmap
+    assert "## v0.13 — smoke-test integration coverage" in roadmap
+    assert "deterministic fixture apps and checked-in inputs only" in roadmap
+    assert "#58: CLI happy path against a local API fixture" in roadmap
     assert "subscription coverage" in roadmap
     assert "LLM application and tool-misuse testing" in roadmap
 
