@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 import uvicorn
@@ -59,6 +59,11 @@ class ReportFormatOption(StrEnum):
     html = "html"
 
 
+class InspectFormatOption(StrEnum):
+    text = "text"
+    json = "json"
+
+
 def _warning_target(warning: PreflightWarning) -> str:
     if warning.operation_id:
         return f"{warning.operation_id} ({warning.method} {warning.path})"
@@ -81,6 +86,26 @@ def _print_preflight_warnings(warnings: list[PreflightWarning]) -> None:
 
     console.print("")
     console.print(table)
+
+
+def _inspect_payload(
+    *,
+    spec: Path,
+    source_kind: str,
+    operation_count: int,
+    operations: list[Any],
+    warnings: list[PreflightWarning],
+    learned_workflow_count: int,
+) -> dict[str, Any]:
+    return {
+        "source": str(spec),
+        "source_kind": source_kind,
+        "operation_count": operation_count,
+        "operations": [operation.model_dump(mode="json") for operation in operations],
+        "warning_count": len(warnings),
+        "warnings": [warning.model_dump(mode="json") for warning in warnings],
+        "learned_workflow_count": learned_workflow_count,
+    }
 
 
 def _load_attack_results_or_error(path: Path, *, label: str) -> AttackResults:
@@ -146,7 +171,7 @@ def _print_persisting_delta_findings(findings: list[ComparedFinding]) -> None:
     table.add_column("Protocol")
     table.add_column("Attack")
     table.add_column("Issue")
-    table.add_column("Changes")
+    table.add_column("Changes", overflow="fold")
 
     for finding in delta_findings:
         changes = ", ".join(
@@ -162,6 +187,8 @@ def _print_persisting_delta_findings(findings: list[ComparedFinding]) -> None:
 
     console.print("")
     console.print(table)
+    for finding in delta_findings:
+        console.print(f"- {finding.result.name}: {finding.delta_summary}")
 
 
 @app.command()
@@ -260,6 +287,10 @@ def inspect(
         list[str] | None,
         typer.Option(help="Exclude operations for these exact OpenAPI paths. Repeatable."),
     ] = None,
+    format: Annotated[
+        InspectFormatOption,
+        typer.Option(help="Output format for inspection results."),
+    ] = InspectFormatOption.text,
 ) -> None:
     """Show the operations discovered in an OpenAPI, GraphQL, or learned model."""
     inspected = inspect_source_path(
@@ -272,6 +303,21 @@ def inspect(
     )
     loaded = inspected.loaded
     operations = inspected.operations
+    learned_workflow_count = (
+        len(loaded.learned_model.workflows) if loaded.learned_model is not None else 0
+    )
+
+    if format == InspectFormatOption.json:
+        payload = _inspect_payload(
+            spec=spec,
+            source_kind=loaded.source_kind,
+            operation_count=len(operations),
+            operations=operations,
+            warnings=loaded.warnings,
+            learned_workflow_count=learned_workflow_count,
+        )
+        typer.echo(json.dumps(payload, indent=2))
+        return
 
     table = Table(title=f"knives-out inspect: {spec}")
     table.add_column("Operation ID")
@@ -304,7 +350,7 @@ def inspect(
     console.print(table)
     console.print(f"\nFound {len(operations)} operations.")
     if loaded.learned_model is not None:
-        console.print(f"Learned workflows: {len(loaded.learned_model.workflows)}.")
+        console.print(f"Learned workflows: {learned_workflow_count}.")
     _print_preflight_warnings(loaded.warnings)
 
 

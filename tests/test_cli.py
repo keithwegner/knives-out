@@ -119,6 +119,68 @@ def test_inspect_command_supports_graphql_schema(tmp_path: Path) -> None:
     assert "/api/graphql" in result.stdout
 
 
+def test_inspect_command_supports_json_output(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "knives_out.services.load_operations_with_warnings",
+        lambda spec, **_: LoadedOperations(
+            source_kind="learned",
+            operations=[
+                {
+                    "operation_id": "listPets",
+                    "method": "GET",
+                    "path": "/pets",
+                    "tags": ["pets", "read"],
+                    "parameters": [{"name": "limit", "location": "query"}],
+                    "auth_required": False,
+                    "learned_confidence": 0.75,
+                },
+                {
+                    "operation_id": "createPet",
+                    "method": "POST",
+                    "path": "/pets",
+                    "tags": ["pets", "write"],
+                    "request_body_schema": {"type": "object"},
+                    "auth_required": True,
+                },
+            ],
+            warnings=[
+                PreflightWarning(
+                    code="missing_request_schema",
+                    message="Request body is declared but no usable schema was found.",
+                    operation_id="createPet",
+                    method="POST",
+                    path="/pets",
+                )
+            ],
+            learned_model={
+                "workflows": [
+                    {
+                        "id": "wf_create_pet",
+                        "name": "Create pet flow",
+                        "producer_operation_id": "createPet",
+                        "consumer_operation_id": "listPets",
+                    }
+                ]
+            },
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        ["inspect", str(EXAMPLE_SPEC), "--tag", "write", "--format", "json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["source"] == str(EXAMPLE_SPEC)
+    assert payload["source_kind"] == "learned"
+    assert payload["operation_count"] == 1
+    assert payload["warning_count"] == 1
+    assert payload["learned_workflow_count"] == 1
+    assert [operation["operation_id"] for operation in payload["operations"]] == ["createPet"]
+    assert payload["warnings"][0]["code"] == "missing_request_schema"
+
+
 def test_generate_command_writes_attack_suite(tmp_path: Path) -> None:
     out_path = tmp_path / "attacks.json"
     result = runner.invoke(app, ["generate", str(EXAMPLE_SPEC), "--out", str(out_path)])
@@ -187,10 +249,10 @@ def test_report_command_supports_baseline(tmp_path: Path) -> None:
                 name="Persisting mismatch",
                 method="POST",
                 url="https://example.com/pets",
-                status_code=200,
+                status_code=500,
                 flagged=True,
                 issue="response_schema_mismatch",
-                severity="medium",
+                severity="high",
                 confidence="high",
             ),
         ),
@@ -205,11 +267,11 @@ def test_report_command_supports_baseline(tmp_path: Path) -> None:
                 name="Persisting mismatch",
                 method="POST",
                 url="https://example.com/pets",
-                status_code=200,
+                status_code=401,
                 flagged=True,
                 issue="response_schema_mismatch",
                 severity="medium",
-                confidence="high",
+                confidence="low",
             ),
             AttackResult(
                 attack_id="atk_old",
@@ -245,6 +307,8 @@ def test_report_command_supports_baseline(tmp_path: Path) -> None:
     assert "## New findings" in report
     assert "## Resolved findings" in report
     assert "## Persisting findings" in report
+    assert "Persisting findings with deltas: **1**" in report
+    assert "severity medium -> high; confidence low -> high; status 401 -> 500" in report
 
 
 def test_report_command_shows_persisting_deltas(tmp_path: Path) -> None:

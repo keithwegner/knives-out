@@ -456,6 +456,12 @@ def test_render_markdown_report_sorts_flagged_findings_by_score() -> None:
     report = render_markdown_report(results)
 
     assert "Response schema mismatches" in report
+    assert "### By issue" in report
+    assert "| server_error | 1 |" in report
+    assert "| response_schema_mismatch | 1 |" in report
+    assert "### By attack kind" in report
+    assert "| missing_auth | 2 |" in report
+    assert "| wrong_type_param | 1 |" in report
     assert (
         "| Protocol | Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |"
         in report
@@ -577,6 +583,54 @@ def test_render_markdown_report_with_baseline_shows_regression_sections() -> Non
     assert "New server failure" in report
     assert "Resolved auth failure" in report
     assert "Persisting mismatch" in report
+
+
+def test_render_markdown_report_shows_persisting_deltas() -> None:
+    current = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ],
+    )
+    baseline = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=401,
+                flagged=True,
+                issue="server_error",
+                severity="medium",
+                confidence="low",
+            )
+        ],
+    )
+
+    report = render_markdown_report(current, baseline=baseline)
+
+    assert "Persisting findings with deltas: **1**" in report
+    assert "severity medium -> high" in report
+    assert "confidence low -> high" in report
+    assert "status 401 -> 500" in report
 
 
 def test_render_markdown_report_shows_suppressed_findings() -> None:
@@ -1404,6 +1458,8 @@ def test_execute_attack_suite_treats_graphql_errors_as_expected_failures(monkeyp
     assert result.flagged is False
     assert result.issue is None
     assert result.status_code == 200
+    assert result.response_schema_status is None
+    assert result.response_schema_valid is None
     assert result.graphql_response_valid is None
 
 
@@ -1701,6 +1757,55 @@ def test_render_html_report_shows_artifact_index_and_profile_outcomes(tmp_path: 
     assert "anonymous (anonymous)" in report
 
 
+def test_render_html_report_shows_persisting_deltas() -> None:
+    current = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ],
+    )
+    baseline = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Persisting mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=401,
+                flagged=True,
+                issue="server_error",
+                severity="medium",
+                confidence="low",
+            )
+        ],
+    )
+
+    report = render_html_report(current, baseline=baseline)
+
+    assert "Persisting with deltas" in report
+    assert "<h2>Persisting deltas</h2>" in report
+    assert "severity medium -&gt; high" in report
+    assert "confidence low -&gt; high" in report
+    assert "status 401 -&gt; 500" in report
+
+
 def test_render_html_report_shows_auth_summary() -> None:
     results = AttackResults(
         source="unit",
@@ -1736,6 +1841,63 @@ def test_render_html_report_shows_auth_summary() -> None:
     assert "<td>1</td>" in report
     assert "Refresh attempts" in report
     assert "401, suite" in report
+
+
+def test_render_html_report_shows_grouped_flagged_findings() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_one",
+                operation_id="listPets",
+                kind="missing_auth",
+                name="Server failure",
+                method="GET",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            ),
+            AttackResult(
+                attack_id="atk_two",
+                operation_id="listPets",
+                kind="missing_auth",
+                name="Unexpected success",
+                method="GET",
+                url="https://example.com/pets",
+                status_code=200,
+                flagged=True,
+                issue="unexpected_success",
+                severity="high",
+                confidence="medium",
+            ),
+            AttackResult(
+                attack_id="atk_three",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Schema mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=201,
+                flagged=True,
+                issue="response_schema_mismatch",
+                severity="medium",
+                confidence="high",
+            ),
+        ],
+    )
+
+    report = render_html_report(results)
+
+    assert "<h3>By issue</h3>" in report
+    assert "<h3>By attack kind</h3>" in report
+    assert "<td>server_error</td>" in report
+    assert "<td>unexpected_success</td>" in report
+    assert "<td>missing_auth</td>" in report
+    assert "<td>wrong_type_param</td>" in report
 
 
 def test_summarize_results_builds_machine_readable_regression_summary() -> None:

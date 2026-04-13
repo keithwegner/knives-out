@@ -58,6 +58,24 @@ class ComparedFinding:
             return None
         return finding_delta(self.current, self.baseline)
 
+    @property
+    def delta_fragments(self) -> list[str]:
+        delta = self.delta
+        if delta is None:
+            return []
+        return [
+            f"{change.field} {change.baseline} -> {change.current}"
+            for change in delta.changes
+        ]
+
+    @property
+    def has_delta(self) -> bool:
+        return bool(self.delta_fragments)
+
+    @property
+    def delta_summary(self) -> str:
+        return "; ".join(self.delta_fragments) or "unchanged"
+
 
 @dataclass(frozen=True)
 class FindingDeltaChange:
@@ -138,9 +156,9 @@ def _schema_value(result: AttackResult) -> str:
 def finding_delta(current: AttackResult, baseline: AttackResult) -> FindingDelta:
     changes: list[FindingDeltaChange] = []
     values = [
-        ("status", _status_value(baseline), _status_value(current)),
         ("severity", baseline.severity, current.severity),
         ("confidence", baseline.confidence, current.confidence),
+        ("status", _status_value(baseline), _status_value(current)),
         ("schema", _schema_value(baseline), _schema_value(current)),
     ]
     for field, baseline_value, current_value in values:
