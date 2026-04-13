@@ -92,7 +92,6 @@ Inspect the sample specs:
 knives-out inspect examples/openapi/petstore.yaml
 knives-out inspect examples/openapi/storefront.yaml --tag orders
 knives-out inspect examples/graphql/library.graphql
-knives-out inspect examples/openapi/storefront.yaml --tag orders --format json
 ```
 
 Generate attacks:
@@ -193,6 +192,12 @@ Verify findings against the default CI policy:
 knives-out verify results.json
 ```
 
+Generate a machine-readable summary for dashboards or CI annotations:
+
+```bash
+knives-out summary results.json --out summary.json
+```
+
 Promote qualifying findings back into a reusable regression suite:
 
 ```bash
@@ -204,6 +209,41 @@ Generate a review-ready suppressions file for known findings:
 ```bash
 knives-out triage results.json --out .knives-out-ignore.yml
 ```
+
+## Local API
+
+`knives-out` can also run as a local-first HTTP API instead of only as a CLI.
+
+Start it on the loopback interface:
+
+```bash
+knives-out serve --host 127.0.0.1 --port 8787
+```
+
+By default the API stores job state and request/response artifacts under `.knives-out-api/`.
+Set `KNIVES_OUT_API_DATA_DIR` if you want that store somewhere else.
+
+The synchronous endpoints mirror the short CLI flows:
+
+- `POST /v1/inspect`
+- `POST /v1/generate`
+- `POST /v1/discover`
+- `POST /v1/report`
+- `POST /v1/summary`
+- `POST /v1/verify`
+- `POST /v1/promote`
+- `POST /v1/triage`
+
+Longer execution runs use a job resource instead:
+
+- `POST /v1/runs`
+- `GET /v1/jobs/{id}`
+- `GET /v1/jobs/{id}/result`
+- `GET /v1/jobs/{id}/artifacts`
+
+The API accepts uploaded source content and JSON artifacts in the request body. It does not expose
+arbitrary server-side file reads. FastAPI also publishes the schema at `/openapi.json` and the
+interactive docs at `/docs`.
 
 ## CI usage
 
@@ -237,6 +277,11 @@ also produces a linked `report.html` with an artifact index and detailed result 
 
 For built-in gating, use `knives-out verify` after `run`. It can fail on qualifying findings in the
 current run, or only on new qualifying findings when you also pass `--baseline previous-results.json`.
+With a baseline, both `verify` and baseline-aware `report` also summarize persisting findings whose
+status, severity, confidence, or schema outcome drifted between runs.
+When you want a compact machine-readable artifact for dashboards, annotations, or follow-on
+automation, `knives-out summary results.json --out summary.json` emits the same counts and top
+findings as structured JSON.
 When you want stateful coverage, generate with `--auto-workflows` first, then add
 `--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py` or your own custom pack as
 you move from generic coverage to app-specific journeys. For protected APIs, keep simple static
@@ -251,6 +296,9 @@ GraphQL schemas follow the same `inspect` / `generate` / `run` / `report` / `ver
 `generate` automatically emitting variable-coercion attacks from SDL or introspection input.
 Shadow Twin capture and discovery fit the same path too:
 `capture -> discover -> generate -> run -> report -> verify`.
+If you want to drive that workflow from another local tool instead of shelling out, `knives-out serve`
+now exposes the same core actions over HTTP with background `run` jobs, summary responses, and
+artifact download routes.
 If you keep a `.knives-out-ignore.yml` file in the repo root, `report`, `verify`, and `promote`
 will load it automatically. Use `knives-out triage results.json` to seed new entries when you want
 to capture known findings without hand-writing YAML. For authorization-focused regression coverage,
@@ -290,12 +338,10 @@ knives-out inspect examples/openapi/storefront.yaml \
   --path /draft-orders/{draftId}
 ```
 
-When you want to hand the inventory to CI or wrapper tooling, switch to JSON output:
+For machine-readable inspection output:
 
 ```bash
-knives-out inspect examples/openapi/storefront.yaml \
-  --tag orders \
-  --format json
+knives-out inspect examples/openapi/storefront.yaml --format json
 ```
 
 ### `generate`
@@ -736,12 +782,15 @@ knives-out run attacks.json \
 
 ## Roadmap
 
-The built-in auth/config milestone is now shipped, and Shadow Twin learned-model capture is now
-available. The next likely milestone is:
+The built-in auth/config milestone, deeper GraphQL coverage, and Shadow Twin learned-model capture
+are now available. The next likely milestone is:
 
 - **v0.11:** deeper GraphQL coverage with response validation, federation awareness, and
-  subscription support as staged scope
+  mixed-protocol reporting is now shipped
+- **v0.12:** a local-first HTTP API with shared service-layer execution, JSON-first endpoints,
+  and background run jobs with artifact retrieval
 
 After that, the likely follow-on is richer CI and report navigation for large regression programs.
 LLM application testing stays deferred until after that API-focused expansion. See
 `docs/architecture.md` and `docs/roadmap.md` for the current milestone notes.
+Shadow Twin learned-model capture is now available.

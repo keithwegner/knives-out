@@ -12,6 +12,7 @@ AuthEventPhase = Literal["acquire", "refresh"]
 SourceKind = Literal["openapi", "graphql", "learned"]
 CaptureSource = Literal["proxy", "har"]
 LearnedBindingTarget = Literal["path", "query", "body"]
+GraphQLOutputKind = Literal["scalar", "enum", "object", "list", "interface", "union"]
 
 
 class CapturedRequest(BaseModel):
@@ -69,6 +70,17 @@ class ResponseSpec(BaseModel):
     schema_def: dict[str, Any] | None = None
 
 
+class GraphQLOutputShape(BaseModel):
+    kind: GraphQLOutputKind
+    type_name: str
+    nullable: bool = True
+    fields: dict[str, GraphQLOutputShape] = Field(default_factory=dict)
+    item_shape: GraphQLOutputShape | None = None
+    possible_types: dict[str, GraphQLOutputShape] = Field(default_factory=dict)
+    federated_entity: bool = False
+    federation_hint: str | None = None
+
+
 class OperationSpec(BaseModel):
     operation_id: str
     method: str
@@ -87,6 +99,10 @@ class OperationSpec(BaseModel):
     graphql_operation_type: Literal["query", "mutation"] | None = None
     graphql_document: str | None = None
     graphql_variables_schema: dict[str, Any] | None = None
+    graphql_root_field_name: str | None = None
+    graphql_output_shape: GraphQLOutputShape | None = None
+    graphql_federated: bool = False
+    graphql_entity_types: list[str] = Field(default_factory=list)
     observed_examples: list[ObservedRequestExample] = Field(default_factory=list)
     learned_confidence: float | None = None
     observation_count: int = 0
@@ -170,6 +186,7 @@ class AttackCase(BaseModel):
     name: str
     kind: str
     operation_id: str
+    protocol: SourceKind = "openapi"
     method: str
     path: str
     tags: list[str] = Field(default_factory=list)
@@ -186,6 +203,10 @@ class AttackCase(BaseModel):
     omit_query_names: list[str] = Field(default_factory=list)
     expected_outcomes: list[str] = Field(default_factory=lambda: ["4xx"])
     response_schemas: dict[str, ResponseSpec] = Field(default_factory=dict)
+    graphql_root_field_name: str | None = None
+    graphql_output_shape: GraphQLOutputShape | None = None
+    graphql_federated: bool = False
+    graphql_entity_types: list[str] = Field(default_factory=list)
 
 
 class ExtractRule(BaseModel):
@@ -218,6 +239,7 @@ class WorkflowAttackCase(BaseModel):
     name: str
     kind: str
     operation_id: str
+    protocol: SourceKind = "openapi"
     method: str
     path: str
     tags: list[str] = Field(default_factory=list)
@@ -291,6 +313,7 @@ class AuthEvent(BaseModel):
 
 
 class ProfileAttackResult(BaseModel):
+    protocol: SourceKind = "openapi"
     profile: str
     level: int = 0
     anonymous: bool = False
@@ -306,6 +329,9 @@ class ProfileAttackResult(BaseModel):
     response_schema_status: str | None = None
     response_schema_valid: bool | None = None
     response_schema_error: str | None = None
+    graphql_response_valid: bool | None = None
+    graphql_response_error: str | None = None
+    graphql_response_hint: str | None = None
     workflow_steps: list[WorkflowStepResult] | None = None
 
 
@@ -315,6 +341,7 @@ class AttackResult(BaseModel):
     operation_id: str
     kind: str
     name: str
+    protocol: SourceKind = "openapi"
     method: str
     path: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -330,6 +357,9 @@ class AttackResult(BaseModel):
     response_schema_status: str | None = None
     response_schema_valid: bool | None = None
     response_schema_error: str | None = None
+    graphql_response_valid: bool | None = None
+    graphql_response_error: str | None = None
+    graphql_response_hint: str | None = None
     workflow_steps: list[WorkflowStepResult] | None = None
     profile_results: list[ProfileAttackResult] | None = None
 
@@ -359,9 +389,63 @@ class AttackResults(BaseModel):
                 coerced["results"].append(result)
                 continue
             result_coerced = dict(result)
+            result_coerced.setdefault("protocol", "openapi")
             result_coerced.setdefault(
                 "type",
                 "workflow" if result_coerced.get("workflow_steps") else "request",
             )
             coerced["results"].append(result_coerced)
         return coerced
+
+
+class SummaryFinding(BaseModel):
+    attack_id: str
+    name: str
+    protocol: str
+    kind: str
+    issue: str | None = None
+    severity: SeverityLevel
+    confidence: ConfidenceLevel
+    status_code: int | None = None
+    url: str
+    schema_status: str = "-"
+
+
+class AuthSummaryEntry(BaseModel):
+    profile: str
+    name: str
+    strategy: str
+    acquire: int = 0
+    refresh: int = 0
+    failures: int = 0
+    triggers: list[str] = Field(default_factory=list)
+
+
+class ResultsSummary(BaseModel):
+    source: str
+    base_url: str
+    executed_at: datetime
+    baseline_used: bool = False
+    baseline_executed_at: datetime | None = None
+    total_results: int
+    profile_count: int = 0
+    profile_names: list[str] = Field(default_factory=list)
+    active_flagged_count: int = 0
+    suppressed_flagged_count: int = 0
+    new_findings_count: int = 0
+    resolved_findings_count: int = 0
+    persisting_findings_count: int = 0
+    persisting_deltas_count: int = 0
+    auth_failures: int = 0
+    refresh_attempts: int = 0
+    response_schema_mismatches: int = 0
+    graphql_shape_mismatches: int = 0
+    protocol_counts: dict[str, int] = Field(default_factory=dict)
+    issue_counts: dict[str, int] = Field(default_factory=dict)
+    finding_severity_counts: dict[str, int] = Field(default_factory=dict)
+    finding_confidence_counts: dict[str, int] = Field(default_factory=dict)
+    auth_summary: list[AuthSummaryEntry] = Field(default_factory=list)
+    top_findings: list[SummaryFinding] = Field(default_factory=list)
+
+
+GraphQLOutputShape.model_rebuild()

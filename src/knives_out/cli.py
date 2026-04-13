@@ -6,55 +6,33 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from pydantic import ValidationError
+import uvicorn
 from rich.console import Console
 from rich.table import Table
 
-from knives_out.attack_packs import load_attack_packs
-from knives_out.auth_config import (
-    auth_config_map,
-    auth_profiles_from_configs,
-    load_auth_configs,
-    select_auth_configs,
-)
-from knives_out.auth_plugins import PluginRuntimeError, load_auth_plugins
+from knives_out.api import create_app
+from knives_out.auth_plugins import PluginRuntimeError
 from knives_out.capture import serve_capture_proxy
-from knives_out.filtering import filter_attack_suite, filter_operations
-from knives_out.generator import generate_attack_suite
-from knives_out.learned_discovery import discover_learned_model
-from knives_out.models import AttackResults, AuthProfile, PreflightWarning
-from knives_out.profiles import (
-    load_auth_profiles,
-    resolve_auth_profile_modules,
-    select_auth_profiles,
-)
-from knives_out.promotion import PromotionError, promote_attack_suite
-from knives_out.reporting import (
-    load_attack_results,
-    render_html_report,
-    render_markdown_report,
-)
-from knives_out.runner import (
-    execute_attack_suite,
-    execute_attack_suite_profiles,
-    load_attack_suite,
-)
-from knives_out.spec_loader import load_operations_with_warnings
-from knives_out.suppressions import (
+from knives_out.models import AttackResults, PreflightWarning
+from knives_out.promotion import PromotionError
+from knives_out.services import (
     DEFAULT_SUPPRESSIONS_PATH,
     SuppressionRule,
-    SuppressionsFile,
-    load_suppressions,
-    merge_suppressions,
-    triage_rule_for_result,
-    write_suppressions,
+    discover_model_paths,
+    generate_suite_from_path,
+    inspect_source_path,
+    load_attack_results_or_raise,
+    load_attack_suite_or_raise,
+    load_suppressions_or_default,
+    parse_key_value_map,
+    promote_results_from_paths,
+    render_report_from_paths,
+    run_suite,
+    summarize_results_from_paths,
+    triage_results_from_path,
+    verify_results_from_paths,
 )
-from knives_out.verification import (
-    ComparedFinding,
-    compare_attack_results,
-    evaluate_verification,
-)
-from knives_out.workflow_packs import load_workflow_packs
+from knives_out.verification import ComparedFinding
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -84,20 +62,6 @@ class ReportFormatOption(StrEnum):
 class InspectFormatOption(StrEnum):
     text = "text"
     json = "json"
-
-
-def _parse_key_value(items: list[str] | None, *, separator: str) -> dict[str, Any]:
-    parsed: dict[str, Any] = {}
-    for item in items or []:
-        if separator not in item:
-            raise typer.BadParameter(f"Expected '{separator}' in value: {item!r}")
-        key, value = item.split(separator, 1)
-        key = key.strip()
-        value = value.strip()
-        if not key:
-            raise typer.BadParameter(f"Missing key in value: {item!r}")
-        parsed[key] = value
-    return parsed
 
 
 def _warning_target(warning: PreflightWarning) -> str:
@@ -146,67 +110,18 @@ def _inspect_payload(
 
 def _load_attack_results_or_error(path: Path, *, label: str) -> AttackResults:
     try:
-        return load_attack_results(path)
-    except (OSError, ValidationError, ValueError) as exc:
-        raise typer.BadParameter(f"Could not read {label} results file '{path}': {exc}") from exc
+        return load_attack_results_or_raise(path, label=label)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _load_suppressions_or_error(
     path: Path | None,
 ) -> tuple[Path | None, list[SuppressionRule]]:
-    resolved_path = path
-    if resolved_path is None and DEFAULT_SUPPRESSIONS_PATH.exists():
-        resolved_path = DEFAULT_SUPPRESSIONS_PATH
-    if resolved_path is None:
-        return None, []
-
     try:
-        suppressions_file = load_suppressions(resolved_path)
-    except (OSError, ValueError) as exc:
-        raise typer.BadParameter(
-            f"Could not read suppressions file '{resolved_path}': {exc}"
-        ) from exc
-
-    return resolved_path, suppressions_file.suppressions
-
-
-def _load_auth_profiles_or_error(
-    path: Path | None,
-    *,
-    include_names: list[str] | None = None,
-) -> list[AuthProfile]:
-    if path is None:
-        if include_names:
-            raise typer.BadParameter("--profile requires --profile-file.")
-        return []
-
-    try:
-        profiles_file = load_auth_profiles(path)
-        selected_profiles = select_auth_profiles(profiles_file, include_names=include_names)
-        return resolve_auth_profile_modules(selected_profiles, relative_to=path)
-    except (OSError, ValueError) as exc:
-        raise typer.BadParameter(f"Could not read auth profile file '{path}': {exc}") from exc
-
-
-def _load_auth_configs_or_error(
-    path: Path | None,
-    *,
-    include_names: list[str] | None = None,
-):
-    if path is None:
-        if include_names:
-            raise typer.BadParameter("--auth-profile requires --auth-config.")
-        return []
-
-    try:
-        auth_file = load_auth_configs(path)
-        selected_configs = select_auth_configs(auth_file, include_names=include_names)
-    except (OSError, ValueError) as exc:
-        raise typer.BadParameter(f"Could not read auth config file '{path}': {exc}") from exc
-
-    if not selected_configs:
-        raise typer.BadParameter(f"Auth config file '{path}' did not define any auth entries.")
-    return selected_configs
+        return load_suppressions_or_default(path)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _print_suppression_summary(
@@ -223,6 +138,7 @@ def _print_compared_findings(title: str, findings: list[ComparedFinding]) -> Non
         return
 
     table = Table(title=title)
+    table.add_column("Protocol")
     table.add_column("Attack")
     table.add_column("Issue")
     table.add_column("Severity")
@@ -232,6 +148,7 @@ def _print_compared_findings(title: str, findings: list[ComparedFinding]) -> Non
     for finding in findings:
         result = finding.result
         table.add_row(
+            "rest" if result.protocol == "openapi" else result.protocol,
             result.name,
             result.issue or "-",
             result.severity,
@@ -241,6 +158,37 @@ def _print_compared_findings(title: str, findings: list[ComparedFinding]) -> Non
 
     console.print("")
     console.print(table)
+
+
+def _print_persisting_delta_findings(findings: list[ComparedFinding]) -> None:
+    delta_findings = [
+        finding for finding in findings if finding.delta is not None and finding.delta.changed
+    ]
+    if not delta_findings:
+        return
+
+    table = Table(title="Persisting findings with deltas")
+    table.add_column("Protocol")
+    table.add_column("Attack")
+    table.add_column("Issue")
+    table.add_column("Changes", overflow="fold")
+
+    for finding in delta_findings:
+        changes = ", ".join(
+            f"{change.field} {change.baseline} -> {change.current}"
+            for change in (finding.delta.changes if finding.delta is not None else [])
+        )
+        table.add_row(
+            "rest" if finding.result.protocol == "openapi" else finding.result.protocol,
+            finding.result.name,
+            finding.result.issue or "-",
+            changes,
+        )
+
+    console.print("")
+    console.print(table)
+    for finding in delta_findings:
+        console.print(f"- {finding.result.name}: {finding.delta_summary}")
 
 
 @app.command()
@@ -307,7 +255,7 @@ def discover(
     ] = Path("learned-model.json"),
 ) -> None:
     """Discover a replayable learned API model from captured traffic."""
-    learned_model = discover_learned_model(inputs)
+    learned_model = discover_model_paths(inputs)
     out.write_text(learned_model.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
     console.print(
         f"Wrote learned model with {len(learned_model.operations)} operation(s) and "
@@ -345,14 +293,16 @@ def inspect(
     ] = InspectFormatOption.text,
 ) -> None:
     """Show the operations discovered in an OpenAPI, GraphQL, or learned model."""
-    loaded = load_operations_with_warnings(spec, graphql_endpoint=graphql_endpoint)
-    operations = filter_operations(
-        loaded.operations,
-        include_paths=path,
-        exclude_paths=exclude_path,
-        include_tags=tag,
-        exclude_tags=exclude_tag,
+    inspected = inspect_source_path(
+        spec,
+        graphql_endpoint=graphql_endpoint,
+        tag=tag,
+        exclude_tag=exclude_tag,
+        path=path,
+        exclude_path=exclude_path,
     )
+    loaded = inspected.loaded
+    operations = inspected.operations
     learned_workflow_count = (
         len(loaded.learned_model.workflows) if loaded.learned_model is not None else 0
     )
@@ -485,34 +435,27 @@ def generate(
 
     Filters are applied after attack generation and before the suite is written.
     """
-    loaded = load_operations_with_warnings(spec, graphql_endpoint=graphql_endpoint)
-    operations = loaded.operations
-    attack_packs = load_attack_packs(entry_point_names=pack, module_paths=pack_module)
-    workflow_packs = load_workflow_packs(
-        entry_point_names=workflow_pack,
-        module_paths=workflow_pack_module,
-    )
-    suite = generate_attack_suite(
-        operations,
-        source=str(spec),
-        extra_packs=attack_packs,
+    generated = generate_suite_from_path(
+        spec,
+        graphql_endpoint=graphql_endpoint,
+        operation=operation,
+        exclude_operation=exclude_operation,
+        method=method,
+        exclude_method=exclude_method,
+        kind=kind,
+        exclude_kind=exclude_kind,
+        tag=tag,
+        exclude_tag=exclude_tag,
+        path=path,
+        exclude_path=exclude_path,
+        pack_names=pack,
+        pack_module_paths=pack_module,
         auto_workflows=auto_workflows,
-        workflow_packs=workflow_packs,
-        learned_model=loaded.learned_model,
+        workflow_pack_names=workflow_pack,
+        workflow_pack_module_paths=workflow_pack_module,
     )
-    suite = filter_attack_suite(
-        suite,
-        include_operations=operation,
-        exclude_operations=exclude_operation,
-        include_methods=method,
-        exclude_methods=exclude_method,
-        include_kinds=kind,
-        exclude_kinds=exclude_kind,
-        include_paths=path,
-        exclude_paths=exclude_path,
-        include_tags=tag,
-        exclude_tags=exclude_tag,
-    )
+    loaded = generated.loaded
+    suite = generated.suite
     out.write_text(suite.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
     workflow_count = sum(1 for attack in suite.attacks if attack.type == "workflow")
     request_count = len(suite.attacks) - workflow_count
@@ -621,80 +564,38 @@ def run(
 
     Filters are applied to the loaded suite before any requests are executed.
     """
-    suite = load_attack_suite(attacks)
-    suite = filter_attack_suite(
-        suite,
-        include_operations=operation,
-        exclude_operations=exclude_operation,
-        include_methods=method,
-        exclude_methods=exclude_method,
-        include_kinds=kind,
-        exclude_kinds=exclude_kind,
-        include_paths=path,
-        exclude_paths=exclude_path,
-        include_tags=tag,
-        exclude_tags=exclude_tag,
-    )
-    default_headers = _parse_key_value(header, separator=":")
-    default_query = _parse_key_value(query, separator="=")
-    auth_profiles = _load_auth_profiles_or_error(profile_file, include_names=profile)
-    built_in_auth_configs = _load_auth_configs_or_error(auth_config, include_names=auth_profile)
-    built_in_auth_by_name = auth_config_map(built_in_auth_configs)
-    global_auth_plugin_modules = [str(path.resolve()) for path in auth_plugin_module or []]
-
-    if auth_profiles or built_in_auth_configs:
-        if not auth_profiles:
-            auth_profiles = auth_profiles_from_configs(built_in_auth_configs)
-        auth_profiles = [
-            auth_profile.model_copy(
-                update={
-                    "auth_plugins": [*(auth_plugin or []), *auth_profile.auth_plugins],
-                    "auth_plugin_modules": [
-                        *global_auth_plugin_modules,
-                        *auth_profile.auth_plugin_modules,
-                    ],
-                }
-            )
-            for auth_profile in auth_profiles
-        ]
-        auth_plugins = None
-    else:
-        try:
-            auth_plugins = load_auth_plugins(
-                entry_point_names=auth_plugin,
-                module_paths=auth_plugin_module,
-            )
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
-
     try:
-        if auth_profiles:
-            results = execute_attack_suite_profiles(
-                suite,
-                base_url=base_url,
-                profiles=auth_profiles,
-                default_headers=default_headers,
-                default_query=default_query,
-                timeout_seconds=timeout,
-                artifact_dir=artifact_dir,
-                built_in_auth_configs=built_in_auth_by_name,
-            )
-        else:
-            results = execute_attack_suite(
-                suite,
-                base_url=base_url,
-                default_headers=default_headers,
-                default_query=default_query,
-                timeout_seconds=timeout,
-                artifact_dir=artifact_dir,
-                auth_plugins=auth_plugins,
-                built_in_auth_configs=built_in_auth_configs,
-            )
+        run_result = run_suite(
+            load_attack_suite_or_raise(attacks),
+            base_url=base_url,
+            default_headers=parse_key_value_map(header, separator=":"),
+            default_query=parse_key_value_map(query, separator="="),
+            timeout_seconds=timeout,
+            artifact_dir=artifact_dir,
+            auth_plugin_names=auth_plugin,
+            auth_plugin_module_paths=auth_plugin_module,
+            auth_config_path=auth_config,
+            auth_profile_names=auth_profile,
+            profile_file_path=profile_file,
+            profile_names=profile,
+            operation=operation,
+            exclude_operation=exclude_operation,
+            method=method,
+            exclude_method=exclude_method,
+            kind=kind,
+            exclude_kind=exclude_kind,
+            tag=tag,
+            exclude_tag=exclude_tag,
+            path=path,
+            exclude_path=exclude_path,
+        )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     except PluginRuntimeError as exc:
         console.print(f"[red]Auth plugin error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+    suite = run_result.suite
+    results = run_result.results
     out.write_text(results.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
 
     flagged = sum(1 for result in results.results if result.flagged)
@@ -742,34 +643,71 @@ def report(
     ] = None,
 ) -> None:
     """Render a report from a results file."""
-    attack_results = _load_attack_results_or_error(results, label="current")
-    baseline_results = (
-        _load_attack_results_or_error(baseline, label="baseline") if baseline is not None else None
-    )
-    suppressions_path, suppression_rules = _load_suppressions_or_error(suppressions)
-
-    if format is ReportFormatOption.html:
-        rendered = render_html_report(
-            attack_results,
-            baseline=baseline_results,
-            suppressions=suppression_rules,
+    try:
+        report_result = render_report_from_paths(
+            results,
+            baseline_path=baseline,
+            suppressions_path=suppressions,
+            format=format.value,
             artifact_root=artifact_root,
         )
-    else:
-        rendered = render_markdown_report(
-            attack_results,
-            baseline=baseline_results,
-            suppressions=suppression_rules,
-        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     if out is None:
-        _print_suppression_summary(suppressions_path, suppression_rules)
-        console.print(rendered)
+        _print_suppression_summary(report_result.suppressions_path, report_result.suppressions)
+        console.print(report_result.rendered)
         return
 
-    out.write_text(rendered, encoding="utf-8")
-    _print_suppression_summary(suppressions_path, suppression_rules)
+    out.write_text(report_result.rendered, encoding="utf-8")
+    _print_suppression_summary(report_result.suppressions_path, report_result.suppressions)
     console.print(f"Wrote report to [bold]{out}[/bold].")
+
+
+@app.command()
+def summary(
+    results: Path,
+    baseline: Annotated[
+        Path | None,
+        typer.Option(help="Optional baseline results file for regression comparison."),
+    ] = None,
+    suppressions: Annotated[
+        Path | None,
+        typer.Option(
+            help="Optional suppressions file. Defaults to .knives-out-ignore.yml if present."
+        ),
+    ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option(help="Optional summary JSON output file."),
+    ] = None,
+    top: Annotated[
+        int,
+        typer.Option(help="How many top active findings to include in the summary."),
+    ] = 10,
+) -> None:
+    """Render a machine-readable JSON summary from a results file."""
+    try:
+        summary_result = summarize_results_from_paths(
+            results,
+            baseline_path=baseline,
+            suppressions_path=suppressions,
+            top_limit=top,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    rendered = json.dumps(
+        summary_result.summary.model_dump(mode="json", exclude_none=True),
+        indent=2,
+    )
+    if out is None:
+        typer.echo(rendered)
+        return
+
+    out.write_text(rendered + "\n", encoding="utf-8")
+    _print_suppression_summary(summary_result.suppressions_path, summary_result.suppressions)
+    console.print(f"Wrote summary JSON to [bold]{out}[/bold].")
 
 
 @app.command()
@@ -795,18 +733,17 @@ def verify(
     ] = ConfidenceThresholdOption.medium,
 ) -> None:
     """Verify results against CI policy, optionally compared to a baseline."""
-    attack_results = _load_attack_results_or_error(results, label="current")
-    baseline_results = (
-        _load_attack_results_or_error(baseline, label="baseline") if baseline is not None else None
-    )
-    suppressions_path, suppression_rules = _load_suppressions_or_error(suppressions)
-    verification = evaluate_verification(
-        attack_results,
-        baseline=baseline_results,
-        min_severity=min_severity.value,
-        min_confidence=min_confidence.value,
-        suppressions=suppression_rules,
-    )
+    try:
+        verify_result = verify_results_from_paths(
+            results,
+            baseline_path=baseline,
+            suppressions_path=suppressions,
+            min_severity=min_severity.value,
+            min_confidence=min_confidence.value,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    verification = verify_result.verification
     comparison = verification.comparison
 
     console.print(
@@ -814,19 +751,26 @@ def verify(
         f"severity >= [bold]{min_severity.value}[/bold], "
         f"confidence >= [bold]{min_confidence.value}[/bold]."
     )
-    _print_suppression_summary(suppressions_path, suppression_rules)
+    _print_suppression_summary(verify_result.suppressions_path, verify_result.suppressions)
     if verification.baseline_used:
+        persisting_deltas = [
+            finding
+            for finding in comparison.persisting_findings
+            if finding.delta is not None and finding.delta.changed
+        ]
         console.print(
             "Compared current findings against a baseline. "
             f"New: {len(comparison.new_findings)}, "
             f"Resolved: {len(comparison.resolved_findings)}, "
             f"Persisting: {len(comparison.persisting_findings)}, "
+            f"Persisting with deltas: {len(persisting_deltas)}, "
             f"Suppressed current: {len(comparison.suppressed_current_findings)}."
         )
         _print_compared_findings(
             "New findings meeting policy",
             verification.failing_findings,
         )
+        _print_persisting_delta_findings(comparison.persisting_findings)
     else:
         console.print(
             "Evaluated current flagged findings only. "
@@ -878,29 +822,21 @@ def promote(
     ] = ConfidenceThresholdOption.medium,
 ) -> None:
     """Promote qualifying findings back into a reusable attack suite."""
-    current_results = _load_attack_results_or_error(results, label="current")
-    baseline_results = (
-        _load_attack_results_or_error(baseline, label="baseline") if baseline is not None else None
-    )
-    suppressions_path, suppression_rules = _load_suppressions_or_error(suppressions)
-
     try:
-        attack_suite = load_attack_suite(attacks)
-    except (OSError, ValidationError, ValueError) as exc:
-        raise typer.BadParameter(f"Could not read attacks file '{attacks}': {exc}") from exc
-
-    try:
-        promotion = promote_attack_suite(
-            current_results,
-            attack_suite,
-            baseline=baseline_results,
+        promote_result = promote_results_from_paths(
+            results,
+            attacks,
+            baseline_path=baseline,
+            suppressions_path=suppressions,
             min_severity=min_severity.value,
             min_confidence=min_confidence.value,
-            suppressions=suppression_rules,
         )
     except PromotionError as exc:
         console.print(f"[red]Promotion error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    promotion = promote_result.promotion
 
     out.write_text(
         promotion.promoted_suite.model_dump_json(indent=2, exclude_none=True),
@@ -912,7 +848,7 @@ def promote(
         f"severity >= [bold]{min_severity.value}[/bold], "
         f"confidence >= [bold]{min_confidence.value}[/bold]."
     )
-    _print_suppression_summary(suppressions_path, suppression_rules)
+    _print_suppression_summary(promote_result.suppressions_path, promote_result.suppressions)
     if promotion.verification.baseline_used:
         console.print(
             "Promoted new qualifying attacks against a baseline. "
@@ -937,30 +873,35 @@ def triage(
     ] = DEFAULT_SUPPRESSIONS_PATH,
 ) -> None:
     """Append review-ready suppressions for current active findings."""
-    current_results = _load_attack_results_or_error(results, label="current")
-
-    existing_file = SuppressionsFile()
-    if out.exists():
-        try:
-            existing_file = load_suppressions(out)
-        except (OSError, ValueError) as exc:
-            raise typer.BadParameter(f"Could not read suppressions file '{out}': {exc}") from exc
-
-    comparison = compare_attack_results(
-        current_results,
-        suppressions=existing_file.suppressions,
-    )
-    generated_rules = [triage_rule_for_result(result) for result in comparison.current_findings]
-    merged_rules = merge_suppressions(existing_file.suppressions, generated_rules)
-    added_count = len(merged_rules) - len(existing_file.suppressions)
-
-    write_suppressions(out, SuppressionsFile(suppressions=merged_rules))
+    try:
+        triage_result = triage_results_from_path(results, out_path=out)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
     console.print(
-        f"Triaged {len(comparison.current_findings)} active finding(s). "
-        f"Added {added_count} suppression rule(s)."
+        f"Triaged {len(triage_result.comparison.current_findings)} active finding(s). "
+        f"Added {triage_result.added_count} suppression rule(s)."
     )
     console.print(f"Wrote suppressions to [bold]{out}[/bold].")
+
+
+@app.command()
+def serve(
+    host: Annotated[
+        str,
+        typer.Option(help="Host interface for the local knives-out API."),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option(help="Port for the local knives-out API."),
+    ] = 8787,
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(help="Optional data directory for API jobs and artifacts."),
+    ] = None,
+) -> None:
+    """Start the local-first knives-out HTTP API."""
+    uvicorn.run(create_app(data_dir=data_dir), host=host, port=port)
 
 
 def main() -> None:
