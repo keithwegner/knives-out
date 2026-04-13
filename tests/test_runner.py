@@ -239,11 +239,7 @@ def _graphql_attack_case(
         path="/graphql",
         description="Wrong type for GraphQL variable.",
         body_json={
-            "query": (
-                "query Book($id: ID!) { "
-                "book(id: $id) { __typename id title rating } "
-                "}"
-            ),
+            "query": ("query Book($id: ID!) { book(id: $id) { __typename id title rating } }"),
             "variables": {"id": 123},
         },
         expected_outcomes=["graphql_error", "4xx"],

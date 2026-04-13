@@ -63,10 +63,7 @@ class ComparedFinding:
         delta = self.delta
         if delta is None:
             return []
-        return [
-            f"{change.field} {change.baseline} -> {change.current}"
-            for change in delta.changes
-        ]
+        return [f"{change.field} {change.baseline} -> {change.current}" for change in delta.changes]
 
     @property
     def has_delta(self) -> bool:

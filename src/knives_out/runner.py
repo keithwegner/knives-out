@@ -215,8 +215,7 @@ def _validate_graphql_output_value(
         if isinstance(value, str):
             return None
         return (
-            f"{path}: expected enum string for {shape.type_name}, "
-            f"got {_describe_value_type(value)}"
+            f"{path}: expected enum string for {shape.type_name}, got {_describe_value_type(value)}"
         )
 
     if shape.kind == "list":
