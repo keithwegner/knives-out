@@ -345,7 +345,7 @@ def test_graphql_subscription_url_rewrites_scheme_and_query() -> None:
 
 
 @pytest.mark.parametrize(
-    ("request", "request_kwargs", "expected"),
+    ("prepared_request", "request_kwargs", "expected"),
     [
         pytest.param(
             _prepared_subscription_request(omit_body=True),
@@ -390,11 +390,11 @@ def test_graphql_subscription_url_rewrites_scheme_and_query() -> None:
     ],
 )
 def test_graphql_subscription_payload_selects_expected_body(
-    request: PreparedRequest,
+    prepared_request: PreparedRequest,
     request_kwargs: dict[str, object] | None,
     expected: tuple[bool, object | None],
 ) -> None:
-    assert _graphql_subscription_payload(request, request_kwargs) == expected
+    assert _graphql_subscription_payload(prepared_request, request_kwargs) == expected
 
 
 def test_recv_graphql_subscription_frame_accepts_valid_json_object() -> None:
