@@ -113,7 +113,12 @@ class JobStore:
     def result_exists(self, job_id: str) -> bool:
         return self.result_path(job_id).exists()
 
-    def list_job_records(self) -> list[JobRecord]:
+    def list_jobs(
+        self,
+        *,
+        statuses: set[ApiJobStatus] | None = None,
+        limit: int | None = None,
+    ) -> list[JobRecord]:
         records: list[JobRecord] = []
         for path in self.jobs_dir.iterdir():
             if not path.is_dir():
@@ -121,9 +126,18 @@ class JobStore:
             record_path = path / "job.json"
             if not record_path.exists():
                 continue
-            records.append(self.load_job(path.name))
+            record = self.load_job(path.name)
+            if statuses is not None and record.status not in statuses:
+                continue
+            records.append(record)
+
         records.sort(key=lambda record: record.created_at, reverse=True)
+        if limit is not None:
+            return records[:limit]
         return records
+
+    def list_job_records(self) -> list[JobRecord]:
+        return self.list_jobs()
 
     def list_artifacts(self, job_id: str) -> list[str]:
         artifact_dir = self.artifact_dir(job_id)

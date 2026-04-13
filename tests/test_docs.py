@@ -40,11 +40,16 @@ def test_readme_includes_ci_guidance() -> None:
     assert "POST /v1/jobs/prune" in readme
     assert "GET /v1/jobs/{id}/artifacts" in readme
     assert "completed or failed jobs" in readme
+    assert "GET /v1/jobs" in readme
+    assert "GET /v1/jobs/{id}/artifacts" in readme
+    assert "result_summary" in readme
     assert "--profile-file examples/auth_profiles/anonymous-user-admin.yml" in readme
     assert "anonymous_access" in readme
     assert "--auto-workflows" in readme
     assert "--tag orders" in readme
     assert "--path /draft-orders/{draftId}" in readme
+    assert "--kind missing_auth" in readme
+    assert "--exclude-kind malformed_json_body" in readme
     assert "--format json" in readme
     assert "knives-out report results.json --format html" in readme
     assert "--artifact-root artifacts" in readme
@@ -125,6 +130,8 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "capture.ndjson" in ci_doc
     assert "knives-out capture" in ci_doc
     assert "knives-out discover capture.ndjson --out learned-model.json" in ci_doc
+    assert "GET /v1/jobs" in ci_doc
+    assert "result_summary" in ci_doc
     assert "examples/auth_configs/user-admin.yml" in ci_doc
     assert "examples/auth_configs/client-credentials.yml" in ci_doc
     assert "examples/auth_profiles/anonymous-user-admin.yml" in ci_doc
@@ -146,6 +153,8 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "Generate attacks with built-in workflows" in ci_doc
     assert "--tag orders" in ci_doc
     assert "--path /draft-orders/{draftId}" in ci_doc
+    assert "--kind missing_auth" in ci_doc
+    assert "--exclude-kind malformed_json_body" in ci_doc
     assert "Promote qualifying findings" in ci_doc
     assert "pytest --cov=src/knives_out --cov-report=term-missing" in ci_doc
     assert "coverage-badge.json" in ci_doc

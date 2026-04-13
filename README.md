@@ -99,6 +99,8 @@ Generate attacks:
 ```bash
 knives-out generate examples/openapi/petstore.yaml --out attacks.json
 knives-out generate examples/openapi/storefront.yaml --tag orders --out attacks.json
+knives-out generate examples/openapi/petstore.yaml --kind missing_auth --out auth-attacks.json
+knives-out generate examples/openapi/petstore.yaml --exclude-kind malformed_json_body --out quieter-attacks.json
 knives-out generate examples/graphql/library.graphql --out graphql-attacks.json
 ```
 
@@ -237,12 +239,16 @@ The synchronous endpoints mirror the short CLI flows:
 Longer execution runs use a job resource instead:
 
 - `POST /v1/runs`
+- `GET /v1/jobs`
 - `GET /v1/jobs/{id}`
 - `DELETE /v1/jobs/{id}`
 - `POST /v1/jobs/prune`
 - `GET /v1/jobs/{id}/result`
 - `GET /v1/jobs/{id}/artifacts`
 
+The job collection and per-job status routes include a compact `result_summary` payload whenever a
+run has finished writing `result.json`, so local tools can triage recent runs without downloading
+the full result body first.
 Cleanup stays explicit and local-only: the delete and prune endpoints only remove completed or failed jobs,
 and active jobs must finish before they can be deleted.
 
