@@ -237,6 +237,7 @@ The synchronous endpoints mirror the short CLI flows:
 Longer execution runs use a job resource instead:
 
 - `POST /v1/runs`
+- `GET /v1/jobs`
 - `GET /v1/jobs/{id}`
 - `GET /v1/jobs/{id}/result`
 - `GET /v1/jobs/{id}/artifacts`
@@ -297,8 +298,10 @@ GraphQL schemas follow the same `inspect` / `generate` / `run` / `report` / `ver
 Shadow Twin capture and discovery fit the same path too:
 `capture -> discover -> generate -> run -> report -> verify`.
 If you want to drive that workflow from another local tool instead of shelling out, `knives-out serve`
-now exposes the same core actions over HTTP with background `run` jobs, summary responses, and
-artifact download routes.
+now exposes the same core actions over HTTP with background `run` jobs, recent-job listing,
+summary responses, and artifact download routes. Completed job status responses include compact
+result, finding, and auth-failure counts so callers can triage runs before downloading full
+results.
 If you keep a `.knives-out-ignore.yml` file in the repo root, `report`, `verify`, and `promote`
 will load it automatically. Use `knives-out triage results.json` to seed new entries when you want
 to capture known findings without hand-writing YAML. For authorization-focused regression coverage,

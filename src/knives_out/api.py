@@ -5,7 +5,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from knives_out.api_models import (
@@ -19,6 +19,7 @@ from knives_out.api_models import (
     GenerateResponse,
     InspectRequest,
     InspectResponse,
+    JobListResponse,
     JobRecord,
     JobStatusResponse,
     PromoteRequest,
@@ -142,6 +143,11 @@ def _run_job_worker(job_store: JobStore, job_id: str, request: RunRequest) -> No
                 "status": ApiJobStatus.completed,
                 "completed_at": datetime.now(UTC),
                 "attack_count": len(run_result.suite.attacks),
+                "result_count": len(run_result.results.results),
+                "flagged_count": sum(1 for result in run_result.results.results if result.flagged),
+                "auth_failure_count": sum(
+                    1 for event in run_result.results.auth_events if not event.success
+                ),
             }
         )
         job_store.update_job(completed)
@@ -285,6 +291,14 @@ def create_app(*, data_dir: Path | None = None) -> FastAPI:
         )
         thread.start()
         return job_store.job_status_response(record.id)
+
+    @app.get("/v1/jobs", response_model=JobListResponse)
+    def list_jobs(
+        limit: int = Query(default=20, ge=1, le=200),
+        status: ApiJobStatus | None = None,
+    ) -> JobListResponse:
+        job_store: JobStore = app.state.job_store
+        return job_store.job_list_response(limit=limit, status=status)
 
     @app.get("/v1/jobs/{job_id}", response_model=JobStatusResponse)
     def get_job(job_id: str) -> JobStatusResponse:

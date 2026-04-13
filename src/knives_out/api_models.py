@@ -208,6 +208,9 @@ class JobRecord(BaseModel):
     completed_at: datetime | None = None
     base_url: str
     attack_count: int
+    result_count: int | None = None
+    flagged_count: int | None = None
+    auth_failure_count: int | None = None
     error: str | None = None
 
 
@@ -220,9 +223,16 @@ class JobStatusResponse(BaseModel):
     completed_at: datetime | None = None
     base_url: str
     attack_count: int
+    result_count: int | None = None
+    flagged_count: int | None = None
+    auth_failure_count: int | None = None
     error: str | None = None
     result_available: bool = False
     artifact_names: list[str] = Field(default_factory=list)
+
+
+class JobListResponse(BaseModel):
+    jobs: list[JobStatusResponse] = Field(default_factory=list)
 
 
 class ArtifactListResponse(BaseModel):

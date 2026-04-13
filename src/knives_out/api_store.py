@@ -6,7 +6,13 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from knives_out.api_models import ArtifactListResponse, JobRecord, JobStatusResponse
+from knives_out.api_models import (
+    ApiJobStatus,
+    ArtifactListResponse,
+    JobListResponse,
+    JobRecord,
+    JobStatusResponse,
+)
 from knives_out.models import AttackResults
 
 
@@ -122,8 +128,7 @@ class JobStore:
             raise FileNotFoundError(name)
         return candidate
 
-    def job_status_response(self, job_id: str) -> JobStatusResponse:
-        record = self.load_job(job_id)
+    def _status_response(self, record: JobRecord) -> JobStatusResponse:
         return JobStatusResponse(
             id=record.id,
             kind=record.kind,
@@ -133,7 +138,47 @@ class JobStore:
             completed_at=record.completed_at,
             base_url=record.base_url,
             attack_count=record.attack_count,
+            result_count=record.result_count,
+            flagged_count=record.flagged_count,
+            auth_failure_count=record.auth_failure_count,
             error=record.error,
-            result_available=self.result_exists(job_id),
-            artifact_names=self.list_artifacts(job_id),
+            result_available=self.result_exists(record.id),
+            artifact_names=self.list_artifacts(record.id),
         )
+
+    def list_jobs(
+        self,
+        *,
+        status: ApiJobStatus | None = None,
+        limit: int = 20,
+    ) -> list[JobRecord]:
+        records: list[JobRecord] = []
+        for job_dir in self.jobs_dir.iterdir():
+            if not job_dir.is_dir():
+                continue
+            if not self.record_path(job_dir.name).exists():
+                continue
+            record = self.load_job(job_dir.name)
+            if status is not None and record.status != status:
+                continue
+            records.append(record)
+
+        records.sort(key=lambda record: record.created_at, reverse=True)
+        return records[:limit]
+
+    def job_list_response(
+        self,
+        *,
+        status: ApiJobStatus | None = None,
+        limit: int = 20,
+    ) -> JobListResponse:
+        return JobListResponse(
+            jobs=[
+                self._status_response(record)
+                for record in self.list_jobs(status=status, limit=limit)
+            ]
+        )
+
+    def job_status_response(self, job_id: str) -> JobStatusResponse:
+        record = self.load_job(job_id)
+        return self._status_response(record)

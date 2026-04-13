@@ -102,7 +102,8 @@ Today, a result is typically flagged when it produces:
 reporting, verification, promotion, and triage. `cli.py` is now a thin Typer adapter on top of
 those helpers, and `api.py` exposes the same behavior over a local-first FastAPI surface.
 Long-running API execution uses a filesystem-backed job store in `api_store.py` so local tools can
-poll for status and fetch artifacts without introducing a database in the first version.
+list recent jobs, poll for status, and fetch artifacts without introducing a database in the first
+version.
 
 ## Why save attacks as JSON?
 
