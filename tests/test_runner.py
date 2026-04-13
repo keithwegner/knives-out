@@ -14,12 +14,13 @@ from knives_out.models import (
     AttackSuite,
     AuthProfile,
     ExtractRule,
+    GraphQLOutputShape,
     ProfileAttackResult,
     WorkflowAttackCase,
     WorkflowStep,
     WorkflowStepResult,
 )
-from knives_out.reporting import render_html_report, render_markdown_report
+from knives_out.reporting import render_html_report, render_markdown_report, summarize_results
 from knives_out.runner import execute_attack_suite, execute_attack_suite_profiles
 from knives_out.suppressions import SuppressionRule
 
@@ -189,6 +190,63 @@ def _workflow_attack(
             description="Terminal attack",
             path_params={"petId": terminal_path_param},
         ),
+    )
+
+
+def _graphql_shape_book(*, nullable: bool = True) -> GraphQLOutputShape:
+    return GraphQLOutputShape(
+        kind="object",
+        type_name="Book",
+        nullable=nullable,
+        fields={
+            "__typename": GraphQLOutputShape(
+                kind="scalar",
+                type_name="String",
+                nullable=False,
+            ),
+            "id": GraphQLOutputShape(
+                kind="scalar",
+                type_name="ID",
+                nullable=False,
+            ),
+            "title": GraphQLOutputShape(
+                kind="scalar",
+                type_name="String",
+                nullable=False,
+            ),
+            "rating": GraphQLOutputShape(
+                kind="scalar",
+                type_name="Int",
+                nullable=True,
+            ),
+        },
+    )
+
+
+def _graphql_attack_case(
+    *,
+    output_shape: GraphQLOutputShape | None = None,
+    federated: bool = False,
+    entity_types: list[str] | None = None,
+) -> AttackCase:
+    return AttackCase(
+        id="atk_graphql",
+        name="Wrong-type GraphQL variable",
+        kind="wrong_type_variable",
+        operation_id="book",
+        protocol="graphql",
+        method="POST",
+        path="/graphql",
+        description="Wrong type for GraphQL variable.",
+        body_json={
+            "query": ("query Book($id: ID!) { book(id: $id) { __typename id title rating } }"),
+            "variables": {"id": 123},
+        },
+        expected_outcomes=["graphql_error", "4xx"],
+        graphql_root_field_name="book",
+        graphql_output_shape=output_shape or _graphql_shape_book(),
+        graphql_federated=federated,
+        graphql_entity_types=list(entity_types or []),
     )
 
 
@@ -400,13 +458,50 @@ def test_render_markdown_report_sorts_flagged_findings_by_score() -> None:
     assert "### By attack kind" in report
     assert "| missing_auth | 2 |" in report
     assert "| wrong_type_param | 1 |" in report
-    assert "| Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |" in report
+    assert (
+        "| Protocol | Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |"
+        in report
+    )
     assert "response_schema_mismatch" in report
     assert "mismatch" in report
     assert "$.id: expected integer, got string" in report
     assert report.index("| Server failure |") < report.index("| Unexpected success |")
     assert report.index("| Unexpected success |") < report.index("| Schema mismatch |")
     assert report.index("| Schema mismatch |") < report.index("| Transport error |")
+
+
+def test_render_markdown_report_shows_graphql_protocol_details() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_graphql",
+                operation_id="book",
+                kind="wrong_type_variable",
+                name="GraphQL mismatch",
+                protocol="graphql",
+                method="POST",
+                url="https://example.com/graphql",
+                status_code=200,
+                flagged=True,
+                issue="graphql_response_shape_mismatch",
+                severity="medium",
+                confidence="high",
+                graphql_response_valid=False,
+                graphql_response_error="$.data.book.title: expected String, got integer",
+                graphql_response_hint="Schema appears federated.",
+            )
+        ],
+    )
+
+    report = render_markdown_report(results)
+
+    assert "GraphQL response-shape mismatches" in report
+    assert "`graphql`=1" in report
+    assert "graphql_response_shape_mismatch" in report
+    assert "graphql-mismatch" in report
+    assert "GraphQL federation hint" in report
 
 
 def test_render_markdown_report_with_baseline_shows_regression_sections() -> None:
@@ -528,8 +623,10 @@ def test_render_markdown_report_shows_persisting_deltas() -> None:
 
     report = render_markdown_report(current, baseline=baseline)
 
-    assert "Persisting findings with delta: **1**" in report
-    assert "severity medium -> high; confidence low -> high; status 401 -> 500" in report
+    assert "Persisting findings with deltas: **1**" in report
+    assert "severity medium -> high" in report
+    assert "confidence low -> high" in report
+    assert "status 401 -> 500" in report
 
 
 def test_render_markdown_report_shows_suppressed_findings() -> None:
@@ -901,7 +998,7 @@ def test_render_markdown_report_shows_profile_outcomes() -> None:
 
     assert "- Profiles: **3**" in report
     assert "anonymous (anonymous)" in report
-    assert "| user | 10 | 403 | ok | - | `https://example.com/secrets` |" in report
+    assert "| user | rest | 10 | 403 | ok | - | `https://example.com/secrets` |" in report
 
 
 def test_execute_attack_suite_removes_only_declared_auth_header(monkeypatch) -> None:
@@ -1348,50 +1445,7 @@ def test_execute_attack_suite_treats_graphql_errors_as_expected_failures(monkeyp
     results = execute_attack_suite(
         AttackSuite(
             source="unit",
-            attacks=[
-                AttackCase(
-                    id="atk_graphql_error",
-                    name="Wrong-type GraphQL variable",
-                    kind="wrong_type_variable",
-                    operation_id="book",
-                    method="POST",
-                    path="/graphql",
-                    description="Wrong type for GraphQL variable.",
-                    body_json={
-                        "query": "query Book($id: ID!) { book(id: $id) { __typename } }",
-                        "variables": {"id": 123},
-                    },
-                    expected_outcomes=["graphql_error", "4xx"],
-                    response_schemas={
-                        "200": {
-                            "content_type": "application/json",
-                            "schema_def": {
-                                "type": "object",
-                                "properties": {
-                                    "data": {
-                                        "type": "object",
-                                        "properties": {
-                                            "book": {
-                                                "type": "object",
-                                                "properties": {
-                                                    "__typename": {
-                                                        "type": "string",
-                                                        "const": "Book",
-                                                    }
-                                                },
-                                                "required": ["__typename"],
-                                                "nullable": True,
-                                            }
-                                        },
-                                        "required": ["book"],
-                                    }
-                                },
-                                "required": ["data"],
-                            },
-                        }
-                    },
-                )
-            ],
+            attacks=[_graphql_attack_case()],
         ),
         base_url="https://example.com",
     )
@@ -1402,33 +1456,31 @@ def test_execute_attack_suite_treats_graphql_errors_as_expected_failures(monkeyp
     assert result.status_code == 200
     assert result.response_schema_status is None
     assert result.response_schema_valid is None
+    assert result.graphql_response_valid is None
 
 
 def test_execute_attack_suite_flags_graphql_success_without_errors(monkeypatch) -> None:
     _install_stub_response(
         monkeypatch,
-        httpx.Response(200, json={"data": {"book": {"__typename": "Book"}}}),
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "book": {
+                        "__typename": "Book",
+                        "id": "1",
+                        "title": "Dune",
+                        "rating": 5,
+                    }
+                }
+            },
+        ),
     )
 
     results = execute_attack_suite(
         AttackSuite(
             source="unit",
-            attacks=[
-                AttackCase(
-                    id="atk_graphql_success",
-                    name="Wrong-type GraphQL variable",
-                    kind="wrong_type_variable",
-                    operation_id="book",
-                    method="POST",
-                    path="/graphql",
-                    description="Wrong type for GraphQL variable.",
-                    body_json={
-                        "query": "query Book($id: ID!) { book(id: $id) { __typename } }",
-                        "variables": {"id": 123},
-                    },
-                    expected_outcomes=["graphql_error", "4xx"],
-                )
-            ],
+            attacks=[_graphql_attack_case()],
         ),
         base_url="https://example.com",
     )
@@ -1436,71 +1488,167 @@ def test_execute_attack_suite_flags_graphql_success_without_errors(monkeypatch) 
     result = results.results[0]
     assert result.flagged is True
     assert result.issue == "unexpected_success"
+    assert result.graphql_response_valid is True
 
 
-def test_execute_attack_suite_flags_graphql_response_shape_mismatch(monkeypatch) -> None:
+def test_execute_attack_suite_flags_missing_graphql_selected_field(monkeypatch) -> None:
     _install_stub_response(
         monkeypatch,
-        httpx.Response(200, json={"data": {"book": {"id": "book-1"}}}),
+        httpx.Response(
+            200,
+            json={"data": {"book": {"__typename": "Book", "id": "1", "rating": 5}}},
+        ),
     )
 
     results = execute_attack_suite(
-        AttackSuite(
-            source="unit",
-            attacks=[
-                AttackCase(
-                    id="atk_graphql_shape",
-                    name="Wrong-type GraphQL variable",
-                    kind="wrong_type_variable",
-                    operation_id="book",
-                    method="POST",
-                    path="/graphql",
-                    description="Wrong type for GraphQL variable.",
-                    body_json={
-                        "query": "query Book($id: ID!) { book(id: $id) { __typename } }",
-                        "variables": {"id": 123},
-                    },
-                    expected_outcomes=["graphql_error", "4xx"],
-                    response_schemas={
-                        "200": {
-                            "content_type": "application/json",
-                            "schema_def": {
-                                "type": "object",
-                                "properties": {
-                                    "data": {
-                                        "type": "object",
-                                        "properties": {
-                                            "book": {
-                                                "type": "object",
-                                                "properties": {
-                                                    "__typename": {
-                                                        "type": "string",
-                                                        "const": "Book",
-                                                    }
-                                                },
-                                                "required": ["__typename"],
-                                                "nullable": True,
-                                            }
-                                        },
-                                        "required": ["book"],
-                                    }
-                                },
-                                "required": ["data"],
-                            },
-                        }
-                    },
-                )
-            ],
-        ),
+        AttackSuite(source="unit", attacks=[_graphql_attack_case()]),
         base_url="https://example.com",
     )
 
     result = results.results[0]
     assert result.flagged is True
-    assert result.issue == "response_schema_mismatch"
-    assert result.response_schema_status == "200"
-    assert result.response_schema_valid is False
-    assert result.response_schema_error == "$.data.book: missing required property '__typename'"
+    assert result.issue == "graphql_response_shape_mismatch"
+    assert result.graphql_response_valid is False
+    assert result.graphql_response_error == "$.data.book: missing selected field 'title'"
+
+
+def test_execute_attack_suite_flags_wrong_graphql_scalar_type(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "book": {
+                        "__typename": "Book",
+                        "id": "1",
+                        "title": "Dune",
+                        "rating": "five",
+                    }
+                }
+            },
+        ),
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(source="unit", attacks=[_graphql_attack_case()]),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "graphql_response_shape_mismatch"
+    assert result.graphql_response_error == "$.data.book.rating: expected Int, got string"
+
+
+def test_execute_attack_suite_allows_partial_graphql_data_when_shape_is_valid(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "book": {"__typename": "Book", "id": "1", "title": "Dune", "rating": None}
+                },
+                "errors": [{"message": "rating resolver failed"}],
+            },
+        ),
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(source="unit", attacks=[_graphql_attack_case()]),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is False
+    assert result.issue is None
+    assert result.graphql_response_valid is True
+
+
+def test_execute_attack_suite_flags_partial_graphql_data_when_shape_is_invalid(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "data": {"book": {"__typename": "Book", "id": "1", "rating": None}},
+                "errors": [{"message": "title resolver failed"}],
+            },
+        ),
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(source="unit", attacks=[_graphql_attack_case()]),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "graphql_response_shape_mismatch"
+    assert "missing selected field 'title'" in (result.graphql_response_error or "")
+
+
+def test_execute_attack_suite_adds_graphql_federation_hint(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(200, json={"data": {"book": {"__typename": "Book", "id": "1"}}}),
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(
+            source="unit",
+            attacks=[_graphql_attack_case(federated=True, entity_types=["Book"])],
+        ),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.graphql_response_valid is False
+    assert result.graphql_response_hint is not None
+    assert "federated" in result.graphql_response_hint.lower()
+
+
+def test_execute_attack_suite_validates_graphql_union_typename(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={"data": {"node": {"__typename": "Magazine", "id": "1", "title": "Issue 1"}}},
+        ),
+    )
+
+    union_shape = GraphQLOutputShape(
+        kind="interface",
+        type_name="Node",
+        nullable=True,
+        possible_types={"Book": _graphql_shape_book()},
+    )
+    attack = _graphql_attack_case(output_shape=union_shape)
+    attack = attack.model_copy(
+        update={
+            "operation_id": "node",
+            "graphql_root_field_name": "node",
+            "body_json": {
+                "query": (
+                    "query Node($id: ID!) { "
+                    "node(id: $id) { __typename ... on Book { id title rating } } "
+                    "}"
+                ),
+                "variables": {"id": "1"},
+            },
+        }
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(source="unit", attacks=[attack]),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "graphql_response_shape_mismatch"
+    assert "expected one of ['Book']" in (result.graphql_response_error or "")
 
 
 def test_render_markdown_report_shows_workflow_sections() -> None:
@@ -1647,9 +1795,11 @@ def test_render_html_report_shows_persisting_deltas() -> None:
 
     report = render_html_report(current, baseline=baseline)
 
-    assert "Persisting with delta" in report
-    assert "<h2>Persisting findings</h2>" in report
-    assert "severity medium -&gt; high; confidence low -&gt; high; status 401 -&gt; 500" in report
+    assert "Persisting with deltas" in report
+    assert "<h2>Persisting deltas</h2>" in report
+    assert "severity medium -&gt; high" in report
+    assert "confidence low -&gt; high" in report
+    assert "status 401 -&gt; 500" in report
 
 
 def test_render_html_report_shows_auth_summary() -> None:
@@ -1744,3 +1894,92 @@ def test_render_html_report_shows_grouped_flagged_findings() -> None:
     assert "<td>unexpected_success</td>" in report
     assert "<td>missing_auth</td>" in report
     assert "<td>wrong_type_param</td>" in report
+
+
+def test_summarize_results_builds_machine_readable_regression_summary() -> None:
+    current = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        auth_events=[
+            {
+                "profile": "user",
+                "name": "user",
+                "strategy": "static_bearer",
+                "phase": "acquire",
+                "success": True,
+            },
+            {
+                "profile": "user",
+                "name": "user",
+                "strategy": "static_bearer",
+                "phase": "refresh",
+                "success": False,
+                "trigger": "401",
+            },
+        ],
+        results=[
+            AttackResult(
+                attack_id="atk_new",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            ),
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="book",
+                kind="wrong_type_variable",
+                name="GraphQL mismatch",
+                protocol="graphql",
+                method="POST",
+                path="/graphql",
+                url="https://example.com/graphql",
+                status_code=200,
+                flagged=True,
+                issue="graphql_response_shape_mismatch",
+                severity="medium",
+                confidence="high",
+                graphql_response_valid=False,
+            ),
+        ],
+    )
+    baseline = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="book",
+                kind="wrong_type_variable",
+                name="GraphQL mismatch",
+                protocol="graphql",
+                method="POST",
+                path="/graphql",
+                url="https://example.com/graphql",
+                status_code=500,
+                flagged=True,
+                issue="graphql_response_shape_mismatch",
+                severity="medium",
+                confidence="high",
+                graphql_response_valid=False,
+            )
+        ],
+    )
+
+    summary = summarize_results(current, baseline=baseline, top_limit=1)
+
+    assert summary.baseline_used is True
+    assert summary.new_findings_count == 1
+    assert summary.persisting_findings_count == 1
+    assert summary.persisting_deltas_count == 1
+    assert summary.auth_failures == 1
+    assert summary.refresh_attempts == 1
+    assert summary.protocol_counts == {"graphql": 1, "rest": 1}
+    assert summary.finding_severity_counts == {"high": 1, "medium": 1}
+    assert summary.top_findings[0].attack_id == "atk_new"

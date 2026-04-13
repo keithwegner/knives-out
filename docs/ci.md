@@ -102,6 +102,8 @@ findings:
 
 The tool does not fetch that baseline for you. Your workflow is responsible for placing
 `previous-results.json` in the workspace before this step.
+When you use a baseline, `verify` also prints a compact summary for persisting findings whose
+status, severity, confidence, or schema outcome changed between runs.
 
 ## Optional: checked-in suppressions
 
@@ -193,6 +195,31 @@ attacks target invalid variables, required-variable removal, and type coercion f
     knives-out generate examples/graphql/library.graphql \
       --graphql-endpoint /graphql \
       --out graphql-attacks.json
+```
+
+## Optional: local HTTP API
+
+If another local tool needs to drive the workflow without shelling out to the CLI, start the
+server on loopback:
+
+```yaml
+- name: Start local knives-out API
+  run: knives-out serve --host 127.0.0.1 --port 8787
+```
+
+The API mirrors the same JSON artifacts through `POST /v1/inspect`, `POST /v1/generate`,
+`POST /v1/discover`, `POST /v1/report`, `POST /v1/summary`, `POST /v1/verify`, `POST /v1/promote`,
+`POST /v1/triage`, and background `POST /v1/runs` jobs with `GET /v1/jobs/{id}` polling.
+Use `KNIVES_OUT_API_DATA_DIR` when you want the job store somewhere other than `.knives-out-api/`.
+
+## Optional: machine-readable summary export
+
+When CI, chatops, or downstream dashboards need a compact JSON artifact instead of full Markdown or
+HTML, render a summary file after execution:
+
+```yaml
+- name: Build machine-readable summary
+  run: knives-out summary results.json --out summary.json
 ```
 
 ## Optional: Shadow Twin learned models
@@ -340,6 +367,9 @@ including delta notes when a persisting finding changed severity, confidence, st
       --baseline previous-results.json \
       --out report.md
 ```
+
+That baseline-aware report includes the usual new/resolved/persisting sections plus a
+`Persisting deltas` section for persisting findings that drifted between runs.
 
 ## Optional: HTML report and artifact index
 

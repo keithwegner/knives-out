@@ -23,27 +23,30 @@ guesswork.
     `login_json_bearer`, and `login_form_cookie`
 - v0.10: Shadow Twin learned-model capture and discovery
   - ships local reverse-proxy capture, HAR import, learned-model artifacts, and learned workflow attacks
+- v0.11: deeper GraphQL coverage
+  - ships response-shape validation, federation-aware diagnostics, and protocol-aware reporting
 
-## v0.11 — deeper GraphQL coverage
+## v0.12 — local-first HTTP API
 
-The next likely milestone is a GraphQL-focused expansion on top of the loader and runner we now
-have. The strongest targets are:
+The next likely milestone is an API expansion on top of the shared load/generate/run/report
+pipeline we now have. The strongest targets are:
 
-- response-shape validation against declared GraphQL result structure
-- federation awareness and clearer subgraph-related diagnostics
-- staged subscription coverage that still fits the current generate/run/report pipeline
-- better protocol-aware reporting for mixed OpenAPI and GraphQL programs
+- a local-only FastAPI server that mirrors the current CLI surface
+- synchronous endpoints for inspect, generate, discover, report, verify, promote, and triage
+- background run jobs with polling and artifact retrieval
+- a shared service layer so the CLI and API do not drift apart
 
-## v0.12 — richer CI and triage ergonomics
+## v0.13 — richer CI and triage ergonomics
 
-After the GraphQL pass, the next best leverage point is day-to-day review ergonomics:
+After the API pass, the next best leverage point is day-to-day review ergonomics:
 
 - stronger artifact navigation for large suites
+- machine-readable summary exports for CI annotations and dashboards
 - better suppression and baseline review flows
 - clearer auth diagnostic summaries in HTML and Markdown reports
 - smaller, higher-signal CI summaries for long-lived regression programs
 
-## v0.13 — smoke-test integration coverage
+## v0.14 — smoke-test integration coverage
 
 Before we grow a broad end-to-end matrix, the better next step is a tiny local-only smoke-test
 layer aimed at product-critical flows. The goal is confidence, not exhaustive scenario coverage:

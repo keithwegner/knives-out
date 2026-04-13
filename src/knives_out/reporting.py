@@ -5,7 +5,15 @@ from collections import Counter
 from html import escape
 from pathlib import Path
 
-from knives_out.models import AttackResult, AttackResults, AuthEvent, ProfileAttackResult
+from knives_out.models import (
+    AttackResult,
+    AttackResults,
+    AuthEvent,
+    AuthSummaryEntry,
+    ProfileAttackResult,
+    ResultsSummary,
+    SummaryFinding,
+)
 from knives_out.suppressions import SuppressedFinding, SuppressionRule
 from knives_out.verification import (
     ComparedFinding,
@@ -18,30 +26,36 @@ def load_attack_results(path: str | Path) -> AttackResults:
     return AttackResults.model_validate_json(raw)
 
 
+def _protocol_label(protocol: str) -> str:
+    if protocol == "openapi":
+        return "rest"
+    return protocol
+
+
+def _schema_summary(result) -> str:
+    if result.protocol == "graphql":
+        if result.graphql_response_valid is False:
+            return "graphql-mismatch"
+        if result.graphql_response_valid is True:
+            return "graphql-ok"
+        return "-"
+    if result.response_schema_valid is False:
+        return "mismatch"
+    if result.response_schema_valid is True:
+        return "ok"
+    return "-"
+
+
 def _finding_table_rows(findings: list[ComparedFinding]) -> list[str]:
     rows: list[str] = []
     for finding in findings:
         result = finding.result
         status = str(result.status_code) if result.status_code is not None else "-"
-        schema = "mismatch" if result.response_schema_valid is False else "-"
+        schema = _schema_summary(result)
         rows.append(
-            f"| {result.name} | {result.kind} | {status} | "
+            f"| {_protocol_label(result.protocol)} | {result.name} | {result.kind} | {status} | "
             f"{result.issue or '-'} | {result.severity} | {result.confidence} | "
             f"{schema} | `{result.url}` |"
-        )
-    return rows
-
-
-def _persisting_table_rows(findings: list[ComparedFinding]) -> list[str]:
-    rows: list[str] = []
-    for finding in findings:
-        result = finding.result
-        status = str(result.status_code) if result.status_code is not None else "-"
-        schema = "mismatch" if result.response_schema_valid is False else "-"
-        rows.append(
-            f"| {result.name} | {result.kind} | {status} | "
-            f"{result.issue or '-'} | {result.severity} | {result.confidence} | "
-            f"{schema} | {finding.delta_summary} | `{result.url}` |"
         )
     return rows
 
@@ -64,6 +78,28 @@ def _finding_group_rows(
     return rows
 
 
+def _persisting_delta_findings(findings: list[ComparedFinding]) -> list[ComparedFinding]:
+    return [finding for finding in findings if finding.delta is not None and finding.delta.changed]
+
+
+def _delta_summary(finding: ComparedFinding) -> str:
+    delta = finding.delta
+    if delta is None or not delta.changed:
+        return "unchanged"
+    return finding.delta_summary
+
+
+def _persisting_delta_rows(findings: list[ComparedFinding]) -> list[str]:
+    rows: list[str] = []
+    for finding in _persisting_delta_findings(findings):
+        result = finding.result
+        rows.append(
+            f"| {result.name} | {result.kind} | {result.issue or '-'} | "
+            f"{_delta_summary(finding)} | `{result.url}` |"
+        )
+    return rows
+
+
 def _suppressed_table_rows(findings: list[SuppressedFinding]) -> list[str]:
     rows: list[str] = []
     for finding in findings:
@@ -83,12 +119,13 @@ def _profile_table_rows(profile_results: list[ProfileAttackResult]) -> list[str]
         key=lambda result: (result.level, result.profile.casefold()),
     ):
         status = str(profile_result.status_code) if profile_result.status_code is not None else "-"
-        schema = "mismatch" if profile_result.response_schema_valid is False else "-"
+        schema = _schema_summary(profile_result)
         profile_name = profile_result.profile
         if profile_result.anonymous:
             profile_name = f"{profile_name} (anonymous)"
         rows.append(
-            f"| {profile_name} | {profile_result.level} | {status} | "
+            f"| {profile_name} | {_protocol_label(profile_result.protocol)} | "
+            f"{profile_result.level} | {status} | "
             f"{profile_result.issue or 'ok'} | {schema} | `{profile_result.url}` |"
         )
     return rows
@@ -159,6 +196,89 @@ def _workflow_phase(result) -> str:
     return "terminal"
 
 
+def _counter_dict(counter: Counter[str]) -> dict[str, int]:
+    return {key: counter[key] for key in sorted(counter)}
+
+
+def summarize_results(
+    results: AttackResults,
+    *,
+    baseline: AttackResults | None = None,
+    suppressions: list[SuppressionRule] | None = None,
+    top_limit: int = 10,
+) -> ResultsSummary:
+    if top_limit < 0:
+        raise ValueError("top_limit must be >= 0.")
+
+    comparison = compare_attack_results(results, baseline, suppressions=suppressions)
+    persisting_deltas = _persisting_delta_findings(comparison.persisting_findings)
+
+    auth_summary = [
+        AuthSummaryEntry(
+            profile=str(entry["profile"]),
+            name=str(entry["name"]),
+            strategy=str(entry["strategy"]),
+            acquire=int(entry["acquire"]),
+            refresh=int(entry["refresh"]),
+            failures=int(entry["failures"]),
+            triggers=sorted(str(trigger) for trigger in entry["triggers"]),
+        )
+        for entry in _auth_summary_entries(results.auth_events)
+    ]
+    top_findings = [
+        SummaryFinding(
+            attack_id=result.attack_id,
+            name=result.name,
+            protocol=_protocol_label(result.protocol),
+            kind=result.kind,
+            issue=result.issue,
+            severity=result.severity,
+            confidence=result.confidence,
+            status_code=result.status_code,
+            url=result.url,
+            schema_status=_schema_summary(result),
+        )
+        for result in comparison.current_findings[:top_limit]
+    ]
+
+    return ResultsSummary(
+        source=results.source,
+        base_url=results.base_url,
+        executed_at=results.executed_at,
+        baseline_used=baseline is not None,
+        baseline_executed_at=baseline.executed_at if baseline is not None else None,
+        total_results=len(results.results),
+        profile_count=len(results.profiles),
+        profile_names=list(results.profiles),
+        active_flagged_count=len(comparison.current_findings),
+        suppressed_flagged_count=len(comparison.suppressed_current_findings),
+        new_findings_count=len(comparison.new_findings),
+        resolved_findings_count=len(comparison.resolved_findings),
+        persisting_findings_count=len(comparison.persisting_findings),
+        persisting_deltas_count=len(persisting_deltas),
+        auth_failures=sum(1 for event in results.auth_events if not event.success),
+        refresh_attempts=sum(1 for event in results.auth_events if event.phase == "refresh"),
+        response_schema_mismatches=sum(
+            1 for result in results.results if result.response_schema_valid is False
+        ),
+        graphql_shape_mismatches=sum(
+            1 for result in results.results if result.graphql_response_valid is False
+        ),
+        protocol_counts=_counter_dict(
+            Counter(_protocol_label(result.protocol) for result in results.results)
+        ),
+        issue_counts=_counter_dict(Counter(result.issue or "ok" for result in results.results)),
+        finding_severity_counts=_counter_dict(
+            Counter(result.severity for result in comparison.current_findings)
+        ),
+        finding_confidence_counts=_counter_dict(
+            Counter(result.confidence for result in comparison.current_findings)
+        ),
+        auth_summary=auth_summary,
+        top_findings=top_findings,
+    )
+
+
 def render_markdown_report(
     results: AttackResults,
     *,
@@ -174,7 +294,11 @@ def render_markdown_report(
     response_schema_mismatches = sum(
         1 for result in results.results if result.response_schema_valid is False
     )
+    graphql_shape_mismatches = sum(
+        1 for result in results.results if result.graphql_response_valid is False
+    )
     issue_counter = Counter(result.issue or "ok" for result in results.results)
+    protocol_counter = Counter(_protocol_label(result.protocol) for result in results.results)
 
     lines: list[str] = []
     lines.append("# knives-out report")
@@ -190,6 +314,11 @@ def render_markdown_report(
     lines.append(f"- Suppressed flagged results: **{suppressed_flagged}**")
     lines.append(f"- Auth setup/refresh failures: **{auth_failures}**")
     lines.append(f"- Response schema mismatches: **{response_schema_mismatches}**")
+    lines.append(f"- GraphQL response-shape mismatches: **{graphql_shape_mismatches}**")
+    lines.append(
+        "- Protocol mix: "
+        + ", ".join(f"`{protocol}`={count}" for protocol, count in sorted(protocol_counter.items()))
+    )
     lines.append("")
     lines.append("## Outcome summary")
     lines.append("")
@@ -219,22 +348,24 @@ def render_markdown_report(
         lines.append("| None | 0 |")
 
     lines.append("")
-    lines.append("| Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |")
-    lines.append("| --- | --- | ---: | --- | --- | --- | --- | --- |")
+    lines.append(
+        "| Protocol | Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |"
+    )
+    lines.append("| --- | --- | --- | ---: | --- | --- | --- | --- | --- |")
 
     found_flagged = False
     for result in comparison.current_findings:
         found_flagged = True
         status = str(result.status_code) if result.status_code is not None else "-"
-        schema = "mismatch" if result.response_schema_valid is False else "-"
+        schema = _schema_summary(result)
         lines.append(
-            f"| {result.name} | {result.kind} | {status} | "
+            f"| {_protocol_label(result.protocol)} | {result.name} | {result.kind} | {status} | "
             f"{result.issue or '-'} | {result.severity} | {result.confidence} | "
             f"{schema} | `{result.url}` |"
         )
 
     if not found_flagged:
-        lines.append("| None | - | - | - | - | - | - | - |")
+        lines.append("| None | - | - | - | - | - | - | - | - |")
 
     lines.append("")
     lines.append("## Suppressed findings")
@@ -266,6 +397,7 @@ def render_markdown_report(
         lines.append("| None | - | - | - | - | - | - | - |")
 
     if baseline is not None:
+        persisting_deltas = _persisting_delta_findings(comparison.persisting_findings)
         lines.append("")
         lines.append("## Verification summary")
         lines.append("")
@@ -273,10 +405,7 @@ def render_markdown_report(
         lines.append(f"- New findings: **{len(comparison.new_findings)}**")
         lines.append(f"- Resolved findings: **{len(comparison.resolved_findings)}**")
         lines.append(f"- Persisting findings: **{len(comparison.persisting_findings)}**")
-        lines.append(
-            "- Persisting findings with delta: "
-            f"**{sum(1 for finding in comparison.persisting_findings if finding.has_delta)}**"
-        )
+        lines.append(f"- Persisting findings with deltas: **{len(persisting_deltas)}**")
         lines.append(
             f"- Suppressed current findings: **{len(comparison.suppressed_current_findings)}**"
         )
@@ -284,31 +413,44 @@ def render_markdown_report(
         lines.append("")
         lines.append("## New findings")
         lines.append("")
-        lines.append("| Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |")
-        lines.append("| --- | --- | ---: | --- | --- | --- | --- | --- |")
+        lines.append(
+            "| Protocol | Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |"
+        )
+        lines.append("| --- | --- | --- | ---: | --- | --- | --- | --- | --- |")
         lines.extend(_finding_table_rows(comparison.new_findings))
         if not comparison.new_findings:
-            lines.append("| None | - | - | - | - | - | - | - |")
+            lines.append("| None | - | - | - | - | - | - | - | - |")
 
         lines.append("")
         lines.append("## Resolved findings")
         lines.append("")
-        lines.append("| Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |")
-        lines.append("| --- | --- | ---: | --- | --- | --- | --- | --- |")
+        lines.append(
+            "| Protocol | Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |"
+        )
+        lines.append("| --- | --- | --- | ---: | --- | --- | --- | --- | --- |")
         lines.extend(_finding_table_rows(comparison.resolved_findings))
         if not comparison.resolved_findings:
-            lines.append("| None | - | - | - | - | - | - | - |")
+            lines.append("| None | - | - | - | - | - | - | - | - |")
 
         lines.append("")
         lines.append("## Persisting findings")
         lines.append("")
         lines.append(
-            "| Attack | Kind | Status | Issue | Severity | Confidence | Schema | Delta | URL |"
+            "| Protocol | Attack | Kind | Status | Issue | Severity | Confidence | Schema | URL |"
         )
-        lines.append("| --- | --- | ---: | --- | --- | --- | --- | --- | --- |")
-        lines.extend(_persisting_table_rows(comparison.persisting_findings))
+        lines.append("| --- | --- | --- | ---: | --- | --- | --- | --- | --- |")
+        lines.extend(_finding_table_rows(comparison.persisting_findings))
         if not comparison.persisting_findings:
             lines.append("| None | - | - | - | - | - | - | - | - |")
+
+        lines.append("")
+        lines.append("## Persisting deltas")
+        lines.append("")
+        lines.append("| Attack | Kind | Issue | Changes | URL |")
+        lines.append("| --- | --- | --- | --- | --- |")
+        lines.extend(_persisting_delta_rows(comparison.persisting_findings))
+        if not persisting_deltas:
+            lines.append("| None | - | - | - | - |")
 
     lines.append("")
     lines.append("## Detailed results")
@@ -317,6 +459,7 @@ def render_markdown_report(
         lines.append(f"### {result.name}")
         lines.append("")
         lines.append(f"- Type: `{result.type}`")
+        lines.append(f"- Protocol: `{_protocol_label(result.protocol)}`")
         lines.append(f"- Operation: `{result.operation_id}`")
         lines.append(f"- Method: `{result.method}`")
         lines.append(f"- URL: `{result.url}`")
@@ -337,14 +480,20 @@ def render_markdown_report(
             lines.append("- Response schema: `ok`")
         elif result.response_schema_error:
             lines.append(f"- Response schema mismatch: `{result.response_schema_error}`")
+        if result.graphql_response_valid is True:
+            lines.append("- GraphQL response shape: `ok`")
+        elif result.graphql_response_error:
+            lines.append(f"- GraphQL response shape mismatch: `{result.graphql_response_error}`")
+        if result.graphql_response_hint:
+            lines.append(f"- GraphQL federation hint: `{result.graphql_response_hint}`")
         if result.error:
             lines.append(f"- Error: `{result.error}`")
         if result.duration_ms is not None:
             lines.append(f"- Duration: `{result.duration_ms:.2f} ms`")
         if result.profile_results:
             lines.append("")
-            lines.append("| Profile | Level | Status | Issue | Schema | URL |")
-            lines.append("| --- | ---: | ---: | --- | --- | --- |")
+            lines.append("| Profile | Protocol | Level | Status | Issue | Schema | URL |")
+            lines.append("| --- | --- | ---: | ---: | --- | --- | --- |")
             lines.extend(_profile_table_rows(result.profile_results))
         if result.response_excerpt:
             lines.append("")
@@ -416,7 +565,11 @@ def _artifact_links_html(result, *, artifact_root: Path | None) -> str:
 def _issue_badge_class(issue: str | None) -> str:
     if issue in {"anonymous_access", "authorization_inversion", "server_error"}:
         return "critical"
-    if issue in {"unexpected_success", "response_schema_mismatch"}:
+    if issue in {
+        "unexpected_success",
+        "response_schema_mismatch",
+        "graphql_response_shape_mismatch",
+    }:
         return "warning"
     return "neutral"
 
@@ -427,25 +580,6 @@ def _summary_card_html(label: str, value: str) -> str:
         f"<span class='label'>{escape(label)}</span>"
         f"<strong>{escape(value)}</strong>"
         "</div>"
-    )
-
-
-def _persisting_finding_row_html(finding: ComparedFinding) -> str:
-    result = finding.result
-    status = str(result.status_code) if result.status_code is not None else "-"
-    schema = "mismatch" if result.response_schema_valid is False else "-"
-    return (
-        "<tr>"
-        f"<td>{escape(result.name)}</td>"
-        f"<td>{escape(result.kind)}</td>"
-        f"<td>{escape(status)}</td>"
-        f"<td>{escape(result.issue or '-')}</td>"
-        f"<td>{escape(result.severity)}</td>"
-        f"<td>{escape(result.confidence)}</td>"
-        f"<td>{escape(schema)}</td>"
-        f"<td>{escape(finding.delta_summary)}</td>"
-        f"<td><code>{escape(result.url)}</code></td>"
-        "</tr>"
     )
 
 
@@ -503,6 +637,19 @@ def _auth_summary_row_html(entry: dict[str, object]) -> str:
     )
 
 
+def _persisting_delta_row_html(finding: ComparedFinding) -> str:
+    result = finding.result
+    return (
+        "<tr>"
+        f"<td>{escape(result.name)}</td>"
+        f"<td>{escape(result.kind)}</td>"
+        f"<td>{escape(result.issue or '-')}</td>"
+        f"<td>{escape(_delta_summary(finding))}</td>"
+        f"<td><code>{escape(result.url)}</code></td>"
+        "</tr>"
+    )
+
+
 def _result_card_html(result, *, artifact_root: Path | None) -> str:
     status = str(result.status_code) if result.status_code is not None else "-"
     issue = result.issue or "ok"
@@ -519,10 +666,11 @@ def _result_card_html(result, *, artifact_root: Path | None) -> str:
             profile_status = (
                 str(profile_result.status_code) if profile_result.status_code is not None else "-"
             )
-            profile_schema = "mismatch" if profile_result.response_schema_valid is False else "-"
+            profile_schema = _schema_summary(profile_result)
             rows.append(
                 "<tr>"
                 f"<td>{escape(profile_name)}</td>"
+                f"<td>{escape(_protocol_label(profile_result.protocol))}</td>"
                 f"<td>{profile_result.level}</td>"
                 f"<td>{escape(profile_status)}</td>"
                 f"<td>{escape(profile_result.issue or 'ok')}</td>"
@@ -532,7 +680,7 @@ def _result_card_html(result, *, artifact_root: Path | None) -> str:
             )
         profile_rows = (
             "<div class='subsection'><h4>Profile outcomes</h4>"
-            "<table><thead><tr><th>Profile</th><th>Level</th><th>Status</th>"
+            "<table><thead><tr><th>Profile</th><th>Protocol</th><th>Level</th><th>Status</th>"
             "<th>Issue</th><th>Schema</th><th>URL</th></tr></thead><tbody>"
             + "".join(rows)
             + "</tbody></table></div>"
@@ -570,10 +718,23 @@ def _result_card_html(result, *, artifact_root: Path | None) -> str:
     error = ""
     if result.error:
         error = f"<p class='callout'>{escape(result.error)}</p>"
+    graphql_details = ""
+    if result.graphql_response_error or result.graphql_response_hint:
+        graphql_details = (
+            "<div class='subsection'><h4>GraphQL validation</h4>"
+            f"<p>{escape(result.graphql_response_error or 'ok')}</p>"
+            + (
+                f"<p class='muted'>{escape(result.graphql_response_hint)}</p>"
+                if result.graphql_response_hint
+                else ""
+            )
+            + "</div>"
+        )
 
     meta_grid = "".join(
         [
             _result_meta_item_html("Type", result.type),
+            _result_meta_item_html("Protocol", _protocol_label(result.protocol)),
             _result_meta_item_html("Operation", result.operation_id),
             _result_meta_item_html("Method", result.method),
             _result_meta_item_html("Status", status),
@@ -593,7 +754,7 @@ def _result_card_html(result, *, artifact_root: Path | None) -> str:
         "</div>"
         f"<p><code>{escape(result.url)}</code></p>"
         f"<div class='subsection'><h4>Artifacts</h4>{artifact_html}</div>"
-        f"{error}{profile_rows}{workflow_rows}{excerpt}"
+        f"{error}{graphql_details}{profile_rows}{workflow_rows}{excerpt}"
         "</article>"
     )
 
@@ -613,6 +774,7 @@ def render_html_report(
         else []
     )
     issue_counter = Counter(result.issue or "ok" for result in results.results)
+    protocol_counter = Counter(_protocol_label(result.protocol) for result in results.results)
     refresh_attempts = sum(1 for event in results.auth_events if event.phase == "refresh")
 
     summary_cards = [
@@ -621,6 +783,10 @@ def render_html_report(
         ("Suppressed", str(len(comparison.suppressed_current_findings))),
         ("Auth failures", str(sum(1 for event in results.auth_events if not event.success))),
         ("Refresh attempts", str(refresh_attempts)),
+        (
+            "Protocols",
+            ", ".join(f"{name}:{count}" for name, count in sorted(protocol_counter.items())),
+        ),
         (
             "Profiles",
             str(len(results.profiles)) if results.profiles else "single",
@@ -637,6 +803,7 @@ def render_html_report(
 
     flagged_rows = "".join(
         "<tr>"
+        f"<td>{escape(_protocol_label(finding.protocol))}</td>"
         f"<td>{escape(finding.name)}</td>"
         f"<td>{escape(finding.kind)}</td>"
         f"<td>{escape(str(finding.status_code) if finding.status_code is not None else '-')}</td>"
@@ -646,7 +813,7 @@ def render_html_report(
         f"<td>{_artifact_links_html(finding, artifact_root=artifact_root_path)}</td>"
         "</tr>"
         for finding in comparison.current_findings
-    ) or ("<tr><td colspan='7' class='muted'>No active flagged findings.</td></tr>")
+    ) or ("<tr><td colspan='8' class='muted'>No active flagged findings.</td></tr>")
     issue_group_rows = (
         "".join(
             _finding_group_row_html(group, count)
@@ -707,14 +874,10 @@ def render_html_report(
 
     diff_panels = ""
     if baseline is not None:
-        persisting_delta_count = sum(
-            1 for finding in comparison.persisting_findings if finding.has_delta
-        )
-        persisting_rows = (
-            "".join(
-                _persisting_finding_row_html(finding) for finding in comparison.persisting_findings
-            )
-            or "<tr><td colspan='9' class='muted'>No persisting findings.</td></tr>"
+        persisting_deltas = _persisting_delta_findings(comparison.persisting_findings)
+        persisting_delta_rows = (
+            "".join(_persisting_delta_row_html(finding) for finding in persisting_deltas)
+            or "<tr><td colspan='5' class='muted'>No persisting deltas detected.</td></tr>"
         )
         diff_panels = (
             "<section class='panel'>"
@@ -724,16 +887,14 @@ def render_html_report(
             f"{_summary_card_html('New findings', str(len(comparison.new_findings)))}"
             f"{_summary_card_html('Resolved findings', str(len(comparison.resolved_findings)))}"
             f"{_summary_card_html('Persisting findings', str(len(comparison.persisting_findings)))}"
-            f"{_summary_card_html('Persisting with delta', str(persisting_delta_count))}"
+            f"{_summary_card_html('Persisting with deltas', str(len(persisting_deltas)))}"
             "</div></section>"
             "<section class='panel'>"
-            "<h2>Persisting findings</h2>"
+            "<h2>Persisting deltas</h2>"
             "<table>"
-            "<thead><tr><th>Attack</th><th>Kind</th><th>Status</th><th>Issue</th>"
-            "<th>Severity</th><th>Confidence</th><th>Schema</th><th>Delta</th><th>URL</th></tr></thead>"
-            f"<tbody>{persisting_rows}</tbody>"
-            "</table>"
-            "</section>"
+            "<thead><tr><th>Attack</th><th>Kind</th><th>Issue</th><th>Changes</th><th>URL</th></tr></thead>"
+            f"<tbody>{persisting_delta_rows}</tbody>"
+            "</table></section>"
         )
 
     cards_html = "".join(
@@ -954,7 +1115,7 @@ def render_html_report(
         </div>
         <div class="subsection">
         <table>
-          <thead><tr><th>Attack</th><th>Kind</th><th>Status</th><th>Issue</th><th>Severity</th><th>Confidence</th><th>Artifacts</th></tr></thead>
+          <thead><tr><th>Protocol</th><th>Attack</th><th>Kind</th><th>Status</th><th>Issue</th><th>Severity</th><th>Confidence</th><th>Artifacts</th></tr></thead>
           <tbody>{flagged_rows}</tbody>
         </table>
         </div>

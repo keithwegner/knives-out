@@ -9,6 +9,7 @@ from knives_out.suppressions import SuppressedFinding, SuppressionRule
 SeverityThreshold = Literal["low", "medium", "high", "critical"]
 ConfidenceThreshold = Literal["low", "medium", "high"]
 FindingChange = Literal["new", "resolved", "persisting"]
+FindingDeltaFieldName = Literal["status", "severity", "confidence", "schema"]
 
 SEVERITY_ORDER = {
     "none": 0,
@@ -52,28 +53,17 @@ class ComparedFinding:
         return issue
 
     @property
-    def delta_fragments(self) -> list[str]:
+    def delta(self) -> FindingDelta | None:
         if self.current is None or self.baseline is None:
-            return []
+            return None
+        return finding_delta(self.current, self.baseline)
 
-        fragments: list[str] = []
-        if self.baseline.severity != self.current.severity:
-            fragments.append(f"severity {self.baseline.severity} -> {self.current.severity}")
-        if self.baseline.confidence != self.current.confidence:
-            fragments.append(f"confidence {self.baseline.confidence} -> {self.current.confidence}")
-        if self.baseline.status_code != self.current.status_code:
-            previous_status = (
-                str(self.baseline.status_code) if self.baseline.status_code is not None else "-"
-            )
-            current_status = (
-                str(self.current.status_code) if self.current.status_code is not None else "-"
-            )
-            fragments.append(f"status {previous_status} -> {current_status}")
-        if self.baseline.response_schema_valid != self.current.response_schema_valid:
-            previous_schema = "mismatch" if self.baseline.response_schema_valid is False else "ok"
-            current_schema = "mismatch" if self.current.response_schema_valid is False else "ok"
-            fragments.append(f"schema {previous_schema} -> {current_schema}")
-        return fragments
+    @property
+    def delta_fragments(self) -> list[str]:
+        delta = self.delta
+        if delta is None:
+            return []
+        return [f"{change.field} {change.baseline} -> {change.current}" for change in delta.changes]
 
     @property
     def has_delta(self) -> bool:
@@ -82,6 +72,22 @@ class ComparedFinding:
     @property
     def delta_summary(self) -> str:
         return "; ".join(self.delta_fragments) or "unchanged"
+
+
+@dataclass(frozen=True)
+class FindingDeltaChange:
+    field: FindingDeltaFieldName
+    baseline: str
+    current: str
+
+
+@dataclass(frozen=True)
+class FindingDelta:
+    changes: list[FindingDeltaChange]
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.changes)
 
 
 @dataclass(frozen=True)
@@ -128,6 +134,40 @@ def compared_finding_sort_key(finding: ComparedFinding) -> tuple[int, int, str, 
 
 def suppressed_finding_sort_key(finding: SuppressedFinding) -> tuple[int, int, str, str]:
     return attack_result_sort_key(finding.result)
+
+
+def _status_value(result: AttackResult) -> str:
+    return str(result.status_code) if result.status_code is not None else "-"
+
+
+def _schema_value(result: AttackResult) -> str:
+    if result.response_schema_valid is True:
+        return "ok"
+    if result.response_schema_valid is False:
+        return "mismatch"
+    if result.response_schema_status:
+        return result.response_schema_status
+    return "-"
+
+
+def finding_delta(current: AttackResult, baseline: AttackResult) -> FindingDelta:
+    changes: list[FindingDeltaChange] = []
+    values = [
+        ("severity", baseline.severity, current.severity),
+        ("confidence", baseline.confidence, current.confidence),
+        ("status", _status_value(baseline), _status_value(current)),
+        ("schema", _schema_value(baseline), _schema_value(current)),
+    ]
+    for field, baseline_value, current_value in values:
+        if baseline_value != current_value:
+            changes.append(
+                FindingDeltaChange(
+                    field=field,
+                    baseline=baseline_value,
+                    current=current_value,
+                )
+            )
+    return FindingDelta(changes=changes)
 
 
 def _matching_suppression(

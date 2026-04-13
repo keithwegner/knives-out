@@ -1473,6 +1473,7 @@ def _graphql_attack_from_mutation(
         name=mutation.name,
         kind=mutation.kind,
         operation_id=operation.operation_id,
+        protocol=operation.protocol,
         method=operation.method,
         path=operation.path,
         tags=_tags_for_attack(operation),
@@ -1482,6 +1483,10 @@ def _graphql_attack_from_mutation(
         content_type="application/json",
         expected_outcomes=_graphql_expected_outcomes(),
         response_schemas=_response_schemas_for_attack(operation),
+        graphql_root_field_name=operation.graphql_root_field_name,
+        graphql_output_shape=operation.graphql_output_shape,
+        graphql_federated=operation.graphql_federated,
+        graphql_entity_types=list(operation.graphql_entity_types),
     )
 
 
@@ -1502,6 +1507,7 @@ def _generate_graphql_attacks_for_operation(operation: OperationSpec) -> list[At
                 name="Missing request body",
                 kind="missing_request_body",
                 operation_id=operation.operation_id,
+                protocol=operation.protocol,
                 method=operation.method,
                 path=operation.path,
                 tags=_tags_for_attack(operation),
@@ -1510,6 +1516,10 @@ def _generate_graphql_attacks_for_operation(operation: OperationSpec) -> list[At
                 omit_body=True,
                 expected_outcomes=_graphql_expected_outcomes(),
                 response_schemas=_response_schemas_for_attack(operation),
+                graphql_root_field_name=operation.graphql_root_field_name,
+                graphql_output_shape=operation.graphql_output_shape,
+                graphql_federated=operation.graphql_federated,
+                graphql_entity_types=list(operation.graphql_entity_types),
             )
         )
 
@@ -1519,6 +1529,7 @@ def _generate_graphql_attacks_for_operation(operation: OperationSpec) -> list[At
             name="Malformed JSON body",
             kind="malformed_json_body",
             operation_id=operation.operation_id,
+            protocol=operation.protocol,
             method=operation.method,
             path=operation.path,
             tags=_tags_for_attack(operation),
@@ -1528,6 +1539,10 @@ def _generate_graphql_attacks_for_operation(operation: OperationSpec) -> list[At
             content_type="application/json",
             expected_outcomes=_graphql_expected_outcomes(),
             response_schemas=_response_schemas_for_attack(operation),
+            graphql_root_field_name=operation.graphql_root_field_name,
+            graphql_output_shape=operation.graphql_output_shape,
+            graphql_federated=operation.graphql_federated,
+            graphql_entity_types=list(operation.graphql_entity_types),
         )
     )
 

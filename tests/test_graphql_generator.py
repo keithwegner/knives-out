@@ -29,6 +29,7 @@ def test_generate_graphql_attack_suite_emits_variable_mutations() -> None:
         attack for attack in create_book_attacks if attack.kind == "wrong_type_variable"
     )
     assert wrong_type_attack.path == "/graphql"
+    assert wrong_type_attack.protocol == "graphql"
     assert wrong_type_attack.expected_outcomes == ["graphql_error", "4xx"]
     assert wrong_type_attack.response_schemas["200"].schema_def == {
         "type": "object",
@@ -50,4 +51,7 @@ def test_generate_graphql_attack_suite_emits_variable_mutations() -> None:
         "required": ["data"],
     }
     assert wrong_type_attack.body_json["query"].startswith("mutation CreateBook")
+    assert wrong_type_attack.graphql_root_field_name == "createBook"
+    assert wrong_type_attack.graphql_output_shape is not None
+    assert "__typename" in wrong_type_attack.graphql_output_shape.fields
     assert "variables" in wrong_type_attack.body_json
