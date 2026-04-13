@@ -36,7 +36,10 @@ def test_readme_includes_ci_guidance() -> None:
     assert "POST /v1/inspect" in readme
     assert "POST /v1/summary" in readme
     assert "POST /v1/runs" in readme
+    assert "DELETE /v1/jobs/{id}" in readme
+    assert "POST /v1/jobs/prune" in readme
     assert "GET /v1/jobs/{id}/artifacts" in readme
+    assert "completed or failed jobs" in readme
     assert "--profile-file examples/auth_profiles/anonymous-user-admin.yml" in readme
     assert "anonymous_access" in readme
     assert "--auto-workflows" in readme
@@ -136,6 +139,8 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "POST /v1/inspect" in ci_doc
     assert "POST /v1/summary" in ci_doc
     assert "POST /v1/runs" in ci_doc
+    assert "DELETE /v1/jobs/{id}" in ci_doc
+    assert "POST /v1/jobs/prune" in ci_doc
     assert "KNIVES_OUT_API_DATA_DIR" in ci_doc
     assert "knives-out summary results.json --out summary.json" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc

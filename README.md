@@ -238,8 +238,13 @@ Longer execution runs use a job resource instead:
 
 - `POST /v1/runs`
 - `GET /v1/jobs/{id}`
+- `DELETE /v1/jobs/{id}`
+- `POST /v1/jobs/prune`
 - `GET /v1/jobs/{id}/result`
 - `GET /v1/jobs/{id}/artifacts`
+
+Cleanup stays explicit and local-only: the delete and prune endpoints only remove completed or failed jobs,
+and active jobs must finish before they can be deleted.
 
 The API accepts uploaded source content and JSON artifacts in the request body. It does not expose
 arbitrary server-side file reads. FastAPI also publishes the schema at `/openapi.json` and the
