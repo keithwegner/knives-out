@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import CodeEditor from "../components/CodeEditor";
@@ -6,34 +6,36 @@ import {
   createRun,
   discoverModel,
   generateSuite,
+  getJobArtifact,
+  getJobFindingEvidence,
   getJobResult,
   getProject,
   inspectSource,
   listProjectJobs,
   promoteResults,
-  renderReport,
-  summarizeResults,
+  refreshProjectReview,
   triageResults,
   updateProject,
-  verifyResults,
 } from "../api";
 import type {
   ApiJobStatus,
+  ArtifactReferenceResponse,
   AttackResults,
-  AttackSuite,
+  JobArtifactDocument,
   JobStatusResponse,
   ProjectRecord,
-  ProjectReviewDraft,
+  ProjectReviewBaselineMode,
   ProjectSourceMode,
   ProjectStep,
   SourcePayload,
 } from "../types";
 
 type ReviewTab =
-  | "summary"
-  | "findings"
+  | "overview"
+  | "new"
+  | "persisting"
+  | "resolved"
   | "deltas"
-  | "auth"
   | "artifacts"
   | "suppressions"
   | "promote";
@@ -100,13 +102,54 @@ function statusTone(status: ApiJobStatus | "idle") {
   return "status-idle";
 }
 
+function matchesReviewFilter(
+  finding: {
+    attack_id: string;
+    name: string;
+    kind: string;
+    issue?: string | null;
+    method: string;
+    path?: string | null;
+  },
+  filter: string,
+) {
+  if (!filter) {
+    return true;
+  }
+  const haystack = [
+    finding.attack_id,
+    finding.name,
+    finding.kind,
+    finding.issue ?? "",
+    finding.method,
+    finding.path ?? "",
+  ]
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(filter);
+}
+
+function formatJobMoment(value?: string | null) {
+  return value ? new Date(value).toLocaleString() : "—";
+}
+
+function summarizeJob(job: JobStatusResponse) {
+  const active = job.result_summary?.active_flagged_count;
+  const latestMoment = job.completed_at ?? job.started_at ?? job.created_at;
+  const summaryBits = [
+    formatJobMoment(latestMoment),
+    active === undefined || active === null ? null : `${active} active`,
+  ].filter(Boolean);
+  return summaryBits.join(" • ");
+}
+
 function ReviewTable({
   headings,
   rows,
   emptyCopy,
 }: {
   headings: string[];
-  rows: Array<Array<string | number | null | undefined>>;
+  rows: Array<Array<ReactNode>>;
   emptyCopy: string;
 }) {
   return (
@@ -122,7 +165,7 @@ function ReviewTable({
         <tbody>
           {rows.length ? (
             rows.map((row, index) => (
-              <tr key={`${row[0] ?? "row"}-${index}`}>
+              <tr key={`row-${index}`}>
                 {row.map((value, cellIndex) => (
                   <td key={`${index}-${cellIndex}`}>{value ?? "—"}</td>
                 ))}
@@ -137,6 +180,228 @@ function ReviewTable({
           )}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function findingChangeLabel(change: string) {
+  if (change === "new") {
+    return "New";
+  }
+  if (change === "persisting") {
+    return "Persisting";
+  }
+  if (change === "resolved") {
+    return "Resolved";
+  }
+  return "Current";
+}
+
+function artifactKindLabel(kind: ArtifactReferenceResponse["kind"]) {
+  if (kind === "workflow_terminal") {
+    return "workflow terminal";
+  }
+  if (kind === "workflow_step") {
+    return "workflow step";
+  }
+  if (kind === "profile_request") {
+    return "profile request";
+  }
+  if (kind === "profile_workflow_step") {
+    return "profile step";
+  }
+  return "request";
+}
+
+function artifactPath(jobId: string, artifactName: string) {
+  const encodedName = artifactName
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `/v1/jobs/${jobId}/artifacts/${encodedName}`;
+}
+
+function ArtifactDocumentPreview({
+  document,
+}: {
+  document: JobArtifactDocument | null | undefined;
+}) {
+  if (!document) {
+    return <p className="empty-copy">Select an artifact to inspect.</p>;
+  }
+
+  if (
+    document.format === "json" &&
+    document.content &&
+    typeof document.content === "object" &&
+    !Array.isArray(document.content) &&
+    "request" in document.content &&
+    "response" in document.content
+  ) {
+    const content = document.content as {
+      attack?: Record<string, unknown>;
+      request?: {
+        method?: string;
+        url?: string;
+        headers?: unknown;
+        query?: unknown;
+        body?: unknown;
+      };
+      response?: {
+        status_code?: number | null;
+        error?: string | null;
+        duration_ms?: number | null;
+        body_excerpt?: string | null;
+      };
+    };
+    const attack = content.attack ?? {};
+    const request = content.request ?? {};
+    const response = content.response ?? {};
+    const body = request.body as
+      | {
+          kind?: string;
+          content_type?: string | null;
+          excerpt?: string | null;
+          present?: boolean;
+        }
+      | undefined;
+
+    return (
+      <div className="stack">
+        <div className="summary-card-grid">
+          <div className="summary-card">
+            <span>Artifact</span>
+            <strong>{String(attack.name ?? attack.id ?? document.artifact_name)}</strong>
+          </div>
+          <div className="summary-card">
+            <span>Request</span>
+            <strong>{String(request.method ?? "—")}</strong>
+          </div>
+          <div className="summary-card">
+            <span>Response</span>
+            <strong>{response.status_code ?? "—"}</strong>
+          </div>
+          <div className="summary-card">
+            <span>Duration</span>
+            <strong>{response.duration_ms ? `${response.duration_ms} ms` : "—"}</strong>
+          </div>
+        </div>
+        <article className="artifact-structured-card">
+          <h4>Request</h4>
+          <p>
+            <strong>{String(request.method ?? "—")}</strong> {String(request.url ?? "—")}
+          </p>
+          <pre className="json-preview">{formatJson(request.headers ?? {})}</pre>
+          <pre className="json-preview">{formatJson(request.query ?? {})}</pre>
+          {body?.present ? (
+            <pre className="json-preview">
+              {body.kind === "json" && body.excerpt
+                ? body.excerpt
+                : body?.excerpt || body?.content_type || "Request body present."}
+            </pre>
+          ) : (
+            <p className="field-hint">No request body recorded.</p>
+          )}
+        </article>
+        <article className="artifact-structured-card">
+          <h4>Response</h4>
+          <p>
+            <strong>Status:</strong> {response.status_code ?? "—"}{" "}
+            <strong>Error:</strong> {response.error ?? "—"}
+          </p>
+          <pre className="json-preview">{String(response.body_excerpt ?? "No response body excerpt.")}</pre>
+        </article>
+      </div>
+    );
+  }
+
+  return (
+    <pre className="json-preview">
+      {document.format === "json" ? formatJson(document.content) : String(document.content)}
+    </pre>
+  );
+}
+
+function ArtifactViewer({
+  jobId,
+  references,
+  selectedArtifactName,
+  onSelect,
+  document,
+  isLoading,
+  error,
+  emptyCopy,
+}: {
+  jobId: string;
+  references: ArtifactReferenceResponse[];
+  selectedArtifactName: string | null;
+  onSelect: (artifactName: string) => void;
+  document: JobArtifactDocument | null | undefined;
+  isLoading: boolean;
+  error: string | null;
+  emptyCopy: string;
+}) {
+  const selectedReference =
+    references.find((reference) => reference.artifact_name === selectedArtifactName) ?? null;
+
+  return (
+    <div className="artifact-viewer">
+      <ul className="artifact-reference-list">
+        {references.length ? (
+          references.map((reference) => (
+            <li
+              className={`artifact-reference-item${
+                selectedReference?.artifact_name === reference.artifact_name
+                  ? " artifact-reference-item-active"
+                  : ""
+              }`}
+              key={reference.artifact_name}
+            >
+              <button
+                className="artifact-reference-button"
+                disabled={!reference.available}
+                onClick={() => onSelect(reference.artifact_name)}
+                type="button"
+              >
+                {reference.label}
+              </button>
+              <small>{reference.artifact_name}</small>
+              <div className="artifact-reference-meta">
+                <span>{artifactKindLabel(reference.kind)}</span>
+                {reference.available ? (
+                  <a href={artifactPath(jobId, reference.artifact_name)} rel="noreferrer" target="_blank">
+                    raw
+                  </a>
+                ) : (
+                  <span>missing</span>
+                )}
+              </div>
+            </li>
+          ))
+        ) : (
+          <li className="artifact-reference-item">
+            <span>{emptyCopy}</span>
+          </li>
+        )}
+      </ul>
+      <div className="artifact-preview-panel">
+        {!selectedReference ? (
+          <p className="empty-copy">{emptyCopy}</p>
+        ) : !selectedReference.available ? (
+          <div className="empty-state">
+            <p>This artifact was expected for the finding, but it is not stored for this run.</p>
+            <small>{selectedReference.artifact_name}</small>
+          </div>
+        ) : isLoading ? (
+          <p className="empty-copy">Loading artifact…</p>
+        ) : error ? (
+          <div className="empty-state">
+            <p>{error}</p>
+          </div>
+        ) : (
+          <ArtifactDocumentPreview document={document} />
+        )}
+      </div>
     </div>
   );
 }
@@ -206,8 +471,12 @@ export default function ProjectWorkbenchPage() {
   const [baselineError, setBaselineError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activityMessage, setActivityMessage] = useState<string | null>(null);
-  const [reviewTab, setReviewTab] = useState<ReviewTab>("summary");
+  const [reviewTab, setReviewTab] = useState<ReviewTab>("overview");
   const [reviewFilter, setReviewFilter] = useState("");
+  const [selectedEvidenceAttackId, setSelectedEvidenceAttackId] = useState<string | null>(null);
+  const [selectedDrawerArtifactName, setSelectedDrawerArtifactName] = useState<string | null>(null);
+  const [selectedArtifactsTabArtifactName, setSelectedArtifactsTabArtifactName] = useState<string | null>(null);
+  const [evidenceNotice, setEvidenceNotice] = useState<string | null>(null);
   const [trackedJobId, setTrackedJobId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const syncedJobIdRef = useRef<string | null>(null);
@@ -224,6 +493,33 @@ export default function ProjectWorkbenchPage() {
     queryFn: () => listProjectJobs(projectId!),
     enabled: Boolean(projectId),
     refetchInterval: trackedJobId ? 1500 : false,
+  });
+
+  const currentJobs = projectJobsQuery.data?.jobs ?? [];
+  const completedReviewJobs = currentJobs.filter(
+    (job) => job.status === "completed" && job.result_available,
+  );
+  const currentReviewedJob =
+    currentJobs.find((job) => job.id === draft?.artifacts.last_run_job_id) ??
+    completedReviewJobs[0] ??
+    null;
+
+  const findingEvidenceQuery = useQuery({
+    queryKey: ["jobFindingEvidence", currentReviewedJob?.id, selectedEvidenceAttackId],
+    queryFn: () => getJobFindingEvidence(currentReviewedJob!.id, selectedEvidenceAttackId!),
+    enabled: Boolean(currentReviewedJob?.id && selectedEvidenceAttackId),
+  });
+
+  const drawerArtifactQuery = useQuery({
+    queryKey: ["jobArtifact", currentReviewedJob?.id, selectedDrawerArtifactName],
+    queryFn: () => getJobArtifact(currentReviewedJob!.id, selectedDrawerArtifactName!),
+    enabled: Boolean(currentReviewedJob?.id && selectedDrawerArtifactName),
+  });
+
+  const artifactsTabArtifactQuery = useQuery({
+    queryKey: ["jobArtifact", currentReviewedJob?.id, "artifacts-tab", selectedArtifactsTabArtifactName],
+    queryFn: () => getJobArtifact(currentReviewedJob!.id, selectedArtifactsTabArtifactName!),
+    enabled: Boolean(currentReviewedJob?.id && selectedArtifactsTabArtifactName),
   });
 
   const saveProjectMutation = useMutation({
@@ -267,6 +563,52 @@ export default function ProjectWorkbenchPage() {
     return draft;
   }
 
+  function commitDraft(project: ProjectRecord) {
+    setDraft(project);
+    setHasPendingSave(true);
+  }
+
+  function withReviewBundle(project: ProjectRecord, review: Awaited<ReturnType<typeof refreshProjectReview>>) {
+    return {
+      ...project,
+      active_step: "review" as const,
+      artifacts: {
+        ...project.artifacts,
+        last_run_job_id: review.current_job_id,
+        latest_results: review.results,
+        latest_summary: review.summary,
+        latest_verification: review.verification,
+        latest_markdown_report: review.markdown_report,
+        latest_html_report: review.html_report,
+      },
+    };
+  }
+
+  async function runReviewRefresh(project: ProjectRecord, successMessage: string) {
+    if (project.review_draft.baseline_mode === "external" && baselineError) {
+      setActionError("Fix external baseline JSON before refreshing the review workspace.");
+      return;
+    }
+    setBusyAction("refresh-review");
+    setActionError(null);
+    try {
+      const review = await refreshProjectReview(project.id, project.review_draft);
+      commitDraft(withReviewBundle(project, review));
+      setReviewTab("overview");
+      setActivityMessage(
+        review.waiting_for_new_run
+          ? "Baseline pinned to the latest completed run. New diffs will appear after the next completed run."
+          : successMessage,
+      );
+      setActionError(null);
+      void projectJobsQuery.refetch();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not refresh review workspace.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   useEffect(() => {
     if (!projectQuery.data) {
       return;
@@ -306,40 +648,64 @@ export default function ProjectWorkbenchPage() {
     }
 
     syncedJobIdRef.current = job.id;
-    setBusyAction("refresh-review");
     void (async () => {
       try {
-        const results = await getJobResult(job.id);
-        const reviewDraft: ProjectReviewDraft = draft.review_draft;
-        const [summary, verification, markdownReport, htmlReport] = await Promise.all([
-          summarizeResults(results, reviewDraft),
-          verifyResults(results, reviewDraft),
-          renderReport(results, reviewDraft, "markdown"),
-          renderReport(results, reviewDraft, "html"),
-        ]);
-        applyDraftUpdate((current) => ({
-          ...current,
-          active_step: "review",
-          artifacts: {
-            ...current.artifacts,
-            last_run_job_id: job.id,
-            latest_results: results,
-            latest_summary: summary,
-            latest_verification: verification,
-            latest_markdown_report: markdownReport.content,
-            latest_html_report: htmlReport.content,
-          },
-        }));
-        setActivityMessage("Run finished and the review workspace is up to date.");
-        setActionError(null);
-      } catch (error) {
-        setActionError(error instanceof Error ? error.message : "Could not refresh review data.");
+        await runReviewRefresh(draft, "Run finished and the review workspace is up to date.");
       } finally {
-        setBusyAction(null);
         setTrackedJobId(null);
       }
     })();
   }, [draft, projectJobsQuery.data, trackedJobId]);
+
+  useEffect(() => {
+    const currentFindingIds = new Set(
+      draft?.artifacts.latest_verification?.current_findings.map((finding) => finding.attack_id) ?? [],
+    );
+    if (!selectedEvidenceAttackId) {
+      return;
+    }
+    if (currentFindingIds.has(selectedEvidenceAttackId)) {
+      return;
+    }
+    setSelectedEvidenceAttackId(null);
+    setSelectedDrawerArtifactName(null);
+    setEvidenceNotice("Evidence changed with the latest run. Reopen a finding from the refreshed comparison.");
+  }, [draft?.artifacts.latest_verification, selectedEvidenceAttackId]);
+
+  useEffect(() => {
+    const references = findingEvidenceQuery.data?.artifacts ?? [];
+    if (!selectedEvidenceAttackId) {
+      if (selectedDrawerArtifactName !== null) {
+        setSelectedDrawerArtifactName(null);
+      }
+      return;
+    }
+    if (!references.length) {
+      if (selectedDrawerArtifactName !== null) {
+        setSelectedDrawerArtifactName(null);
+      }
+      return;
+    }
+    if (selectedDrawerArtifactName && references.some((artifact) => artifact.artifact_name === selectedDrawerArtifactName)) {
+      return;
+    }
+    const nextArtifact = references.find((artifact) => artifact.available) ?? references[0];
+    setSelectedDrawerArtifactName(nextArtifact.artifact_name);
+  }, [findingEvidenceQuery.data, selectedDrawerArtifactName, selectedEvidenceAttackId]);
+
+  useEffect(() => {
+    const artifactNames = currentReviewedJob?.artifact_names ?? [];
+    if (!artifactNames.length) {
+      if (selectedArtifactsTabArtifactName !== null) {
+        setSelectedArtifactsTabArtifactName(null);
+      }
+      return;
+    }
+    if (selectedArtifactsTabArtifactName && artifactNames.includes(selectedArtifactsTabArtifactName)) {
+      return;
+    }
+    setSelectedArtifactsTabArtifactName(artifactNames[0]);
+  }, [currentReviewedJob, selectedArtifactsTabArtifactName]);
 
   if (!projectId) {
     return (
@@ -361,25 +727,93 @@ export default function ProjectWorkbenchPage() {
     );
   }
 
-  const currentJobs = projectJobsQuery.data?.jobs ?? [];
   const latestJob = currentJobs[0];
-  const activeFindings =
-    draft.artifacts.latest_verification?.current_findings.filter((finding) => {
-      if (!deferredReviewFilter) {
-        return true;
+  const baselineReviewedJob = draft.review_draft.baseline_job_id
+    ? currentJobs.find((job) => job.id === draft.review_draft.baseline_job_id) ?? null
+    : null;
+  const verification = draft.artifacts.latest_verification;
+  const currentFindings = verification?.current_findings ?? [];
+  const newFindingIds = new Set(verification?.new_findings.map((finding) => finding.attack_id) ?? []);
+  const persistingFindingIds = new Set(
+    verification?.persisting_findings.map((finding) => finding.attack_id) ?? [],
+  );
+  const selectedEvidenceFinding = selectedEvidenceAttackId
+    ? currentFindings.find((finding) => finding.attack_id === selectedEvidenceAttackId) ?? null
+    : null;
+  const selectedEvidenceChange = selectedEvidenceAttackId
+    ? newFindingIds.has(selectedEvidenceAttackId)
+      ? "new"
+      : persistingFindingIds.has(selectedEvidenceAttackId)
+        ? "persisting"
+        : "current"
+    : null;
+  const reviewWaitingForNewRun =
+    draft.review_draft.baseline_mode === "job" &&
+    Boolean(currentReviewedJob && baselineReviewedJob && currentReviewedJob.id === baselineReviewedJob.id);
+  const newFindings =
+    verification?.new_findings.filter((finding) => matchesReviewFilter(finding, deferredReviewFilter)) ?? [];
+  const persistingFindings =
+    verification?.persisting_findings.filter((finding) =>
+      matchesReviewFilter(finding, deferredReviewFilter),
+    ) ?? [];
+  const resolvedFindings =
+    verification?.resolved_findings.filter((finding) =>
+      matchesReviewFilter(finding, deferredReviewFilter),
+    ) ?? [];
+  const deltaFindings = persistingFindings.filter((finding) => finding.delta_changes.length);
+  const artifactBrowserReferences = (currentReviewedJob?.artifact_names ?? []).map(
+    (artifactName): ArtifactReferenceResponse => ({
+      label: artifactName,
+      kind: artifactName.includes("-step-")
+        ? artifactName.includes("/")
+          ? "profile_workflow_step"
+          : "workflow_step"
+        : artifactName.includes("/")
+          ? "profile_request"
+          : "request",
+      artifact_name: artifactName,
+      available: true,
+      profile: artifactName.includes("/") ? artifactName.split("/")[0] : null,
+      step_index: null,
+    }),
+  );
+  const findingEvidenceError =
+    findingEvidenceQuery.error instanceof Error ? findingEvidenceQuery.error.message : null;
+  const drawerArtifactError =
+    drawerArtifactQuery.error instanceof Error ? drawerArtifactQuery.error.message : null;
+  const artifactsTabArtifactError =
+    artifactsTabArtifactQuery.error instanceof Error ? artifactsTabArtifactQuery.error.message : null;
+
+  async function resolvePromotionReview(project: ProjectRecord) {
+    if (project.review_draft.baseline_mode === "external") {
+      if (baselineError) {
+        throw new Error("Fix external baseline JSON before promoting findings.");
       }
-      const haystack = [
-        finding.attack_id,
-        finding.name,
-        finding.kind,
-        finding.issue ?? "",
-        finding.method,
-        finding.path ?? "",
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(deferredReviewFilter);
-    }) ?? [];
+      return project.review_draft;
+    }
+    if (!project.review_draft.baseline_job_id) {
+      return project.review_draft;
+    }
+    const baselineResults = await getJobResult(project.review_draft.baseline_job_id);
+    return {
+      ...project.review_draft,
+      baseline: baselineResults,
+    };
+  }
+
+  function openFindingEvidence(finding: { attack_id: string }) {
+    setSelectedEvidenceAttackId(finding.attack_id);
+    setSelectedDrawerArtifactName(null);
+    setEvidenceNotice(null);
+  }
+
+  function findingAction(label: string, finding: { attack_id: string }) {
+    return (
+      <button className="finding-link" onClick={() => openFindingEvidence(finding)} type="button">
+        {label}
+      </button>
+    );
+  }
 
   async function handleSourceUpload(files: FileList | null) {
     if (!files?.length) {
@@ -545,39 +979,11 @@ export default function ProjectWorkbenchPage() {
 
   async function handleRefreshReview() {
     const project = getLoadedProject();
-    if (!project.artifacts.latest_results) {
-      setActionError("Run a suite first so there is data to analyze.");
+    if (!completedReviewJobs.length) {
+      setActionError("Run a suite first so there is a completed project run to analyze.");
       return;
     }
-    if (baselineError) {
-      setActionError("Fix baseline JSON before refreshing the review workspace.");
-      return;
-    }
-    setBusyAction("refresh-review");
-    setActionError(null);
-    try {
-      const [summary, verification, markdownReport, htmlReport] = await Promise.all([
-        summarizeResults(project.artifacts.latest_results, project.review_draft),
-        verifyResults(project.artifacts.latest_results, project.review_draft),
-        renderReport(project.artifacts.latest_results, project.review_draft, "markdown"),
-        renderReport(project.artifacts.latest_results, project.review_draft, "html"),
-      ]);
-      applyDraftUpdate((current) => ({
-        ...current,
-        artifacts: {
-          ...current.artifacts,
-          latest_summary: summary,
-          latest_verification: verification,
-          latest_markdown_report: markdownReport.content,
-          latest_html_report: htmlReport.content,
-        },
-      }));
-      setActivityMessage("Review panels refreshed.");
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Could not refresh review panels.");
-    } finally {
-      setBusyAction(null);
-    }
+    await runReviewRefresh(project, "Review workspace refreshed.");
   }
 
   async function handleGenerateSuppressions() {
@@ -620,10 +1026,11 @@ export default function ProjectWorkbenchPage() {
     setBusyAction("promote");
     setActionError(null);
     try {
+      const promotionReview = await resolvePromotionReview(project);
       const promoted = await promoteResults(
         project.artifacts.latest_results,
         project.artifacts.generated_suite,
-        project.review_draft,
+        promotionReview,
       );
       applyDraftUpdate((current) => ({
         ...current,
@@ -639,6 +1046,55 @@ export default function ProjectWorkbenchPage() {
     } finally {
       setBusyAction(null);
     }
+  }
+
+  async function handleBaselineModeChange(nextMode: ProjectReviewBaselineMode) {
+    const project = getLoadedProject();
+    const nextProject = {
+      ...project,
+      review_draft: {
+        ...project.review_draft,
+        baseline_mode: nextMode,
+      },
+    };
+    commitDraft(nextProject);
+    if (completedReviewJobs.length) {
+      await runReviewRefresh(
+        nextProject,
+        nextMode === "external"
+          ? "Review workspace switched to external baseline mode."
+          : "Review workspace switched to project history baseline mode.",
+      );
+    }
+  }
+
+  async function handleBaselineJobChange(jobId: string) {
+    const project = getLoadedProject();
+    const nextProject = {
+      ...project,
+      review_draft: {
+        ...project.review_draft,
+        baseline_mode: "job" as const,
+        baseline_job_id: jobId || null,
+      },
+    };
+    commitDraft(nextProject);
+    if (completedReviewJobs.length) {
+      await runReviewRefresh(
+        nextProject,
+        jobId
+          ? "Pinned a project run as the baseline."
+          : "Cleared the baseline selection for this review workspace.",
+      );
+    }
+  }
+
+  async function handlePinLatestBaseline() {
+    if (!currentReviewedJob) {
+      setActionError("Run a suite first so there is a completed run to pin as the baseline.");
+      return;
+    }
+    await handleBaselineJobChange(currentReviewedJob.id);
   }
 
   return (
@@ -1226,12 +1682,12 @@ export default function ProjectWorkbenchPage() {
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Review</p>
-                <h2>Native triage and regression workspace</h2>
+                <h2>Baseline-aware review workspace</h2>
               </div>
               <div className="action-row">
                 <button
                   className="secondary-button"
-                  disabled={busyAction === "refresh-review" || !draft.artifacts.latest_results}
+                  disabled={busyAction === "refresh-review" || !completedReviewJobs.length}
                   onClick={() => void handleRefreshReview()}
                   type="button"
                 >
@@ -1254,6 +1710,49 @@ export default function ProjectWorkbenchPage() {
                   {busyAction === "promote" ? "Promoting…" : "Promote findings"}
                 </button>
               </div>
+            </div>
+            <div className="compare-banner">
+              <article className="compare-card">
+                <span>Current run</span>
+                <strong>{currentReviewedJob ? currentReviewedJob.id.slice(0, 8) : "No completed run"}</strong>
+                <small>
+                  {currentReviewedJob
+                    ? `${summarizeJob(currentReviewedJob)} • ${currentReviewedJob.base_url}`
+                    : "Run a suite to create the current comparison target."}
+                </small>
+              </article>
+              <article className="compare-card">
+                <span>Baseline</span>
+                <strong>
+                  {draft.review_draft.baseline_mode === "external"
+                    ? "External JSON"
+                    : baselineReviewedJob
+                      ? baselineReviewedJob.id.slice(0, 8)
+                      : "Not pinned"}
+                </strong>
+                <small>
+                  {draft.review_draft.baseline_mode === "external"
+                    ? draft.review_draft.baseline
+                      ? "Advanced fallback is active for this comparison."
+                      : "External mode is active, but no baseline JSON is loaded yet."
+                    : baselineReviewedJob
+                      ? `${summarizeJob(baselineReviewedJob)}`
+                      : "Select a prior completed run or pin the latest run first."}
+                </small>
+              </article>
+              <article className="compare-card">
+                <span>Compare state</span>
+                <strong>
+                  {reviewWaitingForNewRun
+                    ? "Waiting for next run"
+                    : draft.artifacts.latest_summary?.baseline_used
+                      ? "Diffs ready"
+                      : "Latest run only"}
+                </strong>
+                <small>
+                  Last refreshed {formatJobMoment(draft.artifacts.latest_summary?.executed_at)}
+                </small>
+              </article>
             </div>
             <div className="field-grid field-grid-3">
               <label className="field">
@@ -1310,43 +1809,104 @@ export default function ProjectWorkbenchPage() {
                 />
               </label>
             </div>
-            <CodeEditor
-              error={baselineError}
-              height={220}
-              hint="Optional baseline results JSON for regression-aware review."
-              label="Baseline results JSON"
-              language="json"
-              onChange={(value) => {
-                setBaselineText(value);
-                if (!value.trim()) {
-                  setBaselineError(null);
-                  applyDraftUpdate((current) => ({
-                    ...current,
-                    review_draft: { ...current.review_draft, baseline: null },
-                  }));
-                  return;
-                }
-                try {
-                  const parsed = JSON.parse(value) as AttackResults;
-                  setBaselineError(null);
-                  applyDraftUpdate((current) => ({
-                    ...current,
-                    review_draft: { ...current.review_draft, baseline: parsed },
-                  }));
-                } catch (error) {
-                  setBaselineError(error instanceof Error ? error.message : "Invalid JSON.");
-                }
-              }}
-              value={baselineText}
-            />
+            <div className="field-grid field-grid-3">
+              <div className="field">
+                <span className="field-label">Baseline source</span>
+                <div className="mode-switch">
+                  {(["job", "external"] as ProjectReviewBaselineMode[]).map((mode) => (
+                    <button
+                      className={`mode-button${
+                        draft.review_draft.baseline_mode === mode ? " mode-button-active" : ""
+                      }`}
+                      key={mode}
+                      onClick={() => void handleBaselineModeChange(mode)}
+                      type="button"
+                    >
+                      {mode === "job" ? "Project history" : "External JSON"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <label className="field">
+                <span className="field-label">Pinned baseline run</span>
+                <select
+                  aria-label="Pinned baseline run"
+                  className="text-input"
+                  disabled={draft.review_draft.baseline_mode !== "job"}
+                  value={draft.review_draft.baseline_job_id ?? ""}
+                  onChange={(event) => void handleBaselineJobChange(event.target.value)}
+                >
+                  <option value="">No pinned baseline</option>
+                  {completedReviewJobs.map((job) => (
+                    <option key={job.id} value={job.id}>
+                      {`${job.id.slice(0, 8)} • ${summarizeJob(job)}`}
+                    </option>
+                  ))}
+                </select>
+                <span className="field-hint">Pick a completed run from this project’s history.</span>
+              </label>
+              <div className="field">
+                <span className="field-label">Latest run shortcut</span>
+                <div className="action-row">
+                  <button
+                    className="secondary-button"
+                    disabled={!currentReviewedJob || busyAction === "refresh-review"}
+                    onClick={() => void handlePinLatestBaseline()}
+                    type="button"
+                  >
+                    Pin latest run as baseline
+                  </button>
+                </div>
+                <span className="field-hint">
+                  Record today’s latest completed run, then wait for the next completed run to diff against it.
+                </span>
+              </div>
+            </div>
+
+            <details className="advanced-panel">
+              <summary>External baseline JSON</summary>
+              <p className="field-hint">
+                Advanced fallback for comparison inputs that do not come from this project’s run history.
+              </p>
+              <CodeEditor
+                error={baselineError}
+                height={220}
+                hint="Only used when baseline source is set to External JSON."
+                label="External baseline results JSON"
+                language="json"
+                onChange={(value) => {
+                  setBaselineText(value);
+                  if (!value.trim()) {
+                    setBaselineError(null);
+                    applyDraftUpdate((current) => ({
+                      ...current,
+                      review_draft: { ...current.review_draft, baseline: null },
+                    }));
+                    return;
+                  }
+                  try {
+                    const parsed = JSON.parse(value) as AttackResults;
+                    setBaselineError(null);
+                    applyDraftUpdate((current) => ({
+                      ...current,
+                      review_draft: { ...current.review_draft, baseline: parsed },
+                    }));
+                  } catch (error) {
+                    setBaselineError(error instanceof Error ? error.message : "Invalid JSON.");
+                  }
+                }}
+                value={baselineText}
+              />
+            </details>
 
             <div className="tab-row" role="tablist" aria-label="Review panels">
               {(
                 [
-                  ["summary", "Summary"],
-                  ["findings", "Findings"],
+                  ["overview", "Overview"],
+                  ["new", "New"],
+                  ["persisting", "Persisting"],
+                  ["resolved", "Resolved"],
                   ["deltas", "Deltas"],
-                  ["auth", "Auth"],
                   ["artifacts", "Artifacts"],
                   ["suppressions", "Suppressions"],
                   ["promote", "Promote"],
@@ -1356,6 +1916,7 @@ export default function ProjectWorkbenchPage() {
                   className={`tab-button${reviewTab === tab ? " tab-button-active" : ""}`}
                   key={tab}
                   onClick={() => setReviewTab(tab)}
+                  aria-selected={reviewTab === tab}
                   role="tab"
                   type="button"
                 >
@@ -1364,7 +1925,139 @@ export default function ProjectWorkbenchPage() {
               ))}
             </div>
 
-            {reviewTab === "summary" ? (
+            {selectedEvidenceAttackId && currentReviewedJob ? (
+              <section className="evidence-drawer">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">Current-run evidence</p>
+                    <h3>{selectedEvidenceFinding?.name ?? selectedEvidenceAttackId}</h3>
+                    <p className="field-hint">
+                      {findingChangeLabel(selectedEvidenceChange ?? "current")} finding from run{" "}
+                      <code>{currentReviewedJob.id.slice(0, 8)}</code>
+                    </p>
+                  </div>
+                  <button
+                    className="secondary-button"
+                    onClick={() => {
+                      setSelectedEvidenceAttackId(null);
+                      setSelectedDrawerArtifactName(null);
+                    }}
+                    type="button"
+                  >
+                    Close evidence
+                  </button>
+                </div>
+                {findingEvidenceQuery.isLoading ? (
+                  <p className="empty-copy">Loading finding evidence…</p>
+                ) : findingEvidenceError ? (
+                  <div className="empty-state">
+                    <p>{findingEvidenceError}</p>
+                  </div>
+                ) : findingEvidenceQuery.data ? (
+                  <div className="stack">
+                    <div className="summary-card-grid">
+                      <div className="summary-card">
+                        <span>Compare state</span>
+                        <strong>{findingChangeLabel(selectedEvidenceChange ?? "current")}</strong>
+                      </div>
+                      <div className="summary-card">
+                        <span>Issue</span>
+                        <strong>{findingEvidenceQuery.data.result.issue ?? "—"}</strong>
+                      </div>
+                      <div className="summary-card">
+                        <span>Severity</span>
+                        <strong>{findingEvidenceQuery.data.result.severity}</strong>
+                      </div>
+                      <div className="summary-card">
+                        <span>Status</span>
+                        <strong>{findingEvidenceQuery.data.result.status_code ?? "—"}</strong>
+                      </div>
+                    </div>
+                    <ReviewTable
+                      emptyCopy="No evidence metadata for this finding."
+                      headings={["Method", "Path", "Kind", "URL"]}
+                      rows={[
+                        [
+                          findingEvidenceQuery.data.result.method,
+                          findingEvidenceQuery.data.result.path ?? "—",
+                          findingEvidenceQuery.data.result.kind,
+                          findingEvidenceQuery.data.result.url,
+                        ],
+                      ]}
+                    />
+                    {(findingEvidenceQuery.data.result.workflow_steps ?? []).length ? (
+                      <ReviewTable
+                        emptyCopy="No workflow steps recorded."
+                        headings={["Step", "Method", "Status", "Duration", "URL"]}
+                        rows={(findingEvidenceQuery.data.result.workflow_steps ?? []).map((step) => [
+                          step.name,
+                          step.method,
+                          step.status_code ?? "—",
+                          step.duration_ms ? `${step.duration_ms} ms` : "—",
+                          step.url,
+                        ])}
+                      />
+                    ) : null}
+                    {(findingEvidenceQuery.data.result.profile_results ?? []).length ? (
+                      <ReviewTable
+                        emptyCopy="No profile evidence recorded."
+                        headings={["Profile", "Level", "Status", "Issue", "Severity", "Workflow steps"]}
+                        rows={(findingEvidenceQuery.data.result.profile_results ?? []).map((profile) => [
+                          profile.anonymous ? `${profile.profile} (anonymous)` : profile.profile,
+                          profile.level,
+                          profile.status_code ?? "—",
+                          profile.issue ?? "—",
+                          profile.severity,
+                          profile.workflow_steps?.length ?? 0,
+                        ])}
+                      />
+                    ) : null}
+                    <ArtifactViewer
+                      document={drawerArtifactQuery.data}
+                      emptyCopy="No artifact references were derived for this finding."
+                      error={drawerArtifactError}
+                      isLoading={drawerArtifactQuery.isLoading}
+                      jobId={currentReviewedJob.id}
+                      onSelect={setSelectedDrawerArtifactName}
+                      references={findingEvidenceQuery.data.artifacts}
+                      selectedArtifactName={selectedDrawerArtifactName}
+                    />
+                    {findingEvidenceQuery.data.highlighted_auth_events.length ? (
+                      <ReviewTable
+                        emptyCopy="No matching auth events."
+                        headings={["Profile", "Name", "Strategy", "Phase", "Status", "Error"]}
+                        rows={findingEvidenceQuery.data.highlighted_auth_events.map((event) => [
+                          event.profile ?? "—",
+                          event.name,
+                          event.strategy,
+                          event.phase,
+                          event.status_code ?? (event.success ? "ok" : "failed"),
+                          event.error ?? "—",
+                        ])}
+                      />
+                    ) : null}
+                    <ReviewTable
+                      emptyCopy="No auth events captured for this run."
+                      headings={["Profile", "Name", "Strategy", "Phase", "Status", "Error"]}
+                      rows={findingEvidenceQuery.data.auth_events.map((event) => [
+                        event.profile ?? "—",
+                        event.name,
+                        event.strategy,
+                        event.phase,
+                        event.status_code ?? (event.success ? "ok" : "failed"),
+                        event.error ?? "—",
+                      ])}
+                    />
+                  </div>
+                ) : null}
+              </section>
+            ) : evidenceNotice ? (
+              <div className="empty-state">
+                <p>{evidenceNotice}</p>
+              </div>
+            ) : null}
+
+            {reviewTab === "overview" ? (
               <div className="stack">
                 <div className="summary-card-grid">
                   <div className="summary-card">
@@ -1377,18 +2070,22 @@ export default function ProjectWorkbenchPage() {
                   </div>
                   <div className="summary-card">
                     <span>New</span>
-                    <strong>{draft.artifacts.latest_summary?.new_findings_count ?? 0}</strong>
+                    <strong>{draft.artifacts.latest_verification?.new_findings_count ?? 0}</strong>
                   </div>
                   <div className="summary-card">
-                    <span>Persisting deltas</span>
-                    <strong>{draft.artifacts.latest_summary?.persisting_deltas_count ?? 0}</strong>
+                    <span>Persisting</span>
+                    <strong>{draft.artifacts.latest_verification?.persisting_findings_count ?? 0}</strong>
+                  </div>
+                  <div className="summary-card">
+                    <span>Resolved</span>
+                    <strong>{draft.artifacts.latest_verification?.resolved_findings_count ?? 0}</strong>
                   </div>
                 </div>
                 <ReviewTable
                   emptyCopy="Run a suite and refresh analysis to populate the summary."
                   headings={["Attack", "Kind", "Issue", "Severity", "Confidence", "URL"]}
                   rows={(draft.artifacts.latest_summary?.top_findings ?? []).map((finding) => [
-                    finding.name,
+                    findingAction(finding.name, finding),
                     finding.kind,
                     finding.issue ?? "—",
                     finding.severity,
@@ -1396,25 +2093,27 @@ export default function ProjectWorkbenchPage() {
                     finding.url,
                   ])}
                 />
-                <div className="report-grid">
-                  <article className="report-card">
-                    <h3>Markdown report</h3>
-                    <pre>{draft.artifacts.latest_markdown_report ?? "No Markdown report yet."}</pre>
-                  </article>
-                  <article className="report-card">
-                    <h3>HTML report</h3>
-                    <pre>{draft.artifacts.latest_html_report ?? "No HTML report yet."}</pre>
-                  </article>
-                </div>
+                <ReviewTable
+                  emptyCopy="No auth summary recorded for this run."
+                  headings={["Profile", "Name", "Strategy", "Acquire", "Refresh", "Failures"]}
+                  rows={(draft.artifacts.latest_summary?.auth_summary ?? []).map((entry) => [
+                    entry.profile,
+                    entry.name,
+                    entry.strategy,
+                    entry.acquire,
+                    entry.refresh,
+                    entry.failures,
+                  ])}
+                />
               </div>
             ) : null}
 
-            {reviewTab === "findings" ? (
+            {reviewTab === "new" ? (
               <ReviewTable
-                emptyCopy="No active findings match the current filter."
+                emptyCopy="No new findings match the current filter."
                 headings={["Attack", "Kind", "Issue", "Severity", "Confidence", "Status", "Path"]}
-                rows={activeFindings.map((finding) => [
-                  finding.name,
+                rows={newFindings.map((finding) => [
+                  findingAction(finding.name, finding),
                   finding.kind,
                   finding.issue ?? "—",
                   finding.severity,
@@ -1425,12 +2124,49 @@ export default function ProjectWorkbenchPage() {
               />
             ) : null}
 
+            {reviewTab === "persisting" ? (
+              <ReviewTable
+                emptyCopy="No persisting findings match the current filter."
+                headings={["Attack", "Kind", "Issue", "Severity", "Confidence", "Status", "Path"]}
+                rows={persistingFindings.map((finding) => [
+                  findingAction(finding.name, finding),
+                  finding.kind,
+                  finding.issue ?? "—",
+                  finding.severity,
+                  finding.confidence,
+                  finding.status_code ?? "—",
+                  finding.path ?? "—",
+                ])}
+              />
+            ) : null}
+
+            {reviewTab === "resolved" ? (
+              <div className="stack">
+                <p className="field-hint">
+                  Resolved findings are baseline-only in this milestone, so current-run artifact evidence is not available.
+                </p>
+                <ReviewTable
+                  emptyCopy="No resolved findings match the current filter."
+                  headings={["Attack", "Kind", "Issue", "Severity", "Confidence", "Status", "Path"]}
+                  rows={resolvedFindings.map((finding) => [
+                    finding.name,
+                    finding.kind,
+                    finding.issue ?? "—",
+                    finding.severity,
+                    finding.confidence,
+                    finding.status_code ?? "—",
+                    finding.path ?? "—",
+                  ])}
+                />
+              </div>
+            ) : null}
+
             {reviewTab === "deltas" ? (
               <ReviewTable
-                emptyCopy="No persisting deltas are available."
+                emptyCopy="No persisting deltas are available for the current comparison."
                 headings={["Attack", "Issue", "Change summary", "Method", "Path"]}
-                rows={(draft.artifacts.latest_verification?.persisting_findings ?? []).map((finding) => [
-                  finding.name,
+                rows={deltaFindings.map((finding) => [
+                  findingAction(finding.name, finding),
                   finding.issue ?? "—",
                   finding.delta_changes.length
                     ? finding.delta_changes
@@ -1443,20 +2179,30 @@ export default function ProjectWorkbenchPage() {
               />
             ) : null}
 
-            {reviewTab === "auth" ? (
+            {reviewTab === "artifacts" ? (
               <div className="stack">
                 <ReviewTable
-                  emptyCopy="No auth summary recorded."
-                  headings={["Profile", "Name", "Strategy", "Acquire", "Refresh", "Failures"]}
-                  rows={(draft.artifacts.latest_summary?.auth_summary ?? []).map((entry) => [
-                    entry.profile,
-                    entry.name,
-                    entry.strategy,
-                    entry.acquire,
-                    entry.refresh,
-                    entry.failures,
+                  emptyCopy="No jobs for this project yet."
+                  headings={["Job", "Status", "Completed", "Active", "Artifacts", "Error"]}
+                  rows={currentJobs.map((job) => [
+                    job.id,
+                    job.status,
+                    formatJobMoment(job.completed_at ?? job.started_at ?? job.created_at),
+                    job.result_summary?.active_flagged_count ?? "—",
+                    job.artifact_names.length,
+                    job.error ?? "—",
                   ])}
                 />
+                <div className="report-grid">
+                  <article className="report-card">
+                    <h3>Markdown report</h3>
+                    <pre>{draft.artifacts.latest_markdown_report ?? "No Markdown report yet."}</pre>
+                  </article>
+                  <article className="report-card">
+                    <h3>HTML report</h3>
+                    <pre>{draft.artifacts.latest_html_report ?? "No HTML report yet."}</pre>
+                  </article>
+                </div>
                 <ReviewTable
                   emptyCopy="No auth events captured."
                   headings={["Profile", "Name", "Strategy", "Phase", "Status", "Error"]}
@@ -1469,35 +2215,22 @@ export default function ProjectWorkbenchPage() {
                     event.error ?? "—",
                   ])}
                 />
-              </div>
-            ) : null}
-
-            {reviewTab === "artifacts" ? (
-              <div className="stack">
-                <ReviewTable
-                  emptyCopy="No jobs for this project yet."
-                  headings={["Job", "Status", "Created", "Artifacts", "Error"]}
-                  rows={currentJobs.map((job) => [
-                    job.id,
-                    job.status,
-                    new Date(job.created_at).toLocaleString(),
-                    job.artifact_names.length,
-                    job.error ?? "—",
-                  ])}
-                />
-                <ul className="artifact-list">
-                  {(latestJob?.artifact_names ?? []).length ? (
-                    latestJob?.artifact_names.map((artifactName) => (
-                      <li key={artifactName}>
-                        <a href={`/v1/jobs/${latestJob.id}/artifacts/${artifactName}`} target="_blank">
-                          {artifactName}
-                        </a>
-                      </li>
-                    ))
-                  ) : (
-                    <li>No artifacts linked to the latest job.</li>
-                  )}
-                </ul>
+                {currentReviewedJob ? (
+                  <ArtifactViewer
+                    document={artifactsTabArtifactQuery.data}
+                    emptyCopy="No artifacts linked to the current compared run."
+                    error={artifactsTabArtifactError}
+                    isLoading={artifactsTabArtifactQuery.isLoading}
+                    jobId={currentReviewedJob.id}
+                    onSelect={setSelectedArtifactsTabArtifactName}
+                    references={artifactBrowserReferences}
+                    selectedArtifactName={selectedArtifactsTabArtifactName}
+                  />
+                ) : (
+                  <div className="empty-state">
+                    <p>No current compared run is available for artifact inspection.</p>
+                  </div>
+                )}
               </div>
             ) : null}
 
@@ -1532,8 +2265,8 @@ export default function ProjectWorkbenchPage() {
                     <strong>{draft.artifacts.latest_promoted_suite?.attacks.length ?? 0}</strong>
                   </div>
                   <div className="summary-card">
-                    <span>Latest run</span>
-                    <strong>{draft.artifacts.last_run_job_id ?? "—"}</strong>
+                    <span>Current run</span>
+                    <strong>{currentReviewedJob?.id ?? "—"}</strong>
                   </div>
                 </div>
                 <pre className="json-preview">
@@ -1549,6 +2282,30 @@ export default function ProjectWorkbenchPage() {
         <aside className="workbench-sidebar">
           <section className="sidebar-panel">
             <p className="eyebrow">Project state</p>
+            <h3>Compare context</h3>
+            <ul className="compact-list">
+              <li>
+                <strong>Current run</strong>
+                <span>{currentReviewedJob ? currentReviewedJob.id.slice(0, 8) : "—"}</span>
+              </li>
+              <li>
+                <strong>Pinned baseline</strong>
+                <span>
+                  {draft.review_draft.baseline_mode === "external"
+                    ? "External JSON"
+                    : baselineReviewedJob
+                      ? baselineReviewedJob.id.slice(0, 8)
+                      : "—"}
+                </span>
+              </li>
+              <li>
+                <strong>Last compared</strong>
+                <span>{formatJobMoment(draft.artifacts.latest_summary?.executed_at)}</span>
+              </li>
+            </ul>
+          </section>
+          <section className="sidebar-panel">
+            <p className="eyebrow">Project state</p>
             <h3>Run history</h3>
             <ul className="job-feed">
               {currentJobs.length ? (
@@ -1556,11 +2313,20 @@ export default function ProjectWorkbenchPage() {
                   <li className="job-feed-item" key={job.id}>
                     <div className="job-feed-top">
                       <code>{job.id.slice(0, 8)}</code>
-                      <span className={`status-chip ${statusTone(job.status)}`}>{job.status}</span>
+                      <div className="job-feed-badges">
+                        {currentReviewedJob?.id === job.id ? (
+                          <span className="status-chip status-running">current</span>
+                        ) : null}
+                        {draft.review_draft.baseline_mode === "job" &&
+                        draft.review_draft.baseline_job_id === job.id ? (
+                          <span className="status-chip status-pending">baseline</span>
+                        ) : null}
+                        <span className={`status-chip ${statusTone(job.status)}`}>{job.status}</span>
+                      </div>
                     </div>
                     <p>{job.base_url}</p>
                     <small>
-                      {new Date(job.created_at).toLocaleString()}
+                      {summarizeJob(job)}
                       {job.error ? ` • ${job.error}` : ""}
                     </small>
                   </li>

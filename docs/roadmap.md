@@ -28,6 +28,12 @@ guesswork.
 - v0.15: staged GraphQL subscription coverage
   - ships subscription-root discovery plus bounded `graphql-transport-ws` execution in the
     existing generate/run/report pipeline
+- v0.16: ReviewOps baseline workbench
+  - ships project-scoped review refresh, pinned baseline run selection, diff-first review tabs,
+    and advanced external baseline fallback in the local web workbench
+- v0.17: Artifact deep dive drawer
+  - ships finding-first current-run evidence drilldown, typed artifact references, and inline
+    request/response, workflow, profile, and auth-event inspection in the review workbench
 
 ## v0.12 — local-first HTTP API
 

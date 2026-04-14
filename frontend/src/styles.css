@@ -453,6 +453,63 @@ pre {
   gap: 14px;
 }
 
+.compare-banner {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.compare-card {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid rgba(13, 108, 99, 0.18);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(13, 108, 99, 0.08), rgba(255, 255, 255, 0.72));
+}
+
+.compare-card strong {
+  font-size: 1.05rem;
+}
+
+.advanced-panel {
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px dashed rgba(13, 108, 99, 0.28);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.advanced-panel summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.finding-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent-strong);
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+}
+
+.finding-link:hover {
+  text-decoration: underline;
+}
+
+.evidence-drawer {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid rgba(13, 108, 99, 0.22);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(13, 108, 99, 0.06), rgba(255, 255, 255, 0.82));
+}
+
 .summary-card {
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -470,6 +527,79 @@ pre {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+
+.artifact-viewer {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.95fr) minmax(0, 1.35fr);
+  gap: 16px;
+}
+
+.artifact-reference-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.artifact-reference-item,
+.artifact-preview-panel,
+.artifact-structured-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.artifact-reference-item {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+}
+
+.artifact-reference-item-active {
+  border-color: rgba(13, 108, 99, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(13, 108, 99, 0.18);
+}
+
+.artifact-reference-button {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+}
+
+.artifact-reference-button:disabled {
+  cursor: default;
+  color: var(--muted);
+}
+
+.artifact-reference-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.artifact-reference-meta a {
+  color: var(--accent-strong);
+  text-decoration: none;
+}
+
+.artifact-reference-meta a:hover {
+  text-decoration: underline;
+}
+
+.artifact-preview-panel {
+  padding: 16px;
+}
+
+.artifact-structured-card {
+  padding: 16px;
 }
 
 .report-card pre,
@@ -514,6 +644,13 @@ pre {
   font-size: 0.88rem;
 }
 
+.job-feed-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .artifact-list a {
   color: var(--accent-strong);
   text-decoration: none;
@@ -553,7 +690,9 @@ pre {
   .field-grid-4,
   .field-grid-3,
   .field-grid-2,
-  .report-grid {
+  .artifact-viewer,
+  .report-grid,
+  .compare-banner {
     grid-template-columns: 1fr;
   }
 }

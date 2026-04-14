@@ -12,7 +12,16 @@ from fastapi.testclient import TestClient
 from knives_out.api import create_app
 from knives_out.api_models import ApiJobStatus, JobRecord
 from knives_out.api_store import JobStore
-from knives_out.models import AttackCase, AttackResult, AttackResults, AttackSuite, LearnedModel
+from knives_out.models import (
+    AttackCase,
+    AttackResult,
+    AttackResults,
+    AttackSuite,
+    AuthEvent,
+    LearnedModel,
+    ProfileAttackResult,
+    WorkflowStepResult,
+)
 
 OPENAPI_SPEC = dedent(
     """
@@ -139,6 +148,104 @@ def _baseline_results() -> AttackResults:
     )
 
 
+def _workflow_profile_results() -> AttackResults:
+    return AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        profiles=["member", "anonymous"],
+        auth_events=[
+            AuthEvent(
+                name="member-login",
+                strategy="cookie",
+                phase="acquire",
+                success=True,
+                profile="member",
+                endpoint="/login",
+                status_code=200,
+            ),
+            AuthEvent(
+                name="anonymous-fallback",
+                strategy="header",
+                phase="refresh",
+                success=False,
+                profile="anonymous",
+                endpoint="/graphql",
+                status_code=401,
+                error="expired token",
+            ),
+            AuthEvent(
+                name="admin-session",
+                strategy="cookie",
+                phase="acquire",
+                success=True,
+                profile="admin",
+                endpoint="/admin",
+                status_code=200,
+            ),
+        ],
+        results=[
+            AttackResult(
+                type="workflow",
+                attack_id="wf_checkout",
+                operation_id="checkout",
+                kind="authorization_inversion",
+                name="Checkout workflow",
+                method="POST",
+                path="/checkout",
+                url="https://example.com/checkout",
+                status_code=500,
+                flagged=True,
+                issue="authorization_inversion",
+                severity="high",
+                confidence="medium",
+                workflow_steps=[
+                    WorkflowStepResult(
+                        name="Create cart",
+                        operation_id="createCart",
+                        method="POST",
+                        url="https://example.com/cart",
+                        status_code=201,
+                        duration_ms=12.4,
+                        response_excerpt='{"id":"cart-1"}',
+                    )
+                ],
+                profile_results=[
+                    ProfileAttackResult(
+                        profile="member",
+                        level=1,
+                        anonymous=False,
+                        url="https://example.com/checkout",
+                        status_code=403,
+                        flagged=True,
+                        issue="authorization_inversion",
+                        severity="high",
+                        confidence="high",
+                        workflow_steps=[
+                            WorkflowStepResult(
+                                name="Create cart",
+                                operation_id="createCart",
+                                method="POST",
+                                url="https://example.com/cart",
+                                status_code=201,
+                            )
+                        ],
+                    ),
+                    ProfileAttackResult(
+                        profile="anonymous",
+                        level=0,
+                        anonymous=True,
+                        url="https://example.com/checkout",
+                        status_code=200,
+                        flagged=False,
+                        severity="none",
+                        confidence="none",
+                    ),
+                ],
+            )
+        ],
+    )
+
+
 def _stored_job(
     store: JobStore,
     *,
@@ -147,6 +254,7 @@ def _stored_job(
     completed_at: datetime | None = None,
     base_url: str = "https://example.com",
     attack_count: int = 1,
+    project_id: str | None = None,
     error: str | None = None,
     with_result: bool = False,
     with_artifact: bool = False,
@@ -158,6 +266,7 @@ def _stored_job(
                 "created_at": created_at,
                 "started_at": created_at,
                 "completed_at": completed_at,
+                "project_id": project_id,
                 "error": error,
             }
         )
@@ -269,6 +378,144 @@ def test_run_job_lifecycle_and_artifacts(tmp_path, monkeypatch) -> None:
     artifact_response = client.get(f"/v1/jobs/{job_id}/artifacts/atk_api.json")
     assert artifact_response.status_code == 200
     assert artifact_response.json()["attack"]["id"] == "atk_api"
+
+
+def test_job_finding_evidence_endpoint_returns_request_artifact_context(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    record = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 13, 12, 1, tzinfo=UTC),
+        with_result=True,
+        with_artifact=True,
+    )
+
+    response = client.get(f"/v1/jobs/{record.id}/findings/atk_api/evidence")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_id"] == record.id
+    assert payload["attack_id"] == "atk_api"
+    assert payload["result"]["attack_id"] == "atk_api"
+    assert payload["artifacts"] == [
+        {
+            "label": "Request artifact",
+            "kind": "request",
+            "artifact_name": "atk_api.json",
+            "available": True,
+            "profile": None,
+            "step_index": None,
+        }
+    ]
+    assert payload["auth_events"] == []
+    assert payload["highlighted_auth_events"] == []
+
+
+def test_job_finding_evidence_endpoint_returns_workflow_and_profile_artifacts(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    record = store.create_job(
+        JobRecord(base_url="https://example.com", attack_count=1).model_copy(
+            update={
+                "status": ApiJobStatus.completed,
+                "created_at": datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
+                "started_at": datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
+                "completed_at": datetime(2026, 4, 13, 12, 1, tzinfo=UTC),
+            }
+    )
+    )
+    store.write_result(record.id, _workflow_profile_results())
+    artifact_root = store.artifact_dir(record.id)
+    (artifact_root / "wf_checkout.json").write_text(
+        '{"attack":{"id":"wf_checkout"}}',
+        encoding="utf-8",
+    )
+    (artifact_root / "wf_checkout-step-01.json").write_text(
+        '{"attack":{"id":"wf_checkout-step-01"}}',
+        encoding="utf-8",
+    )
+    member_root = artifact_root / "member"
+    member_root.mkdir(parents=True, exist_ok=True)
+    (member_root / "wf_checkout.json").write_text(
+        '{"attack":{"id":"wf_checkout","profile":"member"}}',
+        encoding="utf-8",
+    )
+    (member_root / "wf_checkout-step-01.json").write_text(
+        '{"attack":{"id":"wf_checkout-step-01","profile":"member"}}',
+        encoding="utf-8",
+    )
+
+    response = client.get(f"/v1/jobs/{record.id}/findings/wf_checkout/evidence")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["result"]["type"] == "workflow"
+    assert payload["result"]["workflow_steps"][0]["name"] == "Create cart"
+    assert [artifact["artifact_name"] for artifact in payload["artifacts"]] == [
+        "wf_checkout.json",
+        "wf_checkout-step-01.json",
+        "member/wf_checkout.json",
+        "member/wf_checkout-step-01.json",
+        "anonymous/wf_checkout.json",
+    ]
+    assert [artifact["available"] for artifact in payload["artifacts"]] == [
+        True,
+        True,
+        True,
+        True,
+        False,
+    ]
+    assert [artifact["kind"] for artifact in payload["artifacts"]] == [
+        "workflow_terminal",
+        "workflow_step",
+        "profile_request",
+        "profile_workflow_step",
+        "profile_request",
+    ]
+    assert [event["profile"] for event in payload["highlighted_auth_events"]] == [
+        "member",
+        "anonymous",
+    ]
+    assert len(payload["auth_events"]) == 3
+
+
+def test_job_finding_evidence_endpoint_handles_missing_results_attacks_and_artifacts(
+    tmp_path,
+) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    missing_result = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 13, 12, 1, tzinfo=UTC),
+    )
+    no_artifact = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=datetime(2026, 4, 13, 13, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 13, 13, 1, tzinfo=UTC),
+        with_result=True,
+    )
+
+    assert client.get("/v1/jobs/missing/findings/atk_api/evidence").status_code == 404
+
+    missing_result_response = client.get(f"/v1/jobs/{missing_result.id}/findings/atk_api/evidence")
+    assert missing_result_response.status_code == 404
+    assert missing_result_response.json()["detail"] == "Job result not available."
+
+    missing_finding_response = client.get(f"/v1/jobs/{no_artifact.id}/findings/missing/evidence")
+    assert missing_finding_response.status_code == 404
+    assert missing_finding_response.json()["detail"] == "Finding not found for job."
+
+    no_artifact_response = client.get(f"/v1/jobs/{no_artifact.id}/findings/atk_api/evidence")
+    assert no_artifact_response.status_code == 200
+    assert no_artifact_response.json()["artifacts"][0]["available"] is False
 
 
 def test_run_job_status_endpoints_404_for_missing_job(tmp_path) -> None:
@@ -505,6 +752,193 @@ def test_job_list_endpoint_returns_recent_jobs_and_filters_status(tmp_path) -> N
     filtered_payload = filtered_response.json()
     assert filtered_payload["count"] == 1
     assert [job["id"] for job in filtered_payload["jobs"]] == [completed_record.id]
+
+
+def test_project_review_endpoint_uses_latest_completed_run_and_selected_baseline(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    project_id = client.post("/v1/projects", json={"name": "Review demo"}).json()["id"]
+
+    baseline_job = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=datetime(2026, 4, 13, 11, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 13, 11, 1, tzinfo=UTC),
+        project_id=project_id,
+    )
+    current_job = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 13, 12, 1, tzinfo=UTC),
+        project_id=project_id,
+    )
+    store.write_result(
+        baseline_job.id,
+        _baseline_results().model_copy(update={"base_url": "https://example.com"}),
+    )
+    store.write_result(
+        current_job.id,
+        _flagged_results().model_copy(update={"base_url": "https://example.com"}),
+    )
+
+    response = client.post(
+        f"/v1/projects/{project_id}/review",
+        json={"baseline_mode": "job", "baseline_job_id": baseline_job.id},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["project_id"] == project_id
+    assert payload["current_job_id"] == current_job.id
+    assert payload["baseline_job_id"] == baseline_job.id
+    assert payload["baseline_mode"] == "job"
+    assert payload["baseline_used"] is True
+    assert payload["waiting_for_new_run"] is False
+    assert payload["summary"]["baseline_used"] is True
+    assert payload["verification"]["baseline_used"] is True
+    assert payload["verification"]["persisting_findings_count"] == 1
+    assert payload["verification"]["persisting_findings"][0]["delta_changes"][0]["field"] == (
+        "severity"
+    )
+
+
+def test_project_review_endpoint_rejects_invalid_baseline_jobs(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    project_id = client.post("/v1/projects", json={"name": "Review demo"}).json()["id"]
+    other_project_id = client.post("/v1/projects", json={"name": "Other"}).json()["id"]
+
+    current_job = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 13, 12, 1, tzinfo=UTC),
+        project_id=project_id,
+    )
+    store.write_result(current_job.id, _flagged_results())
+
+    other_project_job = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=datetime(2026, 4, 13, 11, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 13, 11, 1, tzinfo=UTC),
+        project_id=other_project_id,
+        with_result=True,
+    )
+    no_result_job = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=datetime(2026, 4, 13, 10, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 13, 10, 1, tzinfo=UTC),
+        project_id=project_id,
+    )
+
+    missing_response = client.post(
+        f"/v1/projects/{project_id}/review",
+        json={"baseline_mode": "job", "baseline_job_id": "missing"},
+    )
+    assert missing_response.status_code == 404
+    assert missing_response.json()["detail"] == "Baseline job not found."
+
+    cross_project_response = client.post(
+        f"/v1/projects/{project_id}/review",
+        json={"baseline_mode": "job", "baseline_job_id": other_project_job.id},
+    )
+    assert cross_project_response.status_code == 400
+    assert cross_project_response.json()["detail"] == (
+        "Baseline job must belong to the same project."
+    )
+
+    no_result_response = client.post(
+        f"/v1/projects/{project_id}/review",
+        json={"baseline_mode": "job", "baseline_job_id": no_result_job.id},
+    )
+    assert no_result_response.status_code == 400
+    assert no_result_response.json()["detail"] == (
+        "Baseline job must be completed and have stored results."
+    )
+
+
+def test_project_review_endpoint_rejects_invalid_external_baseline_json(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    project_id = client.post("/v1/projects", json={"name": "Review demo"}).json()["id"]
+
+    current_job = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 13, 12, 1, tzinfo=UTC),
+        project_id=project_id,
+        with_result=True,
+    )
+
+    assert current_job.project_id == project_id
+
+    response = client.post(
+        f"/v1/projects/{project_id}/review",
+        json={"baseline_mode": "external", "baseline": {"unexpected": "shape"}},
+    )
+
+    assert response.status_code == 422
+
+
+def test_project_review_endpoint_waits_when_latest_run_is_pinned_as_baseline(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    project_id = client.post("/v1/projects", json={"name": "Review demo"}).json()["id"]
+
+    current_job = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 4, 13, 12, 1, tzinfo=UTC),
+        project_id=project_id,
+        with_result=True,
+    )
+
+    response = client.post(
+        f"/v1/projects/{project_id}/review",
+        json={"baseline_mode": "job", "baseline_job_id": current_job.id},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["current_job_id"] == current_job.id
+    assert payload["baseline_job_id"] == current_job.id
+    assert payload["baseline_used"] is False
+    assert payload["waiting_for_new_run"] is True
+
+
+def test_project_update_persists_review_baseline_selection(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path))
+    project_id = client.post("/v1/projects", json={"name": "Review demo"}).json()["id"]
+
+    response = client.patch(
+        f"/v1/projects/{project_id}",
+        json={
+            "review_draft": {
+                "baseline_mode": "job",
+                "baseline_job_id": "job-baseline",
+                "baseline": None,
+                "suppressions_yaml": None,
+                "min_severity": "medium",
+                "min_confidence": "low",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["review_draft"]["baseline_mode"] == "job"
+    assert payload["review_draft"]["baseline_job_id"] == "job-baseline"
+    assert payload["review_draft"]["min_severity"] == "medium"
+    assert payload["review_draft"]["min_confidence"] == "low"
 
 
 def test_job_store_lists_nested_artifacts_and_rejects_path_traversal(tmp_path) -> None:

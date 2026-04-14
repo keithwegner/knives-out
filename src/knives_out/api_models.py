@@ -8,8 +8,10 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from knives_out.models import (
+    AttackResult,
     AttackResults,
     AttackSuite,
+    AuthEvent,
     LearnedModel,
     OperationSpec,
     PreflightWarning,
@@ -44,6 +46,19 @@ class ProjectStep(StrEnum):
     generate = "generate"
     run = "run"
     review = "review"
+
+
+class ProjectReviewBaselineMode(StrEnum):
+    job = "job"
+    external = "external"
+
+
+class ArtifactReferenceKind(StrEnum):
+    request = "request"
+    workflow_terminal = "workflow_terminal"
+    workflow_step = "workflow_step"
+    profile_request = "profile_request"
+    profile_workflow_step = "profile_workflow_step"
 
 
 class SourcePayload(BaseModel):
@@ -255,6 +270,24 @@ class ArtifactListResponse(BaseModel):
     artifacts: list[str] = Field(default_factory=list)
 
 
+class ArtifactReferenceResponse(BaseModel):
+    label: str
+    kind: ArtifactReferenceKind
+    artifact_name: str
+    available: bool = False
+    profile: str | None = None
+    step_index: int | None = None
+
+
+class JobFindingEvidenceResponse(BaseModel):
+    job_id: str
+    attack_id: str
+    result: AttackResult
+    artifacts: list[ArtifactReferenceResponse] = Field(default_factory=list)
+    auth_events: list[AuthEvent] = Field(default_factory=list)
+    highlighted_auth_events: list[AuthEvent] = Field(default_factory=list)
+
+
 class JobListResponse(BaseModel):
     count: int
     jobs: list[JobStatusResponse] = Field(default_factory=list)
@@ -339,10 +372,35 @@ class ProjectRunDraft(BaseModel):
 
 
 class ProjectReviewDraft(BaseModel):
+    baseline_mode: ProjectReviewBaselineMode = ProjectReviewBaselineMode.job
+    baseline_job_id: str | None = None
     baseline: AttackResults | None = None
     suppressions_yaml: str | None = None
     min_severity: str = "high"
     min_confidence: str = "medium"
+
+
+class ProjectReviewRequest(BaseModel):
+    baseline_mode: ProjectReviewBaselineMode | None = None
+    baseline_job_id: str | None = None
+    baseline: AttackResults | None = None
+    suppressions_yaml: str | None = None
+    min_severity: str | None = None
+    min_confidence: str | None = None
+
+
+class ProjectReviewResponse(BaseModel):
+    project_id: str
+    current_job_id: str
+    baseline_mode: ProjectReviewBaselineMode
+    baseline_job_id: str | None = None
+    baseline_used: bool = False
+    waiting_for_new_run: bool = False
+    results: AttackResults
+    summary: SummaryResponse
+    verification: VerifyResponse
+    markdown_report: str
+    html_report: str
 
 
 class ProjectArtifacts(BaseModel):

@@ -217,6 +217,15 @@ knives-out triage results.json --out .knives-out-ignore.yml
 `knives-out` also includes a local-first web workbench for saved projects, guided attack
 generation, background runs, and native review panels.
 
+The review step is now baseline-first: it treats the latest completed run in a saved project as the
+current comparison target, lets you pin an older completed project run as the baseline, and keeps
+that baseline selection in the saved project draft. Raw baseline JSON is still available, but only
+as an advanced external fallback when project history is not the right comparison source.
+Inside that review step, findings in Overview, New, Persisting, and Deltas now open an inline
+evidence drawer for the current compared run. The drawer resolves linked request/response
+artifacts, workflow setup steps, per-profile evidence, and run auth events without forcing you to
+leave the workbench or manually guess artifact filenames.
+
 For normal local use, build the frontend once and let the API serve it under `/app/`:
 
 ```bash
@@ -283,11 +292,15 @@ Longer execution runs use a job resource instead:
 - `DELETE /v1/jobs/{id}`
 - `POST /v1/jobs/prune`
 - `GET /v1/jobs/{id}/result`
+- `GET /v1/jobs/{id}/findings/{attack_id}/evidence`
 - `GET /v1/jobs/{id}/artifacts`
 
 The job collection and per-job status routes include a compact `result_summary` payload whenever a
 run has finished writing `result.json`, so local tools can triage recent runs without downloading
 the full result body first.
+When a caller needs structured drilldown for a current-run finding, `GET /v1/jobs/{id}/findings/{attack_id}/evidence`
+returns the selected result plus typed artifact references, workflow/profile metadata, and run auth
+context, while raw artifact bodies still come from `GET /v1/jobs/{id}/artifacts/{artifact_name}`.
 Cleanup stays explicit and local-only: the delete and prune endpoints only remove completed or failed jobs,
 and active jobs must finish before they can be deleted.
 
@@ -299,6 +312,12 @@ The web workbench also uses project resources for saved drafts and project-scope
 - `PATCH /v1/projects/{id}`
 - `DELETE /v1/projects/{id}`
 - `GET /v1/projects/{id}/jobs`
+- `POST /v1/projects/{id}/review`
+
+`POST /v1/projects/{id}/review` bundles the summary, verify, and report refresh path that the web
+workbench uses. It always reviews the latest completed run with stored results in that project as
+the current run, accepts an optional `baseline_job_id` from the same project, and only falls back
+to external baseline JSON when the review draft switches to external baseline mode.
 
 The API accepts uploaded source content and JSON artifacts in the request body. It does not expose
 arbitrary server-side file reads. FastAPI also publishes the schema at `/openapi.json` and the
