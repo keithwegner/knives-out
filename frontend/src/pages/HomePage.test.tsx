@@ -22,6 +22,7 @@ function renderHomePage() {
 
 describe("HomePage", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -86,5 +87,25 @@ describe("HomePage", () => {
     fireEvent.click(saveButton);
 
     expect(window.localStorage.getItem("knives-out.api-base-url")).toBe("https://api.example.com");
+  });
+
+  it("shows a concise error when the endpoint returns HTML", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response("<!DOCTYPE html><html><body>404</body></html>", {
+          status: 404,
+          statusText: "Not Found",
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }),
+    );
+
+    renderHomePage();
+
+    expect(
+      await screen.findByText(/returned HTML instead of the JSON API/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/<!DOCTYPE html>/i)).not.toBeInTheDocument();
   });
 });

@@ -17,10 +17,51 @@ import type {
   TriageResponse,
   VerifyResponse,
 } from "./types";
-import { buildApiUrl } from "./apiConfig";
+import { buildApiUrl, needsConfiguredApiBase } from "./apiConfig";
+
+function requestFailureMessage(requestUrl: string, response: Response): string {
+  return `Request to ${requestUrl} failed with ${response.status}${response.statusText ? ` ${response.statusText}` : ""}.`;
+}
+
+async function parseErrorMessage(response: Response, requestUrl: string): Promise<string> {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    try {
+      const payload = (await response.json()) as Record<string, unknown>;
+      const detail =
+        typeof payload.detail === "string"
+          ? payload.detail
+          : typeof payload.message === "string"
+            ? payload.message
+            : null;
+      if (detail) {
+        return detail;
+      }
+    } catch {
+      return requestFailureMessage(requestUrl, response);
+    }
+    return requestFailureMessage(requestUrl, response);
+  }
+
+  const text = (await response.text()).trim();
+  if (contentType.includes("text/html")) {
+    return `${requestFailureMessage(requestUrl, response)} The endpoint returned HTML instead of the JSON API. Check the configured API base URL.`;
+  }
+  if (!text) {
+    return requestFailureMessage(requestUrl, response);
+  }
+  const snippet = text.replace(/\s+/g, " ").slice(0, 180);
+  return `${requestFailureMessage(requestUrl, response)} ${snippet}`;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(buildApiUrl(path), {
+  if (needsConfiguredApiBase()) {
+    throw new Error("Set the API base URL before using the GitHub Pages workbench.");
+  }
+
+  const requestUrl = buildApiUrl(path);
+  const response = await fetch(requestUrl, {
     ...init,
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
@@ -29,12 +70,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed with status ${response.status}.`);
+    throw new Error(await parseErrorMessage(response, requestUrl));
   }
 
   if (response.status === 204) {
     return undefined as T;
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `Request to ${requestUrl} succeeded but returned ${contentType || "non-JSON content"} instead of JSON.`,
+    );
   }
 
   return (await response.json()) as T;

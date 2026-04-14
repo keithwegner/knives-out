@@ -3,6 +3,8 @@ import {
   buildApiUrl,
   describeApiBaseUrl,
   getApiBaseUrl,
+  isStaticHostedShell,
+  needsConfiguredApiBase,
   normalizeApiBaseUrl,
   persistApiBaseUrl,
 } from "./apiConfig";
@@ -29,5 +31,14 @@ describe("apiConfig", () => {
     expect(getApiBaseUrl()).toBe("");
     expect(buildApiUrl("/healthz")).toBe("/healthz");
     expect(describeApiBaseUrl("")).toBe("same origin");
+  });
+
+  it("requires an explicit API base on GitHub Pages", () => {
+    expect(isStaticHostedShell("keithwegner.github.io", "/knives-out/")).toBe(true);
+    expect(needsConfiguredApiBase("", "keithwegner.github.io", "/knives-out/")).toBe(true);
+    expect(
+      needsConfiguredApiBase("https://api.example.com", "keithwegner.github.io", "/knives-out/"),
+    ).toBe(false);
+    expect(needsConfiguredApiBase("", "localhost", "/app/")).toBe(false);
   });
 });

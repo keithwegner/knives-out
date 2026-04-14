@@ -7,6 +7,12 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+function normalizeBasePath(value: string | null | undefined): string {
+  const trimmed = value?.trim() || "/";
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withLeadingSlash.endsWith("/") ? withLeadingSlash : `${withLeadingSlash}/`;
+}
+
 export function normalizeApiBaseUrl(value: string | null | undefined): string {
   if (!value) {
     return "";
@@ -40,6 +46,25 @@ export function persistApiBaseUrl(value: string): string {
 
 export function describeApiBaseUrl(value: string): string {
   return value || "same origin";
+}
+
+export function isStaticHostedShell(
+  hostname = typeof window === "undefined" ? "" : window.location.hostname,
+  basePath = import.meta.env.BASE_URL,
+): boolean {
+  const normalizedBasePath = normalizeBasePath(basePath);
+  return (
+    hostname.endsWith(".github.io") ||
+    (normalizedBasePath !== "/" && normalizedBasePath !== "/app/")
+  );
+}
+
+export function needsConfiguredApiBase(
+  apiBaseUrl = getApiBaseUrl(),
+  hostname = typeof window === "undefined" ? "" : window.location.hostname,
+  basePath = import.meta.env.BASE_URL,
+): boolean {
+  return !normalizeApiBaseUrl(apiBaseUrl) && isStaticHostedShell(hostname, basePath);
 }
 
 export function buildApiUrl(path: string): string {

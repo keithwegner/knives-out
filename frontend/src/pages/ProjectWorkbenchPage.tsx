@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { getApiBaseUrl, persistApiBaseUrl } from "../apiConfig";
+import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../apiConfig";
 import ApiConnectionPanel from "../components/ApiConnectionPanel";
 import CodeEditor from "../components/CodeEditor";
 import {
@@ -274,18 +274,19 @@ export default function ProjectWorkbenchPage() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const syncedJobIdRef = useRef<string | null>(null);
   const deferredReviewFilter = useDeferredValue(reviewFilter.trim().toLowerCase());
+  const requiresApiBase = needsConfiguredApiBase(apiBaseUrl);
 
   const projectQuery = useQuery({
     queryKey: ["project", projectId, apiBaseUrl],
     queryFn: () => getProject(projectId!),
-    enabled: Boolean(projectId),
+    enabled: Boolean(projectId) && !requiresApiBase,
     retry: false,
   });
 
   const projectJobsQuery = useQuery({
     queryKey: ["projectJobs", projectId, apiBaseUrl],
     queryFn: () => listProjectJobs(projectId!),
-    enabled: Boolean(projectId),
+    enabled: Boolean(projectId) && !requiresApiBase,
     refetchInterval: trackedJobId ? 1500 : false,
     retry: false,
   });
@@ -334,6 +335,7 @@ export default function ProjectWorkbenchPage() {
   function applyApiBase(nextValue: string) {
     const normalized = persistApiBaseUrl(nextValue);
     setApiBaseUrl(normalized);
+    setDraft(null);
     setActionError(null);
     void queryClient.invalidateQueries();
   }
@@ -409,6 +411,36 @@ export default function ProjectWorkbenchPage() {
       <main className="shell">
         <section className="panel">
           <p className="empty-copy">Missing project id.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (requiresApiBase) {
+    return (
+      <main className="shell">
+        <section className="panel stack">
+          <div>
+            <p className="eyebrow">Workbench unavailable</p>
+            <h2>Connect the API before loading this project</h2>
+            <p className="hero-body">
+              This GitHub Pages deployment only hosts the frontend shell. Set the API base URL to a
+              reachable knives-out server, then reopen the project.
+            </p>
+          </div>
+          <ApiConnectionPanel
+            apiBaseUrl={apiBaseUrl}
+            description="Saved projects, jobs, and review data live on the API backend. Once the endpoint is set, the workbench will load this project from there."
+            onApply={applyApiBase}
+            statusLabel="configure API"
+            statusTone="idle"
+            title="Reconnect the workbench"
+          />
+          <div className="action-row">
+            <Link className="ghost-button" to="/">
+              Back to projects
+            </Link>
+          </div>
         </section>
       </main>
     );
