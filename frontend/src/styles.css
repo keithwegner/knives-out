@@ -576,6 +576,16 @@ pre {
   background: rgba(255, 255, 255, 0.54);
 }
 
+.connection-panel {
+  margin-top: 22px;
+}
+
+.connection-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 @media (max-width: 1180px) {
   .workbench-layout {
     grid-template-columns: 1fr;

@@ -251,6 +251,22 @@ Then open [http://127.0.0.1:4173/app/](http://127.0.0.1:4173/app/). The Vite dev
 The workbench is intentionally local-only and single-user in v1. Saved project drafts, jobs, and
 artifacts all live under `.knives-out-api/` unless you override `KNIVES_OUT_API_DATA_DIR`.
 
+### GitHub Pages
+
+This repository also includes a GitHub Pages workflow at `.github/workflows/pages.yml` that
+publishes the frontend as a static SPA under the repository path, for example
+`https://keithwegner.github.io/knives-out/`.
+
+That Pages site is only the frontend shell. To make it functional you must point it at a reachable
+`knives-out` API:
+
+1. deploy the API somewhere reachable over HTTPS
+2. enable CORS on that API with `KNIVES_OUT_CORS_ALLOW_ORIGINS=https://keithwegner.github.io`
+3. open the published Pages site and set the API base URL in the `API endpoint` panel
+
+If you prefer a baked-in default for the static build, set `VITE_API_BASE_URL` when building the
+frontend for Pages.
+
 ## Local API
 
 `knives-out` can also run as a local-first HTTP API instead of only as a CLI.
@@ -263,6 +279,14 @@ knives-out serve --host 127.0.0.1 --port 8787
 
 By default the API stores job state and request/response artifacts under `.knives-out-api/`.
 Set `KNIVES_OUT_API_DATA_DIR` if you want that store somewhere else.
+
+For browser clients hosted on a different origin, set `KNIVES_OUT_CORS_ALLOW_ORIGINS` to a
+comma-separated list of allowed origins, for example:
+
+```bash
+export KNIVES_OUT_CORS_ALLOW_ORIGINS="https://keithwegner.github.io"
+knives-out serve --host 0.0.0.0 --port 8787
+```
 
 The synchronous endpoints mirror the short CLI flows:
 

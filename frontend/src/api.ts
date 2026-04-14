@@ -17,9 +17,10 @@ import type {
   TriageResponse,
   VerifyResponse,
 } from "./types";
+import { buildApiUrl } from "./apiConfig";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(buildApiUrl(path), {
     ...init,
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
@@ -37,6 +38,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+export function getHealthStatus() {
+  return request<{ status: string }>("/healthz");
 }
 
 export function listProjects() {

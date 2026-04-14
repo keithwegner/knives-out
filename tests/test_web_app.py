@@ -192,3 +192,19 @@ def test_frontend_routes_serve_index_assets_and_spa_fallback(tmp_path) -> None:
 
     missing_asset_response = client.get("/app/assets/missing.js")
     assert missing_asset_response.status_code == 404
+
+
+def test_create_app_applies_configured_cors_origins(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("KNIVES_OUT_CORS_ALLOW_ORIGINS", "https://keithwegner.github.io")
+    client = TestClient(create_app(data_dir=tmp_path))
+
+    response = client.options(
+        "/healthz",
+        headers={
+            "Origin": "https://keithwegner.github.io",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://keithwegner.github.io"

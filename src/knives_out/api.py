@@ -9,6 +9,7 @@ from typing import Annotated
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from knives_out import __version__
@@ -194,6 +195,11 @@ def _default_frontend_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 
+def _cors_allowed_origins() -> list[str]:
+    configured = os.environ.get("KNIVES_OUT_CORS_ALLOW_ORIGINS", "")
+    return [origin.strip() for origin in configured.split(",") if origin.strip()]
+
+
 def _default_source_for_mode(source_mode: ProjectSourceMode) -> SourcePayload | None:
     if source_mode == ProjectSourceMode.openapi:
         return SourcePayload(name="openapi.yaml", content="")
@@ -334,6 +340,15 @@ def create_app(
         version=__version__,
         description="Local-first API for adversarial API testing from specs and observed traffic.",
     )
+    allowed_origins = _cors_allowed_origins()
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     root = data_dir or _default_data_dir()
     app.state.job_store = JobStore(root)
     app.state.project_store = ProjectStore(root)
