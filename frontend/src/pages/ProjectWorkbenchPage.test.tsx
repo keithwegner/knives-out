@@ -61,6 +61,7 @@ const projectPayload = {
     exclude_path: [],
   },
   review_draft: {
+    baseline_job_id: null,
     baseline: null,
     suppressions_yaml: null,
     min_severity: "high",
@@ -227,5 +228,211 @@ describe("ProjectWorkbenchPage", () => {
 
     expect(within(table).getByText("Login failure")).toBeInTheDocument();
     expect(within(table).queryByText("Order mismatch")).not.toBeInTheDocument();
+  });
+
+  it("loads and clears a saved run baseline from the review workspace", async () => {
+    let projectState = structuredClone(projectPayload);
+    projectState.artifacts.last_run_job_id = "job-current";
+
+    const baselineResults = {
+      source: "unit",
+      base_url: "https://example.com",
+      executed_at: "2026-04-13T19:30:00Z",
+      profiles: [],
+      auth_events: [],
+      results: [],
+    };
+
+    const comparisonVerification = {
+      ...projectState.artifacts.latest_verification,
+      baseline_used: true,
+      new_findings_count: 1,
+      resolved_findings_count: 1,
+      persisting_findings_count: 1,
+      current_findings: [
+        projectState.artifacts.latest_verification.current_findings[0],
+        {
+          ...projectState.artifacts.latest_verification.current_findings[1],
+          change: "persisting",
+          delta_changes: [{ field: "status", baseline: "500", current: "200" }],
+        },
+      ],
+      new_findings: [projectState.artifacts.latest_verification.current_findings[0]],
+      resolved_findings: [
+        {
+          change: "resolved",
+          attack_id: "atk-retired",
+          name: "Retired finding",
+          protocol: "rest",
+          kind: "missing_auth",
+          method: "GET",
+          path: "/legacy",
+          tags: ["legacy"],
+          issue: "server_error",
+          severity: "high",
+          confidence: "medium",
+          status_code: 500,
+          url: "https://example.com/legacy",
+          delta_changes: [],
+        },
+      ],
+      persisting_findings: [
+        {
+          ...projectState.artifacts.latest_verification.current_findings[1],
+          change: "persisting",
+          delta_changes: [{ field: "status", baseline: "500", current: "200" }],
+        },
+      ],
+    };
+
+    const comparisonSummary = {
+      ...projectState.artifacts.latest_summary,
+      baseline_used: true,
+      baseline_executed_at: baselineResults.executed_at,
+      new_findings_count: 1,
+      resolved_findings_count: 1,
+      persisting_findings_count: 1,
+      persisting_deltas_count: 1,
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/v1/projects/project-1") && method === "GET") {
+          return Response.json(projectState);
+        }
+        if (url.endsWith("/v1/projects/project-1") && method === "PATCH") {
+          const patch = JSON.parse(String(init?.body ?? "{}"));
+          projectState = {
+            ...projectState,
+            ...patch,
+            review_draft: patch.review_draft ?? projectState.review_draft,
+            artifacts: patch.artifacts ?? projectState.artifacts,
+          };
+          return Response.json(projectState);
+        }
+        if (url.endsWith("/v1/projects/project-1/jobs")) {
+          return Response.json({
+            project_id: "project-1",
+            jobs: [
+              {
+                id: "job-current",
+                kind: "run",
+                status: "completed",
+                created_at: "2026-04-13T20:06:00Z",
+                started_at: "2026-04-13T20:06:01Z",
+                completed_at: "2026-04-13T20:06:04Z",
+                base_url: "https://example.com",
+                attack_count: 2,
+                project_id: "project-1",
+                error: null,
+                result_available: true,
+                artifact_names: ["atk-current.json"],
+                result_summary: projectState.artifacts.latest_summary,
+              },
+              {
+                id: "job-baseline",
+                kind: "run",
+                status: "completed",
+                created_at: "2026-04-13T19:30:00Z",
+                started_at: "2026-04-13T19:30:01Z",
+                completed_at: "2026-04-13T19:30:04Z",
+                base_url: "https://example.com",
+                attack_count: 2,
+                project_id: "project-1",
+                error: null,
+                result_available: true,
+                artifact_names: ["atk-baseline.json"],
+                result_summary: {
+                  ...projectState.artifacts.latest_summary,
+                  executed_at: baselineResults.executed_at,
+                  active_flagged_count: 1,
+                },
+              },
+            ],
+          });
+        }
+        if (url.endsWith("/v1/jobs/job-baseline/result")) {
+          return Response.json(baselineResults);
+        }
+        if (url.endsWith("/v1/summary") && method === "POST") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          return Response.json(body.baseline ? comparisonSummary : projectPayload.artifacts.latest_summary);
+        }
+        if (url.endsWith("/v1/verify") && method === "POST") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          return Response.json(
+            body.baseline ? comparisonVerification : projectPayload.artifacts.latest_verification,
+          );
+        }
+        if (url.endsWith("/v1/report") && method === "POST") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          return Response.json({
+            format: body.format,
+            content: body.baseline
+              ? body.format === "markdown"
+                ? "# compare"
+                : "<!doctype html><p>compare</p>"
+              : body.format === "markdown"
+                ? "# report"
+                : "<!doctype html>",
+          });
+        }
+        throw new Error(`Unhandled fetch for ${method} ${url}`);
+      }),
+    );
+
+    renderWorkbench();
+
+    await screen.findByText("Workbench demo");
+    await screen.findByRole("option", { name: /job-base/i });
+    const baselineSelect = screen
+      .getAllByRole("combobox", { name: "Baseline run" })
+      .at(-1);
+    if (!baselineSelect) {
+      throw new Error("Expected the baseline selector to render.");
+    }
+    fireEvent.change(baselineSelect, {
+      target: { value: "job-baseline" },
+    });
+
+    expect(await screen.findByText("Saved run loaded")).toBeInTheDocument();
+    expect(baselineSelect).toHaveValue("job-baseline");
+    expect(screen.getByText(/using the selected baseline/i)).toBeInTheDocument();
+
+    const reviewPanels = screen.getAllByRole("tablist", { name: "Review panels" }).at(-1);
+    if (!reviewPanels) {
+      throw new Error("Expected the review tab list to render.");
+    }
+    fireEvent.click(within(reviewPanels).getByRole("tab", { name: /Findings/ }));
+
+    await screen.findAllByRole("tablist", { name: "Finding scopes" });
+    const findingScopes = screen.getAllByRole("tablist", { name: "Finding scopes" }).at(-1);
+    if (!findingScopes) {
+      throw new Error("Expected the finding scope tab list to render.");
+    }
+    fireEvent.click(within(findingScopes).getByRole("tab", { name: /Resolved/ }));
+
+    const findingsTable = screen
+      .getAllByRole("table")
+      .find((candidate) => within(candidate).queryByText("Retired finding"));
+    if (!findingsTable) {
+      throw new Error("Expected the resolved findings table to render.");
+    }
+    expect(within(findingsTable).getByText("Retired finding")).toBeInTheDocument();
+
+    const clearBaselineButton = screen.getAllByRole("button", { name: "Clear baseline" }).at(-1);
+    if (!clearBaselineButton) {
+      throw new Error("Expected the clear baseline action to render.");
+    }
+    fireEvent.click(clearBaselineButton);
+
+    const clearedMessages = await screen.findAllByText(/without a comparison baseline/i);
+    expect(clearedMessages.at(-1)).toBeInTheDocument();
+    expect(baselineSelect).toHaveValue("");
+
+    await new Promise((resolve) => setTimeout(resolve, 700));
   });
 });

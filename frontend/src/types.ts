@@ -283,6 +283,7 @@ export interface JobStatusResponse {
   error?: string | null;
   result_available: boolean;
   artifact_names: string[];
+  result_summary?: ResultsSummary | null;
 }
 
 export interface ProjectInspectDraft {
@@ -332,6 +333,7 @@ export interface ProjectRunDraft {
 }
 
 export interface ProjectReviewDraft {
+  baseline_job_id?: string | null;
   baseline?: AttackResults | null;
   suppressions_yaml?: string | null;
   min_severity: string;
