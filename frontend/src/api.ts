@@ -133,6 +133,12 @@ export function getProject(projectId: string) {
   return request<ProjectRecord>(`/v1/projects/${projectId}`);
 }
 
+export function duplicateProject(projectId: string) {
+  return request<ProjectRecord>(`/v1/projects/${projectId}/duplicate`, {
+    method: "POST",
+  });
+}
+
 export function updateProject(projectId: string, project: Partial<ProjectRecord>) {
   return request<ProjectRecord>(`/v1/projects/${projectId}`, {
     method: "PATCH",

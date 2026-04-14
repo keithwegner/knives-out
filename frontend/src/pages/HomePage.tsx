@@ -1,7 +1,13 @@
 import { startTransition, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { getHealthStatus, createProject, deleteProject, listProjects } from "../api";
+import {
+  createProject,
+  deleteProject,
+  duplicateProject,
+  getHealthStatus,
+  listProjects,
+} from "../api";
 import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../apiConfig";
 import ApiConnectionPanel from "../components/ApiConnectionPanel";
 
@@ -43,6 +49,13 @@ export default function HomePage() {
     },
   });
 
+  const duplicateProjectMutation = useMutation({
+    mutationFn: duplicateProject,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+
   function applyApiBase(nextValue: string) {
     const normalized = persistApiBaseUrl(nextValue);
     setApiBaseUrl(normalized);
@@ -56,6 +69,8 @@ export default function HomePage() {
         ? createProjectMutation.error.message
         : deleteProjectMutation.error instanceof Error
           ? deleteProjectMutation.error.message
+          : duplicateProjectMutation.error instanceof Error
+            ? duplicateProjectMutation.error.message
           : null;
   const apiStatusTone = requiresApiBase
     ? "idle"
@@ -204,8 +219,16 @@ export default function HomePage() {
                 <button
                   className="ghost-button"
                   type="button"
+                  onClick={() => duplicateProjectMutation.mutate(project.id)}
+                  disabled={duplicateProjectMutation.isPending || deleteProjectMutation.isPending}
+                >
+                  {duplicateProjectMutation.isPending ? "Duplicating…" : "Duplicate"}
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
                   onClick={() => deleteProjectMutation.mutate(project.id)}
-                  disabled={deleteProjectMutation.isPending}
+                  disabled={deleteProjectMutation.isPending || duplicateProjectMutation.isPending}
                 >
                   Delete
                 </button>

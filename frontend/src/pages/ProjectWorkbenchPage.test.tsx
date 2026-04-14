@@ -717,6 +717,215 @@ describe("ProjectWorkbenchPage", () => {
     expect(within(table).queryByText("Order mismatch")).not.toBeInTheDocument();
   });
 
+  it("duplicates the active project and opens the copied workbench", async () => {
+    const duplicatedProject = {
+      ...structuredClone(projectPayload),
+      id: "project-2",
+      name: "Workbench demo copy",
+      created_at: "2026-04-13T20:06:00Z",
+      updated_at: "2026-04-13T20:06:00Z",
+      review_draft: {
+        ...structuredClone(projectPayload.review_draft),
+        baseline_job_id: null,
+      },
+      artifacts: {
+        ...structuredClone(projectPayload.artifacts),
+        last_run_job_id: null,
+      },
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/v1/projects/project-1") && method === "GET") {
+        return Response.json(projectPayload);
+      }
+      if (url.endsWith("/v1/projects/project-1/jobs") && method === "GET") {
+        return Response.json({ project_id: "project-1", jobs: [] });
+      }
+      if (url.endsWith("/v1/projects/project-1/duplicate") && method === "POST") {
+        return Response.json(duplicatedProject);
+      }
+      if (url.endsWith("/v1/projects/project-2") && method === "GET") {
+        return Response.json(duplicatedProject);
+      }
+      if (url.endsWith("/v1/projects/project-2/jobs") && method === "GET") {
+        return Response.json({ project_id: "project-2", jobs: [] });
+      }
+      throw new Error(`Unhandled fetch for ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWorkbench();
+
+    await screen.findByText("Workbench demo");
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate project" }));
+
+    expect(await screen.findByText("Workbench demo copy")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/v1/projects/project-1/duplicate") &&
+          ((init as RequestInit | undefined)?.method ?? "GET") === "POST",
+      ),
+    ).toBe(true);
+  });
+
+  it("loads and clears a saved run baseline from the review workspace", async () => {
+    let projectState = structuredClone(projectPayload);
+    projectState.artifacts.last_run_job_id = "job-current";
+
+    const baselineResults = {
+      source: "unit",
+      base_url: "https://example.com",
+      executed_at: "2026-04-13T19:30:00Z",
+      profiles: [],
+      auth_events: [],
+      results: [],
+    };
+
+    const comparisonVerification = {
+      ...projectState.artifacts.latest_verification,
+      baseline_used: true,
+      new_findings_count: 1,
+      resolved_findings_count: 1,
+      persisting_findings_count: 1,
+      current_findings: [
+        projectState.artifacts.latest_verification.current_findings[0],
+        {
+          ...projectState.artifacts.latest_verification.current_findings[1],
+          change: "persisting",
+          delta_changes: [{ field: "status", baseline: "500", current: "200" }],
+        },
+      ],
+      new_findings: [projectState.artifacts.latest_verification.current_findings[0]],
+      resolved_findings: [
+        {
+          change: "resolved",
+          attack_id: "atk-retired",
+          name: "Retired finding",
+          protocol: "rest",
+          kind: "missing_auth",
+          method: "GET",
+          path: "/legacy",
+          tags: ["legacy"],
+          issue: "server_error",
+          severity: "high",
+          confidence: "medium",
+          status_code: 500,
+          url: "https://example.com/legacy",
+          delta_changes: [],
+        },
+      ],
+      persisting_findings: [
+        {
+          ...projectState.artifacts.latest_verification.current_findings[1],
+          change: "persisting",
+          delta_changes: [{ field: "status", baseline: "500", current: "200" }],
+        },
+      ],
+    };
+
+    const comparisonSummary = {
+      ...projectState.artifacts.latest_summary,
+      baseline_used: true,
+      baseline_executed_at: baselineResults.executed_at,
+      new_findings_count: 1,
+      resolved_findings_count: 1,
+      persisting_findings_count: 1,
+      persisting_deltas_count: 1,
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/v1/projects/project-1") && method === "GET") {
+          return Response.json(projectState);
+        }
+        if (url.endsWith("/v1/projects/project-1") && method === "PATCH") {
+          const patch = JSON.parse(String(init?.body ?? "{}"));
+          projectState = {
+            ...projectState,
+            ...patch,
+            review_draft: patch.review_draft ?? projectState.review_draft,
+            artifacts: patch.artifacts ?? projectState.artifacts,
+          };
+          return Response.json(projectState);
+        }
+        if (url.endsWith("/v1/projects/project-1/jobs")) {
+          return Response.json({
+            project_id: "project-1",
+            jobs: [
+              {
+                id: "job-current",
+                kind: "run",
+                status: "completed",
+                created_at: "2026-04-13T20:06:00Z",
+                started_at: "2026-04-13T20:06:01Z",
+                completed_at: "2026-04-13T20:06:04Z",
+                base_url: "https://example.com",
+                attack_count: 2,
+                project_id: "project-1",
+                error: null,
+                result_available: true,
+                artifact_names: ["atk-current.json"],
+                result_summary: projectState.artifacts.latest_summary,
+              },
+              {
+                id: "job-baseline",
+                kind: "run",
+                status: "completed",
+                created_at: "2026-04-13T19:30:00Z",
+                started_at: "2026-04-13T19:30:01Z",
+                completed_at: "2026-04-13T19:30:04Z",
+                base_url: "https://example.com",
+                attack_count: 2,
+                project_id: "project-1",
+                error: null,
+                result_available: true,
+                artifact_names: ["atk-baseline.json"],
+                result_summary: {
+                  ...projectState.artifacts.latest_summary,
+                  executed_at: baselineResults.executed_at,
+                  active_flagged_count: 1,
+                },
+              },
+            ],
+          });
+        }
+        if (url.endsWith("/v1/jobs/job-baseline/result")) {
+          return Response.json(baselineResults);
+        }
+        if (url.endsWith("/v1/summary") && method === "POST") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          return Response.json(body.baseline ? comparisonSummary : projectPayload.artifacts.latest_summary);
+        }
+        if (url.endsWith("/v1/verify") && method === "POST") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          return Response.json(
+            body.baseline ? comparisonVerification : projectPayload.artifacts.latest_verification,
+          );
+        }
+        if (url.endsWith("/v1/report") && method === "POST") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          return Response.json({
+            format: body.format,
+            content: body.baseline
+              ? body.format === "markdown"
+                ? "# compare"
+                : "<!doctype html><p>compare</p>"
+              : body.format === "markdown"
+                ? "# report"
+                : "<!doctype html>",
+          });
+        }
+        throw new Error(`Unhandled fetch for ${method} ${url}`);
+      }),
+    );
+  });
+
   it("refreshes comparison when selecting a baseline and pinning the latest run", async () => {
     renderWorkbench();
 

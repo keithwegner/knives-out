@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, sleep
 from uuid import uuid4
@@ -67,6 +68,19 @@ class ProjectStore:
         self._write_record(record)
         return record
 
+    def _default_duplicate_name(self, name: str) -> str:
+        existing_names = {record.name for record in self.list_projects()}
+        base_name = f"{name} copy"
+        if base_name not in existing_names:
+            return base_name
+
+        suffix = 2
+        while True:
+            candidate = f"{name} copy {suffix}"
+            if candidate not in existing_names:
+                return candidate
+            suffix += 1
+
     def load_project(self, project_id: str) -> ProjectRecord:
         path = self.record_path(project_id)
         if not path.exists():
@@ -76,6 +90,25 @@ class ProjectStore:
     def update_project(self, record: ProjectRecord) -> ProjectRecord:
         self._write_record(record)
         return record
+
+    def duplicate_project(self, project_id: str, *, name: str | None = None) -> ProjectRecord:
+        current = self.load_project(project_id)
+        now = datetime.now(UTC)
+        duplicate_name = name.strip() if name and name.strip() else self._default_duplicate_name(current.name)
+        duplicated = current.model_copy(
+            deep=True,
+            update={
+                "id": uuid4().hex,
+                "name": duplicate_name,
+                "created_at": now,
+                "updated_at": now,
+                "review_draft": current.review_draft.model_copy(
+                    update={"baseline_job_id": None}
+                ),
+                "artifacts": current.artifacts.model_copy(update={"last_run_job_id": None}),
+            },
+        )
+        return self.create_project(duplicated)
 
     def list_projects(self) -> list[ProjectRecord]:
         records: list[ProjectRecord] = []
