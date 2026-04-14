@@ -148,11 +148,12 @@ def _stored_job(
     base_url: str = "https://example.com",
     attack_count: int = 1,
     error: str | None = None,
+    project_id: str | None = None,
     with_result: bool = False,
     with_artifact: bool = False,
 ) -> JobRecord:
     record = store.create_job(
-        JobRecord(base_url=base_url, attack_count=attack_count).model_copy(
+        JobRecord(base_url=base_url, attack_count=attack_count, project_id=project_id).model_copy(
             update={
                 "status": status,
                 "created_at": created_at,
@@ -374,6 +375,43 @@ def test_delete_job_rejects_active_jobs(tmp_path) -> None:
     assert store.job_dir(record.id).exists()
 
 
+def test_project_job_delete_endpoint_removes_only_matching_project_job(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    project_id = client.post("/v1/projects", json={"name": "Workbench demo"}).json()["id"]
+    other_project_id = client.post("/v1/projects", json={"name": "Other demo"}).json()["id"]
+    completed_at = datetime(2026, 4, 13, 12, 0, tzinfo=UTC)
+    record = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=completed_at - timedelta(minutes=1),
+        completed_at=completed_at,
+        project_id=project_id,
+        with_result=True,
+        with_artifact=True,
+    )
+    other_record = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=completed_at - timedelta(minutes=2),
+        completed_at=completed_at - timedelta(minutes=1),
+        project_id=other_project_id,
+        with_result=True,
+    )
+
+    response = client.delete(f"/v1/projects/{project_id}/jobs/{record.id}")
+
+    assert response.status_code == 200
+    assert response.json()["deleted"]["id"] == record.id
+    assert not store.job_dir(record.id).exists()
+    assert store.job_dir(other_record.id).exists()
+
+    missing_response = client.delete(f"/v1/projects/{project_id}/jobs/{other_record.id}")
+    assert missing_response.status_code == 404
+    assert missing_response.json()["detail"] == "Job not found."
+
+
 def test_prune_jobs_supports_dry_run_and_completed_before_filter(tmp_path) -> None:
     app = create_app(data_dir=tmp_path)
     client = TestClient(app)
@@ -443,6 +481,84 @@ def test_prune_jobs_supports_dry_run_and_completed_before_filter(tmp_path) -> No
     assert [job["id"] for job in payload["jobs"]] == [old_completed.id, old_failed.id]
     assert not store.job_dir(old_completed.id).exists()
     assert not store.job_dir(old_failed.id).exists()
+
+
+def test_project_prune_jobs_only_matches_runs_for_that_project(tmp_path) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    store = app.state.job_store
+    project_id = client.post("/v1/projects", json={"name": "Workbench demo"}).json()["id"]
+    other_project_id = client.post("/v1/projects", json={"name": "Other demo"}).json()["id"]
+    cutoff = datetime(2026, 4, 13, 12, 0, tzinfo=UTC)
+    old_completed = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=cutoff - timedelta(hours=2),
+        completed_at=cutoff - timedelta(hours=1),
+        project_id=project_id,
+        with_result=True,
+    )
+    old_failed = _stored_job(
+        store,
+        status=ApiJobStatus.failed,
+        created_at=cutoff - timedelta(hours=3),
+        completed_at=cutoff - timedelta(hours=2),
+        project_id=project_id,
+        error="boom",
+        with_artifact=True,
+    )
+    other_project_job = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=cutoff - timedelta(hours=4),
+        completed_at=cutoff - timedelta(hours=3),
+        project_id=other_project_id,
+        with_result=True,
+    )
+    global_job = _stored_job(
+        store,
+        status=ApiJobStatus.completed,
+        created_at=cutoff - timedelta(hours=5),
+        completed_at=cutoff - timedelta(hours=4),
+        with_result=True,
+    )
+
+    dry_run = client.post(
+        f"/v1/projects/{project_id}/jobs/prune",
+        json={
+            "statuses": ["completed", "failed"],
+            "completed_before": cutoff.isoformat(),
+            "limit": 10,
+            "dry_run": True,
+        },
+    )
+
+    assert dry_run.status_code == 200
+    dry_payload = dry_run.json()
+    assert dry_payload["dry_run"] is True
+    assert dry_payload["matched_count"] == 2
+    assert [job["id"] for job in dry_payload["jobs"]] == [old_completed.id, old_failed.id]
+    assert store.job_dir(other_project_job.id).exists()
+    assert store.job_dir(global_job.id).exists()
+
+    response = client.post(
+        f"/v1/projects/{project_id}/jobs/prune",
+        json={
+            "statuses": ["completed", "failed"],
+            "completed_before": cutoff.isoformat(),
+            "limit": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["matched_count"] == 2
+    assert payload["deleted_count"] == 2
+    assert [job["id"] for job in payload["jobs"]] == [old_completed.id, old_failed.id]
+    assert not store.job_dir(old_completed.id).exists()
+    assert not store.job_dir(old_failed.id).exists()
+    assert store.job_dir(other_project_job.id).exists()
+    assert store.job_dir(global_job.id).exists()
 
 
 def test_prune_jobs_rejects_active_status_filters(tmp_path) -> None:

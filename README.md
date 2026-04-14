@@ -323,6 +323,8 @@ The web workbench also uses project resources for saved drafts and project-scope
 - `PATCH /v1/projects/{id}`
 - `DELETE /v1/projects/{id}`
 - `GET /v1/projects/{id}/jobs`
+- `DELETE /v1/projects/{id}/jobs/{job_id}`
+- `POST /v1/projects/{id}/jobs/prune`
 
 The API accepts uploaded source content and JSON artifacts in the request body. It does not expose
 arbitrary server-side file reads. FastAPI also publishes the schema at `/openapi.json` and the

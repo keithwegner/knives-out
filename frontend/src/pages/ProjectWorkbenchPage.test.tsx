@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ProjectWorkbenchPage from "./ProjectWorkbenchPage";
@@ -193,6 +193,7 @@ describe("ProjectWorkbenchPage", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
   });
 
@@ -434,5 +435,181 @@ describe("ProjectWorkbenchPage", () => {
     expect(baselineSelect).toHaveValue("");
 
     await new Promise((resolve) => setTimeout(resolve, 700));
+  });
+
+  it("uses project-scoped retention actions from the artifacts panel", async () => {
+    let projectState: any = structuredClone(projectPayload);
+    projectState.artifacts.last_run_job_id = "job-current";
+    projectState.review_draft = {
+      ...projectState.review_draft,
+      baseline_job_id: "job-old",
+    };
+
+    const currentJob = {
+      id: "job-current",
+      kind: "run",
+      status: "completed",
+      created_at: "2026-04-13T20:06:00Z",
+      started_at: "2026-04-13T20:06:01Z",
+      completed_at: "2026-04-13T20:06:04Z",
+      base_url: "https://example.com",
+      attack_count: 2,
+      project_id: "project-1",
+      error: null,
+      result_available: true,
+      artifact_names: ["atk-current.json"],
+      result_summary: projectState.artifacts.latest_summary,
+    };
+    const baselineJob = {
+      id: "job-old",
+      kind: "run",
+      status: "completed",
+      created_at: "2026-04-13T19:30:00Z",
+      started_at: "2026-04-13T19:30:01Z",
+      completed_at: "2026-04-13T19:30:04Z",
+      base_url: "https://example.com",
+      attack_count: 2,
+      project_id: "project-1",
+      error: null,
+      result_available: true,
+      artifact_names: ["atk-old.json"],
+      result_summary: {
+        ...projectState.artifacts.latest_summary,
+        executed_at: "2026-04-13T19:30:04Z",
+        active_flagged_count: 1,
+      },
+    };
+    let jobs = [currentJob, baselineJob];
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/v1/projects/project-1") && method === "GET") {
+        return Response.json(projectState);
+      }
+      if (url.endsWith("/v1/projects/project-1") && method === "PATCH") {
+        const patch = JSON.parse(String(init?.body ?? "{}"));
+        projectState = {
+          ...projectState,
+          ...patch,
+          review_draft: patch.review_draft ?? projectState.review_draft,
+          artifacts: patch.artifacts ?? projectState.artifacts,
+        };
+        return Response.json(projectState);
+      }
+      if (url.endsWith("/v1/projects/project-1/jobs") && method === "GET") {
+        return Response.json({ project_id: "project-1", jobs });
+      }
+      if (url.endsWith("/v1/projects/project-1/jobs/job-old") && method === "DELETE") {
+        jobs = jobs.filter((job) => job.id !== "job-old");
+        return Response.json({
+          deleted: {
+            id: "job-old",
+            status: "completed",
+            created_at: baselineJob.created_at,
+            completed_at: baselineJob.completed_at,
+            base_url: baselineJob.base_url,
+            attack_count: baselineJob.attack_count,
+            error: null,
+            result_available: true,
+            artifact_names: baselineJob.artifact_names,
+          },
+        });
+      }
+      if (url.endsWith("/v1/projects/project-1/jobs/prune") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        if (body.dry_run) {
+          return Response.json({
+            dry_run: true,
+            matched_count: 1,
+            deleted_count: 0,
+            jobs: [
+              {
+                id: currentJob.id,
+                status: currentJob.status,
+                created_at: currentJob.created_at,
+                completed_at: currentJob.completed_at,
+                base_url: currentJob.base_url,
+                attack_count: currentJob.attack_count,
+                error: null,
+                result_available: true,
+                artifact_names: currentJob.artifact_names,
+              },
+            ],
+          });
+        }
+        jobs = [];
+        return Response.json({
+          dry_run: false,
+          matched_count: 1,
+          deleted_count: 1,
+          jobs: [
+            {
+              id: currentJob.id,
+              status: currentJob.status,
+              created_at: currentJob.created_at,
+              completed_at: currentJob.completed_at,
+              base_url: currentJob.base_url,
+              attack_count: currentJob.attack_count,
+              error: null,
+              result_available: true,
+              artifact_names: currentJob.artifact_names,
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/v1/summary") && method === "POST") {
+        return Response.json(projectPayload.artifacts.latest_summary);
+      }
+      if (url.endsWith("/v1/verify") && method === "POST") {
+        return Response.json(projectPayload.artifacts.latest_verification);
+      }
+      if (url.endsWith("/v1/report") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        return Response.json({
+          format: body.format,
+          content: body.format === "markdown" ? "# report" : "<!doctype html>",
+        });
+      }
+      throw new Error(`Unhandled fetch for ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWorkbench();
+
+    await screen.findAllByText("Workbench demo");
+    const reviewPanels = screen.getAllByRole("tablist", { name: "Review panels" }).at(-1);
+    if (!reviewPanels) {
+      throw new Error("Expected the review tab list to render.");
+    }
+    fireEvent.click(within(reviewPanels).getByRole("tab", { name: /Artifacts/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete run job-old" }));
+
+    const baselineSelect = screen.getAllByRole("combobox", { name: "Baseline run" }).at(-1);
+    if (!baselineSelect) {
+      throw new Error("Expected the baseline selector to render.");
+    }
+    await waitFor(() => expect(baselineSelect).toHaveValue(""));
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview matches" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete matched runs" })).toBeEnabled(),
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/v1/projects/project-1/jobs/prune") &&
+          JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")).dry_run === true,
+      ),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete matched runs" }));
+
+    expect(await screen.findByText("No jobs for this project yet.")).toBeInTheDocument();
+    expect(screen.getByText("No artifacts linked to the current run.")).toBeInTheDocument();
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
   });
 });
