@@ -1,16 +1,29 @@
 import { startTransition, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { createProject, deleteProject, listProjects } from "../api";
+import { getHealthStatus, createProject, deleteProject, listProjects } from "../api";
+import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../apiConfig";
+import ApiConnectionPanel from "../components/ApiConnectionPanel";
 
 export default function HomePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [newProjectName, setNewProjectName] = useState("Security workbench");
+  const [apiBaseUrl, setApiBaseUrl] = useState(() => getApiBaseUrl());
+  const requiresApiBase = needsConfiguredApiBase(apiBaseUrl);
 
   const projectListQuery = useQuery({
-    queryKey: ["projects"],
+    queryKey: ["projects", apiBaseUrl],
     queryFn: listProjects,
+    enabled: !requiresApiBase,
+    retry: false,
+  });
+
+  const healthQuery = useQuery({
+    queryKey: ["health", apiBaseUrl],
+    queryFn: getHealthStatus,
+    enabled: !requiresApiBase,
+    retry: false,
   });
 
   const createProjectMutation = useMutation({
@@ -30,6 +43,42 @@ export default function HomePage() {
     },
   });
 
+  function applyApiBase(nextValue: string) {
+    const normalized = persistApiBaseUrl(nextValue);
+    setApiBaseUrl(normalized);
+    void queryClient.invalidateQueries();
+  }
+
+  const homeError =
+    projectListQuery.error instanceof Error
+      ? projectListQuery.error.message
+      : createProjectMutation.error instanceof Error
+        ? createProjectMutation.error.message
+        : deleteProjectMutation.error instanceof Error
+          ? deleteProjectMutation.error.message
+          : null;
+  const apiStatusTone = requiresApiBase
+    ? "idle"
+    : healthQuery.isLoading
+      ? "pending"
+      : healthQuery.isSuccess
+        ? "completed"
+        : "failed";
+  const apiStatusLabel = requiresApiBase
+    ? "configure API"
+    : healthQuery.isLoading
+      ? "checking"
+      : healthQuery.isSuccess
+        ? "connected"
+        : "unreachable";
+  const apiDescription = requiresApiBase
+    ? "This GitHub Pages deployment only hosts the frontend shell. Set the API base URL to a reachable knives-out server to load projects and run workflows."
+    : healthQuery.isSuccess
+      ? "The workbench can reach the configured API. Projects and runs will use this endpoint."
+      : apiBaseUrl
+        ? "The configured API endpoint is not responding yet. Make sure the deployed backend is reachable and allows cross-origin requests."
+        : "This static frontend needs a reachable knives-out API when it is not served by `knives-out serve` on the same origin.";
+
   return (
     <main className="shell">
       <section className="hero-panel">
@@ -45,7 +94,7 @@ export default function HomePage() {
           className="hero-create"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!newProjectName.trim()) {
+            if (requiresApiBase || !newProjectName.trim()) {
               return;
             }
             createProjectMutation.mutate(newProjectName.trim());
@@ -60,11 +109,30 @@ export default function HomePage() {
               placeholder="Name the workbench"
             />
           </label>
-          <button className="primary-button" type="submit" disabled={createProjectMutation.isPending}>
-            {createProjectMutation.isPending ? "Creating…" : "Open workbench"}
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={createProjectMutation.isPending || requiresApiBase}
+          >
+            {createProjectMutation.isPending
+              ? "Creating…"
+              : requiresApiBase
+                ? "Connect API first"
+                : "Open workbench"}
           </button>
         </form>
       </section>
+
+      {homeError ? <div className="error-banner">{homeError}</div> : null}
+
+      <ApiConnectionPanel
+        apiBaseUrl={apiBaseUrl}
+        description={apiDescription}
+        onApply={applyApiBase}
+        statusLabel={apiStatusLabel}
+        statusTone={apiStatusTone}
+        title="Choose where the UI talks to the API"
+      />
 
       <section className="panel">
         <div className="section-heading">
@@ -79,8 +147,23 @@ export default function HomePage() {
         </div>
 
         {projectListQuery.isLoading ? <p className="empty-copy">Loading projects…</p> : null}
+        {!projectListQuery.isLoading && requiresApiBase ? (
+          <div className="empty-state">
+            <p>Add a reachable API endpoint above to load saved projects.</p>
+            <p>The Pages site only serves the UI. Project drafts and runs live on the API backend.</p>
+          </div>
+        ) : null}
+        {!projectListQuery.isLoading && !requiresApiBase && projectListQuery.isError ? (
+          <div className="empty-state">
+            <p>Projects could not be loaded from the configured API.</p>
+            <p>Check the API endpoint panel above, then retry after the backend is reachable.</p>
+          </div>
+        ) : null}
 
-        {!projectListQuery.isLoading && !projectListQuery.data?.projects.length ? (
+        {!projectListQuery.isLoading &&
+        !requiresApiBase &&
+        !projectListQuery.isError &&
+        !projectListQuery.data?.projects.length ? (
           <div className="empty-state">
             <p>No saved projects yet.</p>
             <p>Start with an OpenAPI or GraphQL source and the workbench will hold the drafts.</p>

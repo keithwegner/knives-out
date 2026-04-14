@@ -340,6 +340,36 @@ export interface JobArtifactDocument {
   content: unknown;
 }
 
+export interface JobRetentionEntry {
+  id: string;
+  status: ApiJobStatus;
+  created_at: string;
+  completed_at?: string | null;
+  base_url: string;
+  attack_count: number;
+  error?: string | null;
+  result_available: boolean;
+  artifact_names: string[];
+}
+
+export interface DeleteJobResponse {
+  deleted: JobRetentionEntry;
+}
+
+export interface PruneJobsRequest {
+  statuses: ApiJobStatus[];
+  completed_before?: string | null;
+  limit: number;
+  dry_run?: boolean;
+}
+
+export interface PruneJobsResponse {
+  dry_run: boolean;
+  matched_count: number;
+  deleted_count: number;
+  jobs: JobRetentionEntry[];
+}
+
 export interface ProjectInspectDraft {
   tag: string[];
   exclude_tag: string[];

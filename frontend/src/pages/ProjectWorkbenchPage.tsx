@@ -1,9 +1,12 @@
 import { useDeferredValue, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
+import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../apiConfig";
+import ApiConnectionPanel from "../components/ApiConnectionPanel";
 import CodeEditor from "../components/CodeEditor";
 import {
   createRun,
+  deleteProjectJob,
   discoverModel,
   generateSuite,
   getJobArtifact,
@@ -14,6 +17,7 @@ import {
   listProjectJobs,
   promoteResults,
   refreshProjectReview,
+  pruneProjectJobs,
   triageResults,
   updateProject,
 } from "../api";
@@ -23,6 +27,8 @@ import type {
   AttackResults,
   JobArtifactDocument,
   JobStatusResponse,
+  PruneJobsRequest,
+  PruneJobsResponse,
   ProjectRecord,
   ProjectReviewBaselineMode,
   ProjectSourceMode,
@@ -40,7 +46,10 @@ type ReviewTab =
   | "suppressions"
   | "promote";
 
+type RunHistoryFilter = "all" | "active" | "completed" | "failed";
+
 const STEP_ORDER: ProjectStep[] = ["source", "inspect", "generate", "run", "review"];
+const PRUNEABLE_JOB_STATUSES: ApiJobStatus[] = ["completed", "failed"];
 
 function defaultSourceForMode(mode: ProjectSourceMode): SourcePayload | null {
   if (mode === "openapi") {
@@ -68,6 +77,26 @@ function formatList(values: string[]): string {
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) {
+    return "—";
+  }
+  return new Date(value).toLocaleString();
+}
+
+function jobTimestamp(job: JobStatusResponse): string {
+  return job.completed_at ?? job.started_at ?? job.created_at;
+}
+
+function shortJobId(jobId: string | null | undefined): string {
+  return jobId ? jobId.slice(0, 8) : "manual";
+}
+
+function formatJobOptionLabel(job: JobStatusResponse): string {
+  const flaggedCount = job.result_summary?.active_flagged_count ?? 0;
+  return `${shortJobId(job.id)} • ${formatDateTime(jobTimestamp(job))} • ${flaggedCount} flagged`;
 }
 
 function buildProjectPatch(project: ProjectRecord) {
@@ -143,13 +172,27 @@ function summarizeJob(job: JobStatusResponse) {
   return summaryBits.join(" • ");
 }
 
+function isPruneableJobStatus(status: ApiJobStatus): boolean {
+  return PRUNEABLE_JOB_STATUSES.includes(status);
+}
+
+function matchesRunHistoryFilter(job: JobStatusResponse, filter: RunHistoryFilter): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "active") {
+    return job.status === "pending" || job.status === "running";
+  }
+  return job.status === filter;
+}
+
 function ReviewTable({
   headings,
   rows,
   emptyCopy,
 }: {
   headings: string[];
-  rows: Array<Array<ReactNode>>;
+  rows: Array<Array<ReactNode | null | undefined>>;
   emptyCopy: string;
 }) {
   return (
@@ -458,6 +501,7 @@ export default function ProjectWorkbenchPage() {
   const { projectId } = useParams();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<ProjectRecord | null>(null);
+  const [apiBaseUrl, setApiBaseUrl] = useState(() => getApiBaseUrl());
   const [hasPendingSave, setHasPendingSave] = useState(false);
   const [sourceText, setSourceText] = useState("");
   const [headersText, setHeadersText] = useState("{}");
@@ -477,22 +521,33 @@ export default function ProjectWorkbenchPage() {
   const [selectedDrawerArtifactName, setSelectedDrawerArtifactName] = useState<string | null>(null);
   const [selectedArtifactsTabArtifactName, setSelectedArtifactsTabArtifactName] = useState<string | null>(null);
   const [evidenceNotice, setEvidenceNotice] = useState<string | null>(null);
+  const [runHistoryFilter, setRunHistoryFilter] = useState<RunHistoryFilter>("all");
   const [trackedJobId, setTrackedJobId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [pruneStatuses, setPruneStatuses] = useState<ApiJobStatus[]>([
+    "completed",
+    "failed",
+  ]);
+  const [pruneCompletedBefore, setPruneCompletedBefore] = useState("");
+  const [pruneLimit, setPruneLimit] = useState("10");
+  const [prunePreview, setPrunePreview] = useState<PruneJobsResponse | null>(null);
   const syncedJobIdRef = useRef<string | null>(null);
   const deferredReviewFilter = useDeferredValue(reviewFilter.trim().toLowerCase());
+  const requiresApiBase = needsConfiguredApiBase(apiBaseUrl);
 
   const projectQuery = useQuery({
-    queryKey: ["project", projectId],
+    queryKey: ["project", projectId, apiBaseUrl],
     queryFn: () => getProject(projectId!),
-    enabled: Boolean(projectId),
+    enabled: Boolean(projectId) && !requiresApiBase,
+    retry: false,
   });
 
   const projectJobsQuery = useQuery({
-    queryKey: ["projectJobs", projectId],
+    queryKey: ["projectJobs", projectId, apiBaseUrl],
     queryFn: () => listProjectJobs(projectId!),
-    enabled: Boolean(projectId),
+    enabled: Boolean(projectId) && !requiresApiBase,
     refetchInterval: trackedJobId ? 1500 : false,
+    retry: false,
   });
 
   const currentJobs = projectJobsQuery.data?.jobs ?? [];
@@ -609,6 +664,14 @@ export default function ProjectWorkbenchPage() {
     }
   }
 
+  function applyApiBase(nextValue: string) {
+    const normalized = persistApiBaseUrl(nextValue);
+    setApiBaseUrl(normalized);
+    setDraft(null);
+    setActionError(null);
+    void queryClient.invalidateQueries();
+  }
+
   useEffect(() => {
     if (!projectQuery.data) {
       return;
@@ -707,11 +770,74 @@ export default function ProjectWorkbenchPage() {
     setSelectedArtifactsTabArtifactName(artifactNames[0]);
   }, [currentReviewedJob, selectedArtifactsTabArtifactName]);
 
+  useEffect(() => {
+    setPrunePreview(null);
+  }, [pruneCompletedBefore, pruneLimit, pruneStatuses]);
+
   if (!projectId) {
     return (
       <main className="shell">
         <section className="panel">
           <p className="empty-copy">Missing project id.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (requiresApiBase) {
+    return (
+      <main className="shell">
+        <section className="panel stack">
+          <div>
+            <p className="eyebrow">Workbench unavailable</p>
+            <h2>Connect the API before loading this project</h2>
+            <p className="hero-body">
+              This GitHub Pages deployment only hosts the frontend shell. Set the API base URL to a
+              reachable knives-out server, then reopen the project.
+            </p>
+          </div>
+          <ApiConnectionPanel
+            apiBaseUrl={apiBaseUrl}
+            description="Saved projects, jobs, and review data live on the API backend. Once the endpoint is set, the workbench will load this project from there."
+            onApply={applyApiBase}
+            statusLabel="configure API"
+            statusTone="idle"
+            title="Reconnect the workbench"
+          />
+          <div className="action-row">
+            <Link className="ghost-button" to="/">
+              Back to projects
+            </Link>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (projectQuery.isError) {
+    const errorMessage =
+      projectQuery.error instanceof Error ? projectQuery.error.message : "Could not load the project.";
+    return (
+      <main className="shell">
+        <section className="panel stack">
+          <div>
+            <p className="eyebrow">Workbench unavailable</p>
+            <h2>Could not load this project</h2>
+            <p className="hero-body">{errorMessage}</p>
+          </div>
+          <ApiConnectionPanel
+            apiBaseUrl={apiBaseUrl}
+            description="If you are using GitHub Pages or another static host, point the workbench at a reachable knives-out API and try again."
+            onApply={applyApiBase}
+            statusLabel="retry setup"
+            statusTone="failed"
+            title="Reconnect the workbench"
+          />
+          <div className="action-row">
+            <Link className="ghost-button" to="/">
+              Back to projects
+            </Link>
+          </div>
         </section>
       </main>
     );
@@ -727,6 +853,8 @@ export default function ProjectWorkbenchPage() {
     );
   }
 
+  const runHistoryJobs = currentJobs.filter((job) => matchesRunHistoryFilter(job, runHistoryFilter));
+  const pruneableJobCount = currentJobs.filter((job) => isPruneableJobStatus(job.status)).length;
   const latestJob = currentJobs[0];
   const baselineReviewedJob = draft.review_draft.baseline_job_id
     ? currentJobs.find((job) => job.id === draft.review_draft.baseline_job_id) ?? null
@@ -750,6 +878,14 @@ export default function ProjectWorkbenchPage() {
   const reviewWaitingForNewRun =
     draft.review_draft.baseline_mode === "job" &&
     Boolean(currentReviewedJob && baselineReviewedJob && currentReviewedJob.id === baselineReviewedJob.id);
+  const baselineDescription =
+    draft.review_draft.baseline_mode === "external"
+      ? draft.review_draft.baseline
+        ? `External JSON • ${formatDateTime(draft.review_draft.baseline.executed_at)}`
+        : "External JSON baseline not loaded"
+      : baselineReviewedJob
+        ? `Run ${shortJobId(baselineReviewedJob.id)} • ${formatJobMoment(jobTimestamp(baselineReviewedJob))}`
+        : "No comparison baseline selected";
   const newFindings =
     verification?.new_findings.filter((finding) => matchesReviewFilter(finding, deferredReviewFilter)) ?? [];
   const persistingFindings =
@@ -986,6 +1122,30 @@ export default function ProjectWorkbenchPage() {
     await runReviewRefresh(project, "Review workspace refreshed.");
   }
 
+  async function handleBaselineSelection(jobId: string) {
+    await handleBaselineJobChange(jobId);
+  }
+
+  async function handleClearBaseline() {
+    const project = getLoadedProject();
+    const nextProject = {
+      ...project,
+      review_draft: {
+        ...project.review_draft,
+        baseline_job_id: null,
+        baseline: null,
+      },
+    };
+    setBaselineText("");
+    setBaselineError(null);
+    commitDraft(nextProject);
+    if (!completedReviewJobs.length) {
+      setActivityMessage("Comparison baseline cleared.");
+      return;
+    }
+    await runReviewRefresh(nextProject, "Comparison baseline cleared.");
+  }
+
   async function handleGenerateSuppressions() {
     const project = getLoadedProject();
     if (!project.artifacts.latest_results) {
@@ -1095,6 +1255,230 @@ export default function ProjectWorkbenchPage() {
       return;
     }
     await handleBaselineJobChange(currentReviewedJob.id);
+  }
+
+  function togglePruneStatus(status: ApiJobStatus) {
+    setPruneStatuses((current) => {
+      if (current.includes(status)) {
+        return current.filter((entry) => entry !== status);
+      }
+      return PRUNEABLE_JOB_STATUSES.filter(
+        (entry) => entry === status || current.includes(entry),
+      );
+    });
+  }
+
+  function buildPruneRequest(dryRun: boolean): PruneJobsRequest | null {
+    if (!pruneStatuses.length) {
+      setActionError("Select at least one completed or failed status to prune.");
+      return null;
+    }
+
+    const parsedLimit = Number.parseInt(pruneLimit, 10);
+    if (!Number.isFinite(parsedLimit) || parsedLimit < 1 || parsedLimit > 500) {
+      setActionError("Prune limit must be a whole number between 1 and 500.");
+      return null;
+    }
+
+    let completedBefore: string | null = null;
+    if (pruneCompletedBefore) {
+      const parsedDate = new Date(pruneCompletedBefore);
+      if (Number.isNaN(parsedDate.getTime())) {
+        setActionError("Choose a valid completed-before timestamp.");
+        return null;
+      }
+      completedBefore = parsedDate.toISOString();
+    }
+
+    return {
+      statuses: pruneStatuses,
+      completed_before: completedBefore,
+      limit: parsedLimit,
+      dry_run: dryRun,
+    };
+  }
+
+  async function reconcileProjectAfterRetention(
+    removedJobIds: string[],
+    remainingJobs: JobStatusResponse[],
+  ) {
+    if (!removedJobIds.length) {
+      return;
+    }
+
+    const project = getLoadedProject();
+    const removed = new Set(removedJobIds);
+    const baselineRemoved =
+      project.review_draft.baseline_job_id !== null &&
+      project.review_draft.baseline_job_id !== undefined &&
+      removed.has(project.review_draft.baseline_job_id);
+    const currentJobRemoved =
+      project.artifacts.last_run_job_id !== null &&
+      project.artifacts.last_run_job_id !== undefined &&
+      removed.has(project.artifacts.last_run_job_id);
+    if (!baselineRemoved && !currentJobRemoved) {
+      return;
+    }
+
+    const fallbackReviewJob =
+      remainingJobs.find((job) => job.status === "completed" && job.result_available) ?? null;
+    const nextProject = {
+      ...project,
+      review_draft: {
+        ...project.review_draft,
+        baseline_job_id: baselineRemoved ? null : project.review_draft.baseline_job_id,
+        baseline: baselineRemoved ? null : project.review_draft.baseline,
+      },
+      artifacts: {
+        ...project.artifacts,
+        latest_promoted_suite: null,
+        latest_suppressions: null,
+      },
+    };
+
+    setBaselineText(
+      nextProject.review_draft.baseline ? formatJson(nextProject.review_draft.baseline) : "",
+    );
+    setBaselineError(null);
+
+    if (!fallbackReviewJob) {
+      commitDraft({
+        ...nextProject,
+        artifacts: {
+          ...nextProject.artifacts,
+          last_run_job_id: null,
+          latest_results: null,
+          latest_summary: null,
+          latest_verification: null,
+          latest_markdown_report: null,
+          latest_html_report: null,
+          latest_promoted_suite: null,
+          latest_suppressions: null,
+        },
+      });
+      return;
+    }
+
+    const refreshedProject = {
+      ...nextProject,
+      artifacts: {
+        ...nextProject.artifacts,
+        last_run_job_id: currentJobRemoved ? fallbackReviewJob.id : nextProject.artifacts.last_run_job_id,
+      },
+    };
+
+    await runReviewRefresh(
+      refreshedProject,
+      currentJobRemoved
+        ? "Deleted the current review run and refreshed the comparison."
+        : "Deleted a saved baseline run and refreshed the comparison.",
+    );
+  }
+
+  async function handleDeleteJob(job: JobStatusResponse) {
+    const project = getLoadedProject();
+    const isCurrentRun = project.artifacts.last_run_job_id === job.id;
+    const isBaselineRun = project.review_draft.baseline_job_id === job.id;
+    const impactNotes = [
+      isCurrentRun ? "current review run" : null,
+      isBaselineRun ? "saved baseline" : null,
+    ].filter(Boolean);
+    const confirmMessage = impactNotes.length
+      ? `Delete run ${shortJobId(job.id)}? This also clears the ${impactNotes.join(" and ")}.`
+      : `Delete run ${shortJobId(job.id)} and its stored artifacts?`;
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    setBusyAction(`delete-job:${job.id}`);
+    setActionError(null);
+    try {
+      await deleteProjectJob(project.id, job.id);
+      setPrunePreview((current) =>
+        current
+          ? {
+              ...current,
+              matched_count: Math.max(0, current.matched_count - 1),
+              jobs: current.jobs.filter((entry) => entry.id !== job.id),
+            }
+          : null,
+      );
+      const refreshedJobs = (await projectJobsQuery.refetch()).data?.jobs ?? [];
+      await reconcileProjectAfterRetention([job.id], refreshedJobs);
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setActivityMessage(`Deleted run ${shortJobId(job.id)} from this project.`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not delete the selected run.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handlePreviewPrune() {
+    const project = getLoadedProject();
+    const request = buildPruneRequest(true);
+    if (!request) {
+      return;
+    }
+
+    setBusyAction("preview-prune");
+    setActionError(null);
+    try {
+      const preview = await pruneProjectJobs(project.id, request);
+      setPrunePreview(preview);
+      setActivityMessage(
+        preview.matched_count
+          ? `Preview matched ${preview.matched_count} run(s) for this project.`
+          : "No runs match the current prune filters.",
+      );
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not preview prune results.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handlePruneRuns() {
+    const project = getLoadedProject();
+    if (!prunePreview) {
+      setActionError("Preview the prune set before deleting matched runs.");
+      return;
+    }
+    const request = buildPruneRequest(false);
+    if (!request) {
+      return;
+    }
+    if (!prunePreview.matched_count) {
+      setActionError("No runs match the current prune filters.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Delete ${prunePreview.matched_count} matched run(s) from this project and remove their stored artifacts?`,
+      )
+    ) {
+      return;
+    }
+
+    setBusyAction("prune");
+    setActionError(null);
+    try {
+      const response = await pruneProjectJobs(project.id, request);
+      setPrunePreview(null);
+      const removedJobIds = response.jobs.map((job) => job.id);
+      const refreshedJobs = (await projectJobsQuery.refetch()).data?.jobs ?? [];
+      await reconcileProjectAfterRetention(removedJobIds, refreshedJobs);
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setActivityMessage(
+        response.deleted_count
+          ? `Deleted ${response.deleted_count} run(s) from this project.`
+          : "No runs matched the current prune filters.",
+      );
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not prune project runs.");
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   return (
@@ -1856,6 +2240,17 @@ export default function ProjectWorkbenchPage() {
                   >
                     Pin latest run as baseline
                   </button>
+                  <button
+                    className="ghost-button"
+                    disabled={
+                      busyAction === "baseline" ||
+                      (!draft.review_draft.baseline_job_id && !draft.review_draft.baseline)
+                    }
+                    onClick={() => void handleClearBaseline()}
+                    type="button"
+                  >
+                    Clear baseline
+                  </button>
                 </div>
                 <span className="field-hint">
                   Record today’s latest completed run, then wait for the next completed run to diff against it.
@@ -2181,16 +2576,151 @@ export default function ProjectWorkbenchPage() {
 
             {reviewTab === "artifacts" ? (
               <div className="stack">
+                <div className="comparison-panel">
+                  <div className="section-heading">
+                    <div>
+                      <p className="eyebrow">Run retention</p>
+                      <h3>Clean up completed history without leaving the project.</h3>
+                    </div>
+                    <div className="meta-pill">
+                      {pruneableJobCount}
+                      <span>pruneable</span>
+                    </div>
+                  </div>
+                  <div className="field-grid field-grid-3">
+                    <div className="field">
+                      <span className="field-label">Statuses</span>
+                      <div className="mode-switch">
+                        {PRUNEABLE_JOB_STATUSES.map((status) => (
+                          <button
+                            aria-pressed={pruneStatuses.includes(status)}
+                            className={`mode-button${pruneStatuses.includes(status) ? " mode-button-active" : ""}`}
+                            key={status}
+                            onClick={() => togglePruneStatus(status)}
+                            type="button"
+                          >
+                            {status}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <label className="field">
+                      <span className="field-label">Completed before</span>
+                      <input
+                        className="text-input"
+                        onChange={(event) => setPruneCompletedBefore(event.target.value)}
+                        type="datetime-local"
+                        value={pruneCompletedBefore}
+                      />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">Limit</span>
+                      <input
+                        className="text-input"
+                        inputMode="numeric"
+                        min={1}
+                        max={500}
+                        onChange={(event) => setPruneLimit(event.target.value)}
+                        type="number"
+                        value={pruneLimit}
+                      />
+                    </label>
+                  </div>
+                  <div className="action-row">
+                    <button
+                      className="secondary-button"
+                      disabled={busyAction === "preview-prune"}
+                      onClick={() => void handlePreviewPrune()}
+                      type="button"
+                    >
+                      {busyAction === "preview-prune" ? "Previewing…" : "Preview matches"}
+                    </button>
+                    <button
+                      className="ghost-button danger-button"
+                      disabled={!prunePreview?.matched_count || busyAction === "prune"}
+                      onClick={() => void handlePruneRuns()}
+                      type="button"
+                    >
+                      {busyAction === "prune" ? "Deleting…" : "Delete matched runs"}
+                    </button>
+                  </div>
+                  <p className="field-hint">
+                    Prune actions stay project-scoped here and never touch runs from other saved
+                    workbenches.
+                  </p>
+                </div>
+
+                {prunePreview ? (
+                  <ReviewTable
+                    emptyCopy="No runs match the current prune filters."
+                    headings={["Job", "Status", "Completed", "Artifacts", "Error"]}
+                    rows={prunePreview.jobs.map((job) => [
+                      shortJobId(job.id),
+                      job.status,
+                      formatDateTime(job.completed_at),
+                      job.artifact_names.length,
+                      job.error ?? "—",
+                    ])}
+                  />
+                ) : null}
+
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">Run history</p>
+                    <h3>Inspect, filter, and retire saved runs.</h3>
+                  </div>
+                  <div className="tab-row" role="tablist" aria-label="Run history filters">
+                    {(
+                      [
+                        ["all", "All"],
+                        ["active", "Active"],
+                        ["completed", "Completed"],
+                        ["failed", "Failed"],
+                      ] as Array<[RunHistoryFilter, string]>
+                    ).map(([filter, label]) => (
+                      <button
+                        className={`tab-button${runHistoryFilter === filter ? " tab-button-active" : ""}`}
+                        key={filter}
+                        onClick={() => setRunHistoryFilter(filter)}
+                        role="tab"
+                        type="button"
+                      >
+                        {label}
+                        <span className="tab-count">
+                          {currentJobs.filter((job) => matchesRunHistoryFilter(job, filter)).length}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <ReviewTable
                   emptyCopy="No jobs for this project yet."
-                  headings={["Job", "Status", "Completed", "Active", "Artifacts", "Error"]}
-                  rows={currentJobs.map((job) => [
-                    job.id,
-                    job.status,
+                  headings={["Job", "Status", "Completed", "Findings", "Artifacts", "Actions"]}
+                  rows={runHistoryJobs.map((job) => [
+                    <div key={job.id}>
+                      <strong>{shortJobId(job.id)}</strong>
+                      <div className="field-hint">
+                        {job.id === currentReviewedJob?.id ? "Current review run" : "Saved run"}
+                        {job.id === draft.review_draft.baseline_job_id ? " • Baseline" : ""}
+                      </div>
+                    </div>,
+                    <span className={`status-chip ${statusTone(job.status)}`}>{job.status}</span>,
                     formatJobMoment(job.completed_at ?? job.started_at ?? job.created_at),
                     job.result_summary?.active_flagged_count ?? "—",
                     job.artifact_names.length,
-                    job.error ?? "—",
+                    isPruneableJobStatus(job.status) ? (
+                      <button
+                        aria-label={`Delete run ${shortJobId(job.id)}`}
+                        className="ghost-button danger-button"
+                        disabled={Boolean(busyAction)}
+                        onClick={() => void handleDeleteJob(job)}
+                        type="button"
+                      >
+                        {busyAction === `delete-job:${job.id}` ? "Deleting…" : "Delete"}
+                      </button>
+                    ) : (
+                      "—"
+                    ),
                   ])}
                 />
                 <div className="report-grid">
@@ -2351,6 +2881,10 @@ export default function ProjectWorkbenchPage() {
               <li>
                 <strong>Latest results</strong>
                 <span>{draft.artifacts.latest_results?.results.length ?? 0} entries</span>
+              </li>
+              <li>
+                <strong>Baseline</strong>
+                <span>{baselineDescription}</span>
               </li>
               <li>
                 <strong>Active findings</strong>

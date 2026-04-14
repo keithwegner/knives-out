@@ -231,6 +231,12 @@ pre {
   color: var(--ink);
 }
 
+.danger-button {
+  border-color: rgba(180, 35, 24, 0.24);
+  background: rgba(180, 35, 24, 0.08);
+  color: var(--danger);
+}
+
 .primary-button:hover,
 .secondary-button:hover,
 .ghost-button:hover,
@@ -523,6 +529,48 @@ pre {
   margin-top: 8px;
 }
 
+.summary-card-detail {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.comparison-card-grid {
+  margin-bottom: 16px;
+}
+
+.comparison-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(13, 108, 99, 0.18);
+  background:
+    linear-gradient(135deg, rgba(13, 108, 99, 0.08), rgba(255, 255, 255, 0.72)),
+    rgba(255, 255, 255, 0.62);
+}
+
+.comparison-panel h3 {
+  margin: 0;
+  font-size: 1.12rem;
+}
+
+.tab-count {
+  display: inline-flex;
+  min-width: 24px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(13, 108, 99, 0.12);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .report-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -669,6 +717,16 @@ pre {
   border-radius: 20px;
   border: 1px dashed var(--border);
   background: rgba(255, 255, 255, 0.54);
+}
+
+.connection-panel {
+  margin-top: 22px;
+}
+
+.connection-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 @media (max-width: 1180px) {

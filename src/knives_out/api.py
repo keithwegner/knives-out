@@ -10,6 +10,7 @@ from typing import Annotated
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from knives_out import __version__
@@ -197,11 +198,39 @@ def _validate_prune_statuses(statuses: list[ApiJobStatus]) -> None:
         )
 
 
+def _matching_job_records(
+    job_store: JobStore,
+    *,
+    statuses: list[ApiJobStatus],
+    completed_before: datetime | None,
+    limit: int,
+    project_id: str | None = None,
+) -> list[JobRecord]:
+    matched_records: list[JobRecord] = []
+    for record in job_store.list_job_records():
+        if project_id is not None and record.project_id != project_id:
+            continue
+        if record.status not in statuses:
+            continue
+        if completed_before is not None:
+            if record.completed_at is None or record.completed_at > completed_before:
+                continue
+        matched_records.append(record)
+        if len(matched_records) >= limit:
+            break
+    return matched_records
+
+
 def _default_frontend_dir() -> Path:
     configured = os.environ.get("KNIVES_OUT_FRONTEND_DIR")
     if configured:
         return Path(configured)
     return Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+
+def _cors_allowed_origins() -> list[str]:
+    configured = os.environ.get("KNIVES_OUT_CORS_ALLOW_ORIGINS", "")
+    return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
 
 def _default_source_for_mode(source_mode: ProjectSourceMode) -> SourcePayload | None:
@@ -477,6 +506,15 @@ def create_app(
         version=__version__,
         description="Local-first API for adversarial API testing from specs and observed traffic.",
     )
+    allowed_origins = _cors_allowed_origins()
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     root = data_dir or _default_data_dir()
     app.state.job_store = JobStore(root)
     app.state.project_store = ProjectStore(root)
@@ -680,6 +718,80 @@ def create_app(
             html_report=html_report,
         )
 
+    @app.post("/v1/projects/{project_id}/jobs/prune", response_model=PruneJobsResponse)
+    def prune_project_jobs(project_id: str, request: PruneJobsRequest) -> PruneJobsResponse:
+        project_store: ProjectStore = app.state.project_store
+        job_store: JobStore = app.state.job_store
+        try:
+            project_store.load_project(project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found.") from exc
+
+        _validate_prune_statuses(request.statuses)
+        matched_records = _matching_job_records(
+            job_store,
+            statuses=request.statuses,
+            completed_before=request.completed_before,
+            limit=request.limit,
+            project_id=project_id,
+        )
+
+        if request.dry_run:
+            jobs = [
+                JobRetentionEntry(
+                    id=record.id,
+                    status=record.status,
+                    created_at=record.created_at,
+                    completed_at=record.completed_at,
+                    base_url=record.base_url,
+                    attack_count=record.attack_count,
+                    error=record.error,
+                    result_available=job_store.result_exists(record.id),
+                    artifact_names=job_store.list_artifacts(record.id),
+                )
+                for record in matched_records
+            ]
+            return PruneJobsResponse(
+                dry_run=True,
+                matched_count=len(jobs),
+                deleted_count=0,
+                jobs=jobs,
+            )
+
+        deleted_jobs = [
+            _retention_entry(job_store.delete_job(record.id)) for record in matched_records
+        ]
+        return PruneJobsResponse(
+            dry_run=False,
+            matched_count=len(matched_records),
+            deleted_count=len(deleted_jobs),
+            jobs=deleted_jobs,
+        )
+
+    @app.delete("/v1/projects/{project_id}/jobs/{job_id}", response_model=DeleteJobResponse)
+    def delete_project_job(project_id: str, job_id: str) -> DeleteJobResponse:
+        project_store: ProjectStore = app.state.project_store
+        job_store: JobStore = app.state.job_store
+        try:
+            project_store.load_project(project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found.") from exc
+
+        try:
+            record = job_store.load_job(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found.") from exc
+        if record.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Job not found.")
+
+        try:
+            deleted = job_store.delete_job(job_id)
+        except ActiveJobDeletionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Active jobs cannot be deleted; wait for completion or failure first.",
+            ) from exc
+        return DeleteJobResponse(deleted=_retention_entry(deleted))
     @app.post("/v1/inspect", response_model=InspectResponse)
     def inspect_endpoint(request: InspectRequest) -> InspectResponse:
         result = inspect_source_inline(
@@ -857,16 +969,12 @@ def create_app(
         _validate_prune_statuses(request.statuses)
         job_store: JobStore = app.state.job_store
 
-        matched_records = []
-        for record in job_store.list_job_records():
-            if record.status not in request.statuses:
-                continue
-            if request.completed_before is not None:
-                if record.completed_at is None or record.completed_at > request.completed_before:
-                    continue
-            matched_records.append(record)
-            if len(matched_records) >= request.limit:
-                break
+        matched_records = _matching_job_records(
+            job_store,
+            statuses=request.statuses,
+            completed_before=request.completed_before,
+            limit=request.limit,
+        )
 
         if request.dry_run:
             jobs = [

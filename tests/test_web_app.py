@@ -88,6 +88,9 @@ def test_project_crud_endpoints_and_project_summaries(tmp_path) -> None:
                 "content": "type Query { ping: String! }",
             },
             "active_step": "generate",
+            "review_draft": {
+                "baseline_job_id": "job-baseline",
+            },
         },
     )
 
@@ -97,10 +100,12 @@ def test_project_crud_endpoints_and_project_summaries(tmp_path) -> None:
     assert patched_project["source_mode"] == "graphql"
     assert patched_project["active_step"] == "generate"
     assert patched_project["source"]["name"] == "schema.graphql"
+    assert patched_project["review_draft"]["baseline_job_id"] == "job-baseline"
 
     get_response = client.get(f"/v1/projects/{project_id}")
     assert get_response.status_code == 200
     assert get_response.json()["name"] == "GraphQL workbench"
+    assert get_response.json()["review_draft"]["baseline_job_id"] == "job-baseline"
 
     jobs_response = client.get(f"/v1/projects/{project_id}/jobs")
     assert jobs_response.status_code == 200
@@ -238,3 +243,19 @@ def test_frontend_routes_serve_index_assets_and_spa_fallback(tmp_path) -> None:
 
     missing_asset_response = client.get("/app/assets/missing.js")
     assert missing_asset_response.status_code == 404
+
+
+def test_create_app_applies_configured_cors_origins(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("KNIVES_OUT_CORS_ALLOW_ORIGINS", "https://keithwegner.github.io")
+    client = TestClient(create_app(data_dir=tmp_path))
+
+    response = client.options(
+        "/healthz",
+        headers={
+            "Origin": "https://keithwegner.github.io",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://keithwegner.github.io"

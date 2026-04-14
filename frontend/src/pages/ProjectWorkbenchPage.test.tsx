@@ -3,12 +3,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ProjectWorkbenchPage from "./ProjectWorkbenchPage";
+import type { ProjectJobsResponse, ProjectRecord, ProjectReviewResponse } from "../types";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-const baseProjectPayload = {
+const baseProjectPayload: ProjectRecord = {
   id: "project-1",
   name: "Workbench demo",
   source_mode: "openapi",
@@ -208,7 +209,7 @@ const baseProjectPayload = {
   },
 };
 
-const baseJobsPayload = {
+const baseJobsPayload: ProjectJobsResponse = {
   project_id: "project-1",
   jobs: [
     {
@@ -298,7 +299,11 @@ function createReviewResponse(options: {
   baselineJobId: string | null;
   waitingForNewRun: boolean;
   baselineUsed: boolean;
-}) {
+}): ProjectReviewResponse {
+  const latestResults = clone(baseProjectPayload.artifacts.latest_results!);
+  const latestSummary = clone(baseProjectPayload.artifacts.latest_summary!);
+  const latestVerification = clone(baseProjectPayload.artifacts.latest_verification!);
+
   return {
     project_id: "project-1",
     current_job_id: "job-2",
@@ -306,9 +311,9 @@ function createReviewResponse(options: {
     baseline_job_id: options.baselineJobId,
     baseline_used: options.baselineUsed,
     waiting_for_new_run: options.waitingForNewRun,
-    results: clone(baseProjectPayload.artifacts.latest_results),
+    results: latestResults,
     summary: {
-      ...clone(baseProjectPayload.artifacts.latest_summary),
+      ...latestSummary,
       baseline_used: options.baselineUsed,
       baseline_executed_at: options.baselineJobId ? "2026-04-13T19:01:00Z" : null,
       new_findings_count: options.baselineUsed ? 1 : 2,
@@ -317,18 +322,18 @@ function createReviewResponse(options: {
       persisting_deltas_count: options.baselineUsed ? 1 : 0,
     },
     verification: {
-      ...clone(baseProjectPayload.artifacts.latest_verification),
+      ...latestVerification,
       baseline_used: options.baselineUsed,
       new_findings_count: options.baselineUsed ? 1 : 2,
       resolved_findings_count: options.baselineUsed ? 1 : 0,
       persisting_findings_count: options.baselineUsed ? 1 : 0,
       new_findings: options.baselineUsed
-        ? [clone(baseProjectPayload.artifacts.latest_verification.new_findings[0])]
-        : clone(baseProjectPayload.artifacts.latest_verification.new_findings),
+        ? [clone(latestVerification.new_findings[0])]
+        : clone(latestVerification.new_findings),
       resolved_findings: options.baselineUsed
         ? [
             {
-              ...clone(baseProjectPayload.artifacts.latest_verification.new_findings[1]),
+              ...clone(latestVerification.new_findings[1]),
               change: "resolved",
             },
           ]
@@ -336,7 +341,7 @@ function createReviewResponse(options: {
       persisting_findings: options.baselineUsed
         ? [
             {
-              ...clone(baseProjectPayload.artifacts.latest_verification.new_findings[0]),
+              ...clone(latestVerification.new_findings[0]),
               change: "persisting",
               delta_changes: [
                 { field: "status", baseline: "401", current: "500" },
@@ -560,7 +565,7 @@ describe("ProjectWorkbenchPage", () => {
           if (body.baseline_mode === "external") {
             return Response.json({
               ...createReviewResponse({
-                baselineJobId: projectPayload.review_draft.baseline_job_id,
+                baselineJobId: projectPayload.review_draft.baseline_job_id ?? null,
                 waitingForNewRun: false,
                 baselineUsed: false,
               }),
@@ -585,7 +590,7 @@ describe("ProjectWorkbenchPage", () => {
             });
             if (baselineRefreshCount > 1) {
               reviewResponse.verification.current_findings = [
-                clone(baseProjectPayload.artifacts.latest_verification.new_findings[1]),
+                clone(baseProjectPayload.artifacts.latest_verification!.new_findings[1]),
               ];
               reviewResponse.verification.new_findings = [];
               reviewResponse.verification.persisting_findings = [];
@@ -811,5 +816,179 @@ describe("ProjectWorkbenchPage", () => {
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Close evidence" })).not.toBeInTheDocument(),
     );
+
+    expect(screen.queryByRole("button", { name: "Close evidence" })).not.toBeInTheDocument();
+  });
+
+  it("uses project-scoped retention actions from the artifacts panel", async () => {
+    let projectState = clone(baseProjectPayload);
+    projectState.review_draft = {
+      ...projectState.review_draft,
+      baseline_job_id: "job-1",
+    };
+    let jobs = clone(baseJobsPayload.jobs);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/v1/projects/project-1") && method === "GET") {
+        return Response.json(projectState);
+      }
+      if (url.endsWith("/v1/projects/project-1") && method === "PATCH") {
+        const patch = JSON.parse(String(init?.body ?? "{}"));
+        projectState = {
+          ...projectState,
+          ...patch,
+          review_draft: patch.review_draft ?? projectState.review_draft,
+          artifacts: patch.artifacts ?? projectState.artifacts,
+        };
+        return Response.json(projectState);
+      }
+      if (url.endsWith("/v1/projects/project-1/jobs") && method === "GET") {
+        return Response.json({ project_id: "project-1", jobs });
+      }
+      if (url.endsWith("/v1/projects/project-1/review") && method === "POST") {
+        return Response.json({
+          ...createReviewResponse({
+            baselineJobId: projectState.review_draft.baseline_job_id ?? null,
+            waitingForNewRun: false,
+            baselineUsed: projectState.review_draft.baseline_job_id === "job-1",
+          }),
+          baseline_job_id: projectState.review_draft.baseline_job_id,
+        });
+      }
+      if (url.endsWith("/v1/projects/project-1/jobs/job-1") && method === "DELETE") {
+        const baselineJob = jobs.find((job) => job.id === "job-1");
+        if (!baselineJob) {
+          throw new Error("Expected the baseline job to exist.");
+        }
+        jobs = jobs.filter((job) => job.id !== "job-1");
+        return Response.json({
+          deleted: {
+            id: baselineJob.id,
+            status: baselineJob.status,
+            created_at: baselineJob.created_at,
+            completed_at: baselineJob.completed_at,
+            base_url: baselineJob.base_url,
+            attack_count: baselineJob.attack_count,
+            error: null,
+            result_available: true,
+            artifact_names: baselineJob.artifact_names,
+          },
+        });
+      }
+      if (url.endsWith("/v1/projects/project-1/jobs/prune") && method === "POST") {
+        const currentJob = jobs.find((job) => job.id === "job-2");
+        const body = JSON.parse(String(init?.body ?? "{}")) as { dry_run?: boolean };
+        if (body.dry_run) {
+          return Response.json({
+            dry_run: true,
+            matched_count: currentJob ? 1 : 0,
+            deleted_count: 0,
+            jobs: currentJob
+              ? [
+                  {
+                    id: currentJob.id,
+                    status: currentJob.status,
+                    created_at: currentJob.created_at,
+                    completed_at: currentJob.completed_at,
+                    base_url: currentJob.base_url,
+                    attack_count: currentJob.attack_count,
+                    error: null,
+                    result_available: true,
+                    artifact_names: currentJob.artifact_names,
+                  },
+                ]
+              : [],
+          });
+        }
+        if (!currentJob) {
+          return Response.json({
+            dry_run: false,
+            matched_count: 0,
+            deleted_count: 0,
+            jobs: [],
+          });
+        }
+        jobs = [];
+        return Response.json({
+          dry_run: false,
+          matched_count: 1,
+          deleted_count: 1,
+          jobs: [
+            {
+              id: currentJob.id,
+              status: currentJob.status,
+              created_at: currentJob.created_at,
+              completed_at: currentJob.completed_at,
+              base_url: currentJob.base_url,
+              attack_count: currentJob.attack_count,
+              error: null,
+              result_available: true,
+              artifact_names: currentJob.artifact_names,
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/v1/jobs/job-2/artifacts/atk-login.json") && method === "GET") {
+        return new Response(
+          JSON.stringify({
+            attack: { id: "atk-login", name: "Login failure" },
+            request: {
+              method: "POST",
+              url: "https://example.com/login",
+              headers: { Authorization: "Bearer demo" },
+              query: {},
+              body: { present: true, kind: "json", excerpt: '{"username":"demo"}' },
+            },
+            response: {
+              status_code: 500,
+              error: "server exploded",
+              duration_ms: 23.4,
+              body_excerpt: '{"error":"boom"}',
+            },
+          }),
+        );
+      }
+      throw new Error(`Unhandled fetch for ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWorkbench();
+
+    await screen.findAllByText("Workbench demo");
+    const reviewPanels = screen.getAllByRole("tablist", { name: "Review panels" }).at(-1);
+    if (!reviewPanels) {
+      throw new Error("Expected the review tab list to render.");
+    }
+    fireEvent.click(within(reviewPanels).getByRole("tab", { name: /Artifacts/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete run job-1" }));
+
+    const baselineSelect = screen.getByLabelText("Pinned baseline run");
+    await waitFor(() => expect(baselineSelect).toHaveValue(""));
+
+    fireEvent.click(screen.getByRole("tab", { name: /Artifacts/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview matches" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete matched runs" })).toBeEnabled(),
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/v1/projects/project-1/jobs/prune") &&
+          JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")).dry_run === true,
+      ),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete matched runs" }));
+
+    expect(await screen.findByText("No jobs for this project yet.")).toBeInTheDocument();
+    expect(
+      screen.getByText("No current compared run is available for artifact inspection."),
+    ).toBeInTheDocument();
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
   });
 });
