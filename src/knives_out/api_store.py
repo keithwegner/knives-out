@@ -181,8 +181,7 @@ class JobStore:
         rmtree(self._job_dir_path_for_delete(job_id))
         return deleted
 
-    def job_status_response(self, job_id: str) -> JobStatusResponse:
-        record = self.load_job(job_id)
+    def _job_status_from_record(self, record: JobRecord) -> JobStatusResponse:
         return JobStatusResponse(
             id=record.id,
             kind=record.kind,
@@ -192,7 +191,26 @@ class JobStore:
             completed_at=record.completed_at,
             base_url=record.base_url,
             attack_count=record.attack_count,
+            project_id=record.project_id,
             error=record.error,
-            result_available=self.result_exists(job_id),
-            artifact_names=self.list_artifacts(job_id),
+            result_available=self.result_exists(record.id),
+            artifact_names=self.list_artifacts(record.id),
         )
+
+    def list_job_statuses(
+        self,
+        *,
+        project_id: str | None = None,
+        statuses: set[ApiJobStatus] | None = None,
+        limit: int | None = None,
+    ) -> list[JobStatusResponse]:
+        jobs: list[JobStatusResponse] = []
+        for record in self.list_jobs(statuses=statuses, limit=limit):
+            if project_id is not None and record.project_id != project_id:
+                continue
+            jobs.append(self._job_status_from_record(record))
+        return jobs
+
+    def job_status_response(self, job_id: str) -> JobStatusResponse:
+        record = self.load_job(job_id)
+        return self._job_status_from_record(record)

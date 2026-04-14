@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import os
 import threading
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
+import yaml
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from knives_out.api_models import (
     ApiJobStatus,
@@ -25,6 +27,13 @@ from knives_out.api_models import (
     JobRecord,
     JobRetentionEntry,
     JobStatusResponse,
+    ProjectCreateRequest,
+    ProjectJobsResponse,
+    ProjectListResponse,
+    ProjectRecord,
+    ProjectSourceMode,
+    ProjectSummaryResponse,
+    ProjectUpdateRequest,
     PromoteRequest,
     PromoteResponse,
     PruneJobsRequest,
@@ -32,6 +41,7 @@ from knives_out.api_models import (
     ReportRequest,
     ReportResponse,
     RunRequest,
+    SourcePayload,
     SummaryRequest,
     SummaryResponse,
     TriageRequest,
@@ -41,6 +51,7 @@ from knives_out.api_models import (
 )
 from knives_out.api_store import ActiveJobDeletionError, DeletedJob, JobNotFoundError, JobStore
 from knives_out.models import AttackResults, ResultsSummary
+from knives_out.project_store import ProjectNotFoundError, ProjectStore
 from knives_out.services import (
     InlineInput,
     discover_model_inline,
@@ -59,9 +70,9 @@ JOB_SUMMARY_TOP_LIMIT = 3
 
 
 def _finding_summary(finding) -> FindingSummaryResponse:
-    result = finding.result
+    result = finding.result if hasattr(finding, "result") else finding
     delta_changes = []
-    if finding.delta is not None:
+    if hasattr(finding, "delta") and finding.delta is not None:
         delta_changes = [
             DeltaChangeResponse(
                 field=change.field,
@@ -71,10 +82,14 @@ def _finding_summary(finding) -> FindingSummaryResponse:
             for change in finding.delta.changes
         ]
     return FindingSummaryResponse(
-        change=finding.change,
+        change=getattr(finding, "change", "current"),
         attack_id=result.attack_id,
         name=result.name,
         protocol="rest" if result.protocol == "openapi" else result.protocol,
+        kind=result.kind,
+        method=result.method,
+        path=result.path,
+        tags=list(result.tags),
         issue=result.issue,
         severity=result.severity,
         confidence=result.confidence,
@@ -96,6 +111,7 @@ def _verify_response(verification) -> VerifyResponse:
         resolved_findings_count=len(comparison.resolved_findings),
         persisting_findings_count=len(comparison.persisting_findings),
         suppressed_current_findings_count=len(comparison.suppressed_current_findings),
+        current_findings=[_finding_summary(finding) for finding in comparison.current_findings],
         failing_findings=[_finding_summary(finding) for finding in verification.failing_findings],
         new_findings=[_finding_summary(finding) for finding in comparison.new_findings],
         resolved_findings=[_finding_summary(finding) for finding in comparison.resolved_findings],
@@ -134,6 +150,7 @@ def _job_status_response(job_store: JobStore, record: JobRecord) -> JobStatusRes
         completed_at=record.completed_at,
         base_url=record.base_url,
         attack_count=record.attack_count,
+        project_id=record.project_id,
         error=record.error,
         result_available=result_available,
         artifact_names=job_store.list_artifacts(record.id),
@@ -167,6 +184,94 @@ def _validate_prune_statuses(statuses: list[ApiJobStatus]) -> None:
                 f"Received unsupported statuses: {joined}."
             ),
         )
+
+
+def _default_frontend_dir() -> Path:
+    configured = os.environ.get("KNIVES_OUT_FRONTEND_DIR")
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+
+def _default_source_for_mode(source_mode: ProjectSourceMode) -> SourcePayload | None:
+    if source_mode == ProjectSourceMode.openapi:
+        return SourcePayload(name="openapi.yaml", content="")
+    if source_mode == ProjectSourceMode.graphql:
+        return SourcePayload(name="schema.graphql", content="")
+    if source_mode == ProjectSourceMode.learned:
+        return SourcePayload(name="learned-model.json", content="")
+    return None
+
+
+def _project_source_name(project: ProjectRecord) -> str | None:
+    if project.source is not None:
+        return project.source.name
+    if project.discover_inputs:
+        return project.discover_inputs[0].name
+    return None
+
+
+def _project_summary(
+    project: ProjectRecord,
+    *,
+    jobs: list[JobStatusResponse],
+) -> ProjectSummaryResponse:
+    latest_job = jobs[0] if jobs else None
+    active_flagged_count = None
+    if project.artifacts.latest_summary is not None:
+        active_flagged_count = project.artifacts.latest_summary.active_flagged_count
+    return ProjectSummaryResponse(
+        id=project.id,
+        name=project.name,
+        source_mode=project.source_mode,
+        active_step=project.active_step,
+        created_at=project.created_at,
+        updated_at=project.updated_at,
+        source_name=_project_source_name(project),
+        job_count=len(jobs),
+        last_run_job_id=(
+            latest_job.id if latest_job is not None else project.artifacts.last_run_job_id
+        ),
+        last_run_status=latest_job.status if latest_job is not None else None,
+        last_run_at=(
+            latest_job.completed_at or latest_job.started_at or latest_job.created_at
+            if latest_job is not None
+            else None
+        ),
+        active_flagged_count=active_flagged_count,
+    )
+
+
+def _frontend_missing_response(frontend_root: Path) -> HTMLResponse:
+    return HTMLResponse(
+        (
+            '<!DOCTYPE html><html><body style="font-family:sans-serif;padding:24px;">'
+            "<h1>knives-out frontend not built</h1>"
+            f"<p>Expected frontend assets under <code>{frontend_root}</code>.</p>"
+            "<p>Run <code>npm install</code> and <code>npm run build</code> in "
+            "<code>frontend/</code>, then restart the API.</p>"
+            "</body></html>"
+        ),
+        status_code=503,
+    )
+
+
+def _frontend_response(frontend_root: Path, asset_path: str) -> FileResponse | HTMLResponse:
+    if not frontend_root.exists():
+        return _frontend_missing_response(frontend_root)
+
+    clean_path = asset_path.lstrip("/")
+    candidate = frontend_root / clean_path if clean_path else frontend_root / "index.html"
+    if candidate.exists() and candidate.is_file():
+        return FileResponse(candidate)
+
+    if clean_path and "." in Path(clean_path).name:
+        raise HTTPException(status_code=404, detail="Frontend asset not found.")
+
+    index_path = frontend_root / "index.html"
+    if not index_path.exists():
+        return _frontend_missing_response(frontend_root)
+    return FileResponse(index_path)
 
 
 def _run_job_worker(job_store: JobStore, job_id: str, request: RunRequest) -> None:
@@ -218,17 +323,138 @@ def _run_job_worker(job_store: JobStore, job_id: str, request: RunRequest) -> No
         job_store.update_job(failed)
 
 
-def create_app(*, data_dir: Path | None = None) -> FastAPI:
+def create_app(
+    *,
+    data_dir: Path | None = None,
+    frontend_dir: Path | None = None,
+) -> FastAPI:
     app = FastAPI(
         title="knives-out API",
         version="0.11.0",
         description="Local-first API for adversarial API testing from specs and observed traffic.",
     )
-    app.state.job_store = JobStore(data_dir or _default_data_dir())
+    root = data_dir or _default_data_dir()
+    app.state.job_store = JobStore(root)
+    app.state.project_store = ProjectStore(root)
+    app.state.frontend_dir = frontend_dir or _default_frontend_dir()
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/projects", response_model=ProjectListResponse)
+    def list_projects() -> ProjectListResponse:
+        project_store: ProjectStore = app.state.project_store
+        job_store: JobStore = app.state.job_store
+        jobs_by_project: dict[str, list[JobStatusResponse]] = defaultdict(list)
+        for record in job_store.list_job_records():
+            if record.project_id is None:
+                continue
+            jobs_by_project[record.project_id].append(_job_status_response(job_store, record))
+        return ProjectListResponse(
+            projects=[
+                _project_summary(project, jobs=jobs_by_project.get(project.id, []))
+                for project in project_store.list_projects()
+            ]
+        )
+
+    @app.post("/v1/projects", response_model=ProjectRecord)
+    def create_project(request: ProjectCreateRequest) -> ProjectRecord:
+        project_store: ProjectStore = app.state.project_store
+        now = datetime.now(UTC)
+        record = ProjectRecord(
+            name=request.name,
+            source_mode=request.source_mode,
+            active_step=request.active_step,
+            created_at=now,
+            updated_at=now,
+            graphql_endpoint=request.graphql_endpoint,
+            source=request.source or _default_source_for_mode(request.source_mode),
+            discover_inputs=request.discover_inputs,
+            inspect_draft=request.inspect_draft,
+            generate_draft=request.generate_draft,
+            run_draft=request.run_draft,
+            review_draft=request.review_draft,
+            artifacts=request.artifacts,
+        )
+        return project_store.create_project(record)
+
+    @app.get("/v1/projects/{project_id}", response_model=ProjectRecord)
+    def get_project(project_id: str) -> ProjectRecord:
+        project_store: ProjectStore = app.state.project_store
+        try:
+            return project_store.load_project(project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found.") from exc
+
+    @app.patch("/v1/projects/{project_id}", response_model=ProjectRecord)
+    def update_project(project_id: str, request: ProjectUpdateRequest) -> ProjectRecord:
+        project_store: ProjectStore = app.state.project_store
+        try:
+            current = project_store.load_project(project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found.") from exc
+
+        changes = request.model_dump(exclude_unset=True)
+        if (
+            "source_mode" in changes
+            and "source" not in changes
+            and current.source is None
+            and changes["source_mode"] != ProjectSourceMode.capture_upload
+        ):
+            changes["source"] = _default_source_for_mode(changes["source_mode"])
+
+        updated = ProjectRecord.model_validate(
+            {
+                **current.model_dump(mode="python"),
+                **changes,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        return project_store.update_project(updated)
+
+    @app.delete("/v1/projects/{project_id}")
+    def delete_project(project_id: str) -> dict[str, bool]:
+        project_store: ProjectStore = app.state.project_store
+        job_store: JobStore = app.state.job_store
+        try:
+            project_store.load_project(project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found.") from exc
+
+        for record in job_store.list_job_records():
+            if record.project_id != project_id:
+                continue
+            try:
+                job_store.delete_job(record.id)
+            except ActiveJobDeletionError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Projects with active jobs cannot be deleted; wait for those jobs to "
+                        "complete or fail first."
+                    ),
+                ) from exc
+        project_store.delete_project(project_id)
+        return {"deleted": True}
+
+    @app.get("/v1/projects/{project_id}/jobs", response_model=ProjectJobsResponse)
+    def list_project_jobs(project_id: str) -> ProjectJobsResponse:
+        project_store: ProjectStore = app.state.project_store
+        job_store: JobStore = app.state.job_store
+        try:
+            project_store.load_project(project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found.") from exc
+        jobs = [
+            _job_status_response(job_store, record)
+            for record in job_store.list_job_records()
+            if record.project_id == project_id
+        ]
+        return ProjectJobsResponse(
+            project_id=project_id,
+            jobs=jobs,
+        )
 
     @app.post("/v1/inspect", response_model=InspectResponse)
     def inspect_endpoint(request: InspectRequest) -> InspectResponse:
@@ -332,13 +558,32 @@ def create_app(*, data_dir: Path | None = None) -> FastAPI:
             request.results,
             existing_suppressions_yaml=request.existing_suppressions_yaml,
         )
-        return TriageResponse(suppressions=suppressions_file, added_count=added_count)
+        rendered_yaml = yaml.safe_dump(
+            suppressions_file.model_dump(mode="json", exclude_none=True),
+            sort_keys=False,
+            allow_unicode=False,
+        )
+        return TriageResponse(
+            suppressions=suppressions_file,
+            added_count=added_count,
+            rendered_yaml=rendered_yaml,
+        )
 
     @app.post("/v1/runs", response_model=JobStatusResponse)
     def create_run_job(request: RunRequest) -> JobStatusResponse:
         job_store: JobStore = app.state.job_store
+        project_store: ProjectStore = app.state.project_store
+        if request.project_id is not None:
+            try:
+                project_store.load_project(request.project_id)
+            except ProjectNotFoundError as exc:
+                raise HTTPException(status_code=404, detail="Project not found.") from exc
         record = job_store.create_job(
-            JobRecord(base_url=request.base_url, attack_count=len(request.suite.attacks))
+            JobRecord(
+                base_url=request.base_url,
+                attack_count=len(request.suite.attacks),
+                project_id=request.project_id,
+            )
         )
         thread = threading.Thread(
             target=_run_job_worker,
@@ -456,6 +701,16 @@ def create_app(*, data_dir: Path | None = None) -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Artifact not found.") from exc
         return FileResponse(path)
+
+    @app.get("/app", include_in_schema=False)
+    def serve_frontend_index():
+        frontend_root: Path = app.state.frontend_dir
+        return _frontend_response(frontend_root, "")
+
+    @app.get("/app/{asset_path:path}", include_in_schema=False)
+    def serve_frontend_asset(asset_path: str):
+        frontend_root: Path = app.state.frontend_dir
+        return _frontend_response(frontend_root, asset_path)
 
     return app
 
