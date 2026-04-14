@@ -6,10 +6,15 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
+node_modules/
 .knives-out-api/
 dist/
 build/
+coverage/
 .coverage
 htmlcov/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 .DS_Store
 *.log

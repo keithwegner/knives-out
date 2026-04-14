@@ -212,6 +212,45 @@ Generate a review-ready suppressions file for known findings:
 knives-out triage results.json --out .knives-out-ignore.yml
 ```
 
+## Web workbench
+
+`knives-out` also includes a local-first web workbench for saved projects, guided attack
+generation, background runs, and native review panels.
+
+For normal local use, build the frontend once and let the API serve it under `/app/`:
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+
+knives-out serve --host 127.0.0.1 --port 8787
+```
+
+Then open [http://127.0.0.1:8787/app/](http://127.0.0.1:8787/app/).
+
+By default the API looks for built frontend assets in `frontend/dist/`. Set
+`KNIVES_OUT_FRONTEND_DIR` if you want to serve a different build output directory.
+
+For frontend development, run the API and Vite side by side:
+
+```bash
+# terminal 1
+knives-out serve --host 127.0.0.1 --port 8787
+
+# terminal 2
+cd frontend
+npm install
+npm run dev -- --host 127.0.0.1
+```
+
+Then open [http://127.0.0.1:4173/app/](http://127.0.0.1:4173/app/). The Vite dev server proxies
+`/v1` and `/healthz` to the API on `127.0.0.1:8787`.
+
+The workbench is intentionally local-only and single-user in v1. Saved project drafts, jobs, and
+artifacts all live under `.knives-out-api/` unless you override `KNIVES_OUT_API_DATA_DIR`.
+
 ## Local API
 
 `knives-out` can also run as a local-first HTTP API instead of only as a CLI.
@@ -251,6 +290,15 @@ run has finished writing `result.json`, so local tools can triage recent runs wi
 the full result body first.
 Cleanup stays explicit and local-only: the delete and prune endpoints only remove completed or failed jobs,
 and active jobs must finish before they can be deleted.
+
+The web workbench also uses project resources for saved drafts and project-scoped run history:
+
+- `GET /v1/projects`
+- `POST /v1/projects`
+- `GET /v1/projects/{id}`
+- `PATCH /v1/projects/{id}`
+- `DELETE /v1/projects/{id}`
+- `GET /v1/projects/{id}/jobs`
 
 The API accepts uploaded source content and JSON artifacts in the request body. It does not expose
 arbitrary server-side file reads. FastAPI also publishes the schema at `/openapi.json` and the
