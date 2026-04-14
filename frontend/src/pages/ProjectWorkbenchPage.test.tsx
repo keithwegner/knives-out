@@ -231,6 +231,60 @@ describe("ProjectWorkbenchPage", () => {
     expect(within(table).queryByText("Order mismatch")).not.toBeInTheDocument();
   });
 
+  it("duplicates the active project and opens the copied workbench", async () => {
+    const duplicatedProject = {
+      ...structuredClone(projectPayload),
+      id: "project-2",
+      name: "Workbench demo copy",
+      created_at: "2026-04-13T20:06:00Z",
+      updated_at: "2026-04-13T20:06:00Z",
+      review_draft: {
+        ...structuredClone(projectPayload.review_draft),
+        baseline_job_id: null,
+      },
+      artifacts: {
+        ...structuredClone(projectPayload.artifacts),
+        last_run_job_id: null,
+      },
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/v1/projects/project-1") && method === "GET") {
+        return Response.json(projectPayload);
+      }
+      if (url.endsWith("/v1/projects/project-1/jobs") && method === "GET") {
+        return Response.json({ project_id: "project-1", jobs: [] });
+      }
+      if (url.endsWith("/v1/projects/project-1/duplicate") && method === "POST") {
+        return Response.json(duplicatedProject);
+      }
+      if (url.endsWith("/v1/projects/project-2") && method === "GET") {
+        return Response.json(duplicatedProject);
+      }
+      if (url.endsWith("/v1/projects/project-2/jobs") && method === "GET") {
+        return Response.json({ project_id: "project-2", jobs: [] });
+      }
+      throw new Error(`Unhandled fetch for ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWorkbench();
+
+    await screen.findByText("Workbench demo");
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate project" }));
+
+    expect(await screen.findByText("Workbench demo copy")).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          String(url).endsWith("/v1/projects/project-1/duplicate") &&
+          ((init as RequestInit | undefined)?.method ?? "GET") === "POST",
+      ),
+    ).toBe(true);
+  });
+
   it("loads and clears a saved run baseline from the review workspace", async () => {
     let projectState = structuredClone(projectPayload);
     projectState.artifacts.last_run_job_id = "job-current";

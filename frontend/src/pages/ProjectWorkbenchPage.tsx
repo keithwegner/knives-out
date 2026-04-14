@@ -1,6 +1,13 @@
-import { useDeferredValue, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  startTransition,
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../apiConfig";
 import ApiConnectionPanel from "../components/ApiConnectionPanel";
 import CodeEditor from "../components/CodeEditor";
@@ -8,6 +15,7 @@ import {
   createRun,
   deleteProjectJob,
   discoverModel,
+  duplicateProject,
   generateSuite,
   getJobResult,
   getProject,
@@ -271,6 +279,7 @@ function StepRail({
 
 export default function ProjectWorkbenchPage() {
   const { projectId } = useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<ProjectRecord | null>(null);
   const [apiBaseUrl, setApiBaseUrl] = useState(() => getApiBaseUrl());
@@ -1124,6 +1133,27 @@ export default function ProjectWorkbenchPage() {
     }
   }
 
+  async function handleDuplicateProject() {
+    let project = getLoadedProject();
+    setBusyAction("duplicate-project");
+    setActionError(null);
+    try {
+      if (hasPendingSave || saveProjectMutation.isPending) {
+        project = await saveProjectMutation.mutateAsync(project);
+      }
+      const duplicated = await duplicateProject(project.id);
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
+      setActivityMessage("Project duplicated. Opening the copy.");
+      startTransition(() => {
+        navigate(`/projects/${duplicated.id}`);
+      });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not duplicate the project.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   return (
     <main className="workbench-shell">
       <header className="workbench-header">
@@ -1136,6 +1166,14 @@ export default function ProjectWorkbenchPage() {
           </p>
         </div>
         <div className="header-actions">
+          <button
+            className="secondary-button"
+            onClick={() => void handleDuplicateProject()}
+            type="button"
+            disabled={busyAction === "duplicate-project" || saveProjectMutation.isPending}
+          >
+            {busyAction === "duplicate-project" ? "Duplicating…" : "Duplicate project"}
+          </button>
           <Link className="ghost-button" to="/">
             Back to projects
           </Link>

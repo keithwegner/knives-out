@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import HomePage from "./HomePage";
@@ -56,6 +56,7 @@ describe("HomePage", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
   });
 
@@ -67,6 +68,139 @@ describe("HomePage", () => {
     expect(screen.getByText("storefront.yaml")).toBeInTheDocument();
     expect(screen.getByText("completed")).toBeInTheDocument();
     expect(screen.getByText("Open")).toBeInTheDocument();
+  });
+
+  it("duplicates a saved project from the dashboard", async () => {
+    let duplicated = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/healthz")) {
+          return Response.json({ status: "ok" });
+        }
+        if (url.endsWith("/v1/projects") && method === "GET") {
+          return Response.json({
+            projects: duplicated
+              ? [
+                  {
+                    id: "project-2",
+                    name: "Storefront triage copy",
+                    source_mode: "openapi",
+                    active_step: "review",
+                    created_at: "2026-04-13T20:06:00Z",
+                    updated_at: "2026-04-13T20:06:00Z",
+                    source_name: "storefront.yaml",
+                    job_count: 0,
+                    last_run_job_id: null,
+                    last_run_status: null,
+                    last_run_at: null,
+                    active_flagged_count: 3,
+                  },
+                  {
+                    id: "project-1",
+                    name: "Storefront triage",
+                    source_mode: "openapi",
+                    active_step: "review",
+                    created_at: "2026-04-13T20:00:00Z",
+                    updated_at: "2026-04-13T20:05:00Z",
+                    source_name: "storefront.yaml",
+                    job_count: 2,
+                    last_run_job_id: "job-1",
+                    last_run_status: "completed",
+                    last_run_at: "2026-04-13T20:06:00Z",
+                    active_flagged_count: 3,
+                  },
+                ]
+              : [
+                  {
+                    id: "project-1",
+                    name: "Storefront triage",
+                    source_mode: "openapi",
+                    active_step: "review",
+                    created_at: "2026-04-13T20:00:00Z",
+                    updated_at: "2026-04-13T20:05:00Z",
+                    source_name: "storefront.yaml",
+                    job_count: 2,
+                    last_run_job_id: "job-1",
+                    last_run_status: "completed",
+                    last_run_at: "2026-04-13T20:06:00Z",
+                    active_flagged_count: 3,
+                  },
+                ],
+          });
+        }
+        if (url.endsWith("/v1/projects/project-1/duplicate") && method === "POST") {
+          duplicated = true;
+          return Response.json({
+            id: "project-2",
+            name: "Storefront triage copy",
+            source_mode: "openapi",
+            active_step: "review",
+            created_at: "2026-04-13T20:06:00Z",
+            updated_at: "2026-04-13T20:06:00Z",
+            graphql_endpoint: "/graphql",
+            source: { name: "storefront.yaml", content: "openapi: 3.0.3" },
+            discover_inputs: [],
+            inspect_draft: { tag: [], exclude_tag: [], path: [], exclude_path: [] },
+            generate_draft: {
+              operation: [],
+              exclude_operation: [],
+              method: [],
+              exclude_method: [],
+              kind: [],
+              exclude_kind: [],
+              tag: [],
+              exclude_tag: [],
+              path: [],
+              exclude_path: [],
+              pack_names: [],
+              auto_workflows: false,
+              workflow_pack_names: [],
+            },
+            run_draft: {
+              base_url: "",
+              headers: {},
+              query: {},
+              timeout: 10,
+              store_artifacts: true,
+              auth_plugin_names: [],
+              auth_config_yaml: null,
+              auth_profile_names: [],
+              profile_file_yaml: null,
+              profile_names: [],
+              operation: [],
+              exclude_operation: [],
+              method: [],
+              exclude_method: [],
+              kind: [],
+              exclude_kind: [],
+              tag: [],
+              exclude_tag: [],
+              path: [],
+              exclude_path: [],
+            },
+            review_draft: {
+              baseline_job_id: null,
+              baseline: null,
+              suppressions_yaml: null,
+              min_severity: "high",
+              min_confidence: "medium",
+            },
+            artifacts: {},
+          });
+        }
+        throw new Error(`Unhandled fetch for ${method} ${url}`);
+      }),
+    );
+
+    renderHomePage();
+
+    await screen.findByText("Storefront triage");
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+
+    expect(await screen.findByText("Storefront triage copy")).toBeInTheDocument();
   });
 
   it("saves a custom API endpoint", async () => {

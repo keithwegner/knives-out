@@ -391,6 +391,10 @@ class ProjectCreateRequest(BaseModel):
     artifacts: ProjectArtifacts = Field(default_factory=ProjectArtifacts)
 
 
+class ProjectDuplicateRequest(BaseModel):
+    name: str | None = None
+
+
 class ProjectUpdateRequest(BaseModel):
     name: str | None = None
     source_mode: ProjectSourceMode | None = None
