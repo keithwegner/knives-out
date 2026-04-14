@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "knives-out"
-version = "0.1.0"
+version = "0.2.0"
 description = "Adversarial testing for APIs from OpenAPI and GraphQL schemas."
 readme = "README.md"
 requires-python = ">=3.12"
