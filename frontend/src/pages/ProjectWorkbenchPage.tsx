@@ -1,6 +1,8 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
+import { getApiBaseUrl, persistApiBaseUrl } from "../apiConfig";
+import ApiConnectionPanel from "../components/ApiConnectionPanel";
 import CodeEditor from "../components/CodeEditor";
 import {
   createRun,
@@ -251,6 +253,7 @@ export default function ProjectWorkbenchPage() {
   const { projectId } = useParams();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<ProjectRecord | null>(null);
+  const [apiBaseUrl, setApiBaseUrl] = useState(() => getApiBaseUrl());
   const [hasPendingSave, setHasPendingSave] = useState(false);
   const [sourceText, setSourceText] = useState("");
   const [headersText, setHeadersText] = useState("{}");
@@ -273,16 +276,18 @@ export default function ProjectWorkbenchPage() {
   const deferredReviewFilter = useDeferredValue(reviewFilter.trim().toLowerCase());
 
   const projectQuery = useQuery({
-    queryKey: ["project", projectId],
+    queryKey: ["project", projectId, apiBaseUrl],
     queryFn: () => getProject(projectId!),
     enabled: Boolean(projectId),
+    retry: false,
   });
 
   const projectJobsQuery = useQuery({
-    queryKey: ["projectJobs", projectId],
+    queryKey: ["projectJobs", projectId, apiBaseUrl],
     queryFn: () => listProjectJobs(projectId!),
     enabled: Boolean(projectId),
     refetchInterval: trackedJobId ? 1500 : false,
+    retry: false,
   });
 
   const saveProjectMutation = useMutation({
@@ -324,6 +329,13 @@ export default function ProjectWorkbenchPage() {
       throw new Error("Project is not loaded yet.");
     }
     return draft;
+  }
+
+  function applyApiBase(nextValue: string) {
+    const normalized = persistApiBaseUrl(nextValue);
+    setApiBaseUrl(normalized);
+    setActionError(null);
+    void queryClient.invalidateQueries();
   }
 
   useEffect(() => {
@@ -397,6 +409,35 @@ export default function ProjectWorkbenchPage() {
       <main className="shell">
         <section className="panel">
           <p className="empty-copy">Missing project id.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (projectQuery.isError) {
+    const errorMessage =
+      projectQuery.error instanceof Error ? projectQuery.error.message : "Could not load the project.";
+    return (
+      <main className="shell">
+        <section className="panel stack">
+          <div>
+            <p className="eyebrow">Workbench unavailable</p>
+            <h2>Could not load this project</h2>
+            <p className="hero-body">{errorMessage}</p>
+          </div>
+          <ApiConnectionPanel
+            apiBaseUrl={apiBaseUrl}
+            description="If you are using GitHub Pages or another static host, point the workbench at a reachable knives-out API and try again."
+            onApply={applyApiBase}
+            statusLabel="retry setup"
+            statusTone="failed"
+            title="Reconnect the workbench"
+          />
+          <div className="action-row">
+            <Link className="ghost-button" to="/">
+              Back to projects
+            </Link>
+          </div>
         </section>
       </main>
     );
