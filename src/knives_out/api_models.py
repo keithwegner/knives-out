@@ -339,6 +339,7 @@ class ProjectRunDraft(BaseModel):
 
 
 class ProjectReviewDraft(BaseModel):
+    baseline_job_id: str | None = None
     baseline: AttackResults | None = None
     suppressions_yaml: str | None = None
     min_severity: str = "high"

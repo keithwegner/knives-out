@@ -88,6 +88,9 @@ def test_project_crud_endpoints_and_project_summaries(tmp_path) -> None:
                 "content": "type Query { ping: String! }",
             },
             "active_step": "generate",
+            "review_draft": {
+                "baseline_job_id": "job-baseline",
+            },
         },
     )
 
@@ -97,10 +100,12 @@ def test_project_crud_endpoints_and_project_summaries(tmp_path) -> None:
     assert patched_project["source_mode"] == "graphql"
     assert patched_project["active_step"] == "generate"
     assert patched_project["source"]["name"] == "schema.graphql"
+    assert patched_project["review_draft"]["baseline_job_id"] == "job-baseline"
 
     get_response = client.get(f"/v1/projects/{project_id}")
     assert get_response.status_code == 200
     assert get_response.json()["name"] == "GraphQL workbench"
+    assert get_response.json()["review_draft"]["baseline_job_id"] == "job-baseline"
 
     jobs_response = client.get(f"/v1/projects/{project_id}/jobs")
     assert jobs_response.status_code == 200

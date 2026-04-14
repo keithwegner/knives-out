@@ -21,6 +21,7 @@ import type {
   ApiJobStatus,
   AttackResults,
   AttackSuite,
+  FindingSummaryResponse,
   JobStatusResponse,
   ProjectRecord,
   ProjectReviewDraft,
@@ -37,6 +38,8 @@ type ReviewTab =
   | "artifacts"
   | "suppressions"
   | "promote";
+
+type FindingScope = "current" | "new" | "resolved" | "persisting";
 
 const STEP_ORDER: ProjectStep[] = ["source", "inspect", "generate", "run", "review"];
 
@@ -66,6 +69,61 @@ function formatList(values: string[]): string {
 
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) {
+    return "—";
+  }
+  return new Date(value).toLocaleString();
+}
+
+function jobTimestamp(job: JobStatusResponse): string {
+  return job.completed_at ?? job.started_at ?? job.created_at;
+}
+
+function shortJobId(jobId: string | null | undefined): string {
+  return jobId ? jobId.slice(0, 8) : "manual";
+}
+
+function formatJobOptionLabel(job: JobStatusResponse): string {
+  const flaggedCount = job.result_summary?.active_flagged_count ?? 0;
+  return `${shortJobId(job.id)} • ${formatDateTime(jobTimestamp(job))} • ${flaggedCount} flagged`;
+}
+
+function filterFindings(findings: FindingSummaryResponse[], filter: string) {
+  return findings.filter((finding) => {
+    if (!filter) {
+      return true;
+    }
+    const haystack = [
+      finding.attack_id,
+      finding.name,
+      finding.kind,
+      finding.issue ?? "",
+      finding.method,
+      finding.path ?? "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(filter);
+  });
+}
+
+async function analyzeReviewArtifacts(results: AttackResults, reviewDraft: ProjectReviewDraft) {
+  const [summary, verification, markdownReport, htmlReport] = await Promise.all([
+    summarizeResults(results, reviewDraft),
+    verifyResults(results, reviewDraft),
+    renderReport(results, reviewDraft, "markdown"),
+    renderReport(results, reviewDraft, "html"),
+  ]);
+
+  return {
+    latest_summary: summary,
+    latest_verification: verification,
+    latest_markdown_report: markdownReport.content,
+    latest_html_report: htmlReport.content,
+  };
 }
 
 function buildProjectPatch(project: ProjectRecord) {
@@ -207,6 +265,7 @@ export default function ProjectWorkbenchPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [activityMessage, setActivityMessage] = useState<string | null>(null);
   const [reviewTab, setReviewTab] = useState<ReviewTab>("summary");
+  const [findingScope, setFindingScope] = useState<FindingScope>("current");
   const [reviewFilter, setReviewFilter] = useState("");
   const [trackedJobId, setTrackedJobId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -311,12 +370,7 @@ export default function ProjectWorkbenchPage() {
       try {
         const results = await getJobResult(job.id);
         const reviewDraft: ProjectReviewDraft = draft.review_draft;
-        const [summary, verification, markdownReport, htmlReport] = await Promise.all([
-          summarizeResults(results, reviewDraft),
-          verifyResults(results, reviewDraft),
-          renderReport(results, reviewDraft, "markdown"),
-          renderReport(results, reviewDraft, "html"),
-        ]);
+        const reviewArtifacts = await analyzeReviewArtifacts(results, reviewDraft);
         applyDraftUpdate((current) => ({
           ...current,
           active_step: "review",
@@ -324,10 +378,7 @@ export default function ProjectWorkbenchPage() {
             ...current.artifacts,
             last_run_job_id: job.id,
             latest_results: results,
-            latest_summary: summary,
-            latest_verification: verification,
-            latest_markdown_report: markdownReport.content,
-            latest_html_report: htmlReport.content,
+            ...reviewArtifacts,
           },
         }));
         setActivityMessage("Run finished and the review workspace is up to date.");
@@ -363,23 +414,29 @@ export default function ProjectWorkbenchPage() {
 
   const currentJobs = projectJobsQuery.data?.jobs ?? [];
   const latestJob = currentJobs[0];
-  const activeFindings =
-    draft.artifacts.latest_verification?.current_findings.filter((finding) => {
-      if (!deferredReviewFilter) {
-        return true;
-      }
-      const haystack = [
-        finding.attack_id,
-        finding.name,
-        finding.kind,
-        finding.issue ?? "",
-        finding.method,
-        finding.path ?? "",
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(deferredReviewFilter);
-    }) ?? [];
+  const currentRunJob =
+    currentJobs.find((job) => job.id === draft.artifacts.last_run_job_id) ?? latestJob ?? null;
+  const baselineCandidates = currentJobs.filter(
+    (job) => job.status === "completed" && job.result_available && job.id !== currentRunJob?.id,
+  );
+  const selectedBaselineJob =
+    currentJobs.find((job) => job.id === draft.review_draft.baseline_job_id) ?? null;
+  const reviewVerification = draft.artifacts.latest_verification;
+  const findingBuckets = {
+    current: filterFindings(reviewVerification?.current_findings ?? [], deferredReviewFilter),
+    new: filterFindings(reviewVerification?.new_findings ?? [], deferredReviewFilter),
+    resolved: filterFindings(reviewVerification?.resolved_findings ?? [], deferredReviewFilter),
+    persisting: filterFindings(
+      reviewVerification?.persisting_findings ?? [],
+      deferredReviewFilter,
+    ),
+  };
+  const findingScopeRows = findingBuckets[findingScope];
+  const baselineDescription = selectedBaselineJob
+    ? `Run ${shortJobId(selectedBaselineJob.id)} • ${formatDateTime(jobTimestamp(selectedBaselineJob))}`
+    : draft.review_draft.baseline
+      ? `Manual baseline • ${formatDateTime(draft.review_draft.baseline.executed_at)}`
+      : "No comparison baseline selected";
 
   async function handleSourceUpload(files: FileList | null) {
     if (!files?.length) {
@@ -556,25 +613,98 @@ export default function ProjectWorkbenchPage() {
     setBusyAction("refresh-review");
     setActionError(null);
     try {
-      const [summary, verification, markdownReport, htmlReport] = await Promise.all([
-        summarizeResults(project.artifacts.latest_results, project.review_draft),
-        verifyResults(project.artifacts.latest_results, project.review_draft),
-        renderReport(project.artifacts.latest_results, project.review_draft, "markdown"),
-        renderReport(project.artifacts.latest_results, project.review_draft, "html"),
-      ]);
+      const reviewArtifacts = await analyzeReviewArtifacts(
+        project.artifacts.latest_results,
+        project.review_draft,
+      );
       applyDraftUpdate((current) => ({
         ...current,
         artifacts: {
           ...current.artifacts,
-          latest_summary: summary,
-          latest_verification: verification,
-          latest_markdown_report: markdownReport.content,
-          latest_html_report: htmlReport.content,
+          ...reviewArtifacts,
         },
       }));
       setActivityMessage("Review panels refreshed.");
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Could not refresh review panels.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleBaselineSelection(jobId: string) {
+    if (!jobId) {
+      await handleClearBaseline();
+      return;
+    }
+
+    const project = getLoadedProject();
+    if (project.review_draft.baseline_job_id === jobId && project.review_draft.baseline) {
+      return;
+    }
+
+    setBusyAction("baseline");
+    setActionError(null);
+    try {
+      const baseline = await getJobResult(jobId);
+      const nextReviewDraft: ProjectReviewDraft = {
+        ...project.review_draft,
+        baseline_job_id: jobId,
+        baseline,
+      };
+      setBaselineText(formatJson(baseline));
+      setBaselineError(null);
+      const reviewArtifacts = project.artifacts.latest_results
+        ? await analyzeReviewArtifacts(project.artifacts.latest_results, nextReviewDraft)
+        : null;
+      applyDraftUpdate((current) => ({
+        ...current,
+        review_draft: nextReviewDraft,
+        artifacts: reviewArtifacts
+          ? {
+              ...current.artifacts,
+              ...reviewArtifacts,
+            }
+          : current.artifacts,
+      }));
+      setActivityMessage(`Using run ${shortJobId(jobId)} as the comparison baseline.`);
+      setReviewTab("summary");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not load the selected run.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleClearBaseline() {
+    const project = getLoadedProject();
+    setBusyAction("baseline");
+    setActionError(null);
+    try {
+      const nextReviewDraft: ProjectReviewDraft = {
+        ...project.review_draft,
+        baseline_job_id: null,
+        baseline: null,
+      };
+      setBaselineText("");
+      setBaselineError(null);
+      const reviewArtifacts = project.artifacts.latest_results
+        ? await analyzeReviewArtifacts(project.artifacts.latest_results, nextReviewDraft)
+        : null;
+      applyDraftUpdate((current) => ({
+        ...current,
+        review_draft: nextReviewDraft,
+        artifacts: reviewArtifacts
+          ? {
+              ...current.artifacts,
+              ...reviewArtifacts,
+            }
+          : current.artifacts,
+      }));
+      setActivityMessage("Comparison baseline cleared.");
+      setReviewTab("summary");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Could not clear the baseline.");
     } finally {
       setBusyAction(null);
     }
@@ -1310,10 +1440,96 @@ export default function ProjectWorkbenchPage() {
                 />
               </label>
             </div>
+            <div className="summary-card-grid comparison-card-grid">
+              <div className="summary-card">
+                <span>Current run</span>
+                <strong>{currentRunJob ? shortJobId(currentRunJob.id) : "—"}</strong>
+                <p className="summary-card-detail">
+                  {currentRunJob ? formatDateTime(jobTimestamp(currentRunJob)) : "No completed run yet"}
+                </p>
+              </div>
+              <div className="summary-card">
+                <span>Baseline</span>
+                <strong>
+                  {selectedBaselineJob
+                    ? shortJobId(selectedBaselineJob.id)
+                    : draft.review_draft.baseline
+                      ? "manual"
+                      : "none"}
+                </strong>
+                <p className="summary-card-detail">{baselineDescription}</p>
+              </div>
+              <div className="summary-card">
+                <span>New findings</span>
+                <strong>{reviewVerification?.new_findings_count ?? 0}</strong>
+              </div>
+              <div className="summary-card">
+                <span>Resolved</span>
+                <strong>{reviewVerification?.resolved_findings_count ?? 0}</strong>
+              </div>
+              <div className="summary-card">
+                <span>Persisting</span>
+                <strong>{reviewVerification?.persisting_findings_count ?? 0}</strong>
+              </div>
+              <div className="summary-card">
+                <span>Mode</span>
+                <strong>
+                  {draft.artifacts.latest_summary?.baseline_used ? "comparison" : "standalone"}
+                </strong>
+              </div>
+            </div>
+            <div className="field-grid field-grid-2">
+              <label className="field">
+                <span className="field-label">Baseline run</span>
+                <select
+                  aria-label="Baseline run"
+                  className="text-input"
+                  disabled={busyAction === "baseline" || !baselineCandidates.length}
+                  onChange={(event) => void handleBaselineSelection(event.target.value)}
+                  value={draft.review_draft.baseline_job_id ?? ""}
+                >
+                  <option value="">No saved run selected</option>
+                  {baselineCandidates.map((job) => (
+                    <option key={job.id} value={job.id}>
+                      {formatJobOptionLabel(job)}
+                    </option>
+                  ))}
+                </select>
+                <span className="field-hint">
+                  {baselineCandidates.length
+                    ? "Load any prior completed project run as the regression baseline."
+                    : "Complete at least two runs in this project to compare them here."}
+                </span>
+              </label>
+              <section className="comparison-panel">
+                <div>
+                  <p className="eyebrow">Compare mode</p>
+                  <h3>{selectedBaselineJob ? "Saved run loaded" : "Manual JSON still supported"}</h3>
+                  <p className="hero-body">
+                    {draft.artifacts.latest_summary?.baseline_used
+                      ? "Summary, verification, reports, suppressions, and promotion are using the selected baseline."
+                      : "Review panels are showing the latest run without a comparison baseline."}
+                  </p>
+                </div>
+                <div className="action-row">
+                  <button
+                    className="ghost-button"
+                    disabled={
+                      busyAction === "baseline" ||
+                      (!draft.review_draft.baseline_job_id && !draft.review_draft.baseline)
+                    }
+                    onClick={() => void handleClearBaseline()}
+                    type="button"
+                  >
+                    Clear baseline
+                  </button>
+                </div>
+              </section>
+            </div>
             <CodeEditor
               error={baselineError}
               height={220}
-              hint="Optional baseline results JSON for regression-aware review."
+              hint="Advanced override. Picking a saved run above is the normal way to compare runs."
               label="Baseline results JSON"
               language="json"
               onChange={(value) => {
@@ -1322,7 +1538,11 @@ export default function ProjectWorkbenchPage() {
                   setBaselineError(null);
                   applyDraftUpdate((current) => ({
                     ...current,
-                    review_draft: { ...current.review_draft, baseline: null },
+                    review_draft: {
+                      ...current.review_draft,
+                      baseline_job_id: null,
+                      baseline: null,
+                    },
                   }));
                   return;
                 }
@@ -1331,7 +1551,11 @@ export default function ProjectWorkbenchPage() {
                   setBaselineError(null);
                   applyDraftUpdate((current) => ({
                     ...current,
-                    review_draft: { ...current.review_draft, baseline: parsed },
+                    review_draft: {
+                      ...current.review_draft,
+                      baseline_job_id: null,
+                      baseline: parsed,
+                    },
                   }));
                 } catch (error) {
                   setBaselineError(error instanceof Error ? error.message : "Invalid JSON.");
@@ -1410,26 +1634,49 @@ export default function ProjectWorkbenchPage() {
             ) : null}
 
             {reviewTab === "findings" ? (
-              <ReviewTable
-                emptyCopy="No active findings match the current filter."
-                headings={["Attack", "Kind", "Issue", "Severity", "Confidence", "Status", "Path"]}
-                rows={activeFindings.map((finding) => [
-                  finding.name,
-                  finding.kind,
-                  finding.issue ?? "—",
-                  finding.severity,
-                  finding.confidence,
-                  finding.status_code ?? "—",
-                  finding.path ?? "—",
-                ])}
-              />
+              <div className="stack">
+                <div className="tab-row" role="tablist" aria-label="Finding scopes">
+                  {(
+                    [
+                      ["current", "Current", reviewVerification?.current_findings_count ?? 0],
+                      ["new", "New", reviewVerification?.new_findings_count ?? 0],
+                      ["resolved", "Resolved", reviewVerification?.resolved_findings_count ?? 0],
+                      ["persisting", "Persisting", reviewVerification?.persisting_findings_count ?? 0],
+                    ] as Array<[FindingScope, string, number]>
+                  ).map(([scope, label, count]) => (
+                    <button
+                      className={`tab-button${findingScope === scope ? " tab-button-active" : ""}`}
+                      key={scope}
+                      onClick={() => setFindingScope(scope)}
+                      role="tab"
+                      type="button"
+                    >
+                      {label}
+                      <span className="tab-count">{count}</span>
+                    </button>
+                  ))}
+                </div>
+                <ReviewTable
+                  emptyCopy={`No ${findingScope} findings match the current filter.`}
+                  headings={["Attack", "Kind", "Issue", "Severity", "Confidence", "Status", "Path"]}
+                  rows={findingScopeRows.map((finding) => [
+                    finding.name,
+                    finding.kind,
+                    finding.issue ?? "—",
+                    finding.severity,
+                    finding.confidence,
+                    finding.status_code ?? "—",
+                    finding.path ?? "—",
+                  ])}
+                />
+              </div>
             ) : null}
 
             {reviewTab === "deltas" ? (
               <ReviewTable
                 emptyCopy="No persisting deltas are available."
                 headings={["Attack", "Issue", "Change summary", "Method", "Path"]}
-                rows={(draft.artifacts.latest_verification?.persisting_findings ?? []).map((finding) => [
+                rows={findingBuckets.persisting.map((finding) => [
                   finding.name,
                   finding.issue ?? "—",
                   finding.delta_changes.length
@@ -1486,16 +1733,19 @@ export default function ProjectWorkbenchPage() {
                   ])}
                 />
                 <ul className="artifact-list">
-                  {(latestJob?.artifact_names ?? []).length ? (
-                    latestJob?.artifact_names.map((artifactName) => (
+                  {(currentRunJob?.artifact_names ?? []).length ? (
+                    currentRunJob?.artifact_names.map((artifactName) => (
                       <li key={artifactName}>
-                        <a href={`/v1/jobs/${latestJob.id}/artifacts/${artifactName}`} target="_blank">
+                        <a
+                          href={`/v1/jobs/${currentRunJob.id}/artifacts/${artifactName}`}
+                          target="_blank"
+                        >
                           {artifactName}
                         </a>
                       </li>
                     ))
                   ) : (
-                    <li>No artifacts linked to the latest job.</li>
+                    <li>No artifacts linked to the current run.</li>
                   )}
                 </ul>
               </div>
@@ -1585,6 +1835,10 @@ export default function ProjectWorkbenchPage() {
               <li>
                 <strong>Latest results</strong>
                 <span>{draft.artifacts.latest_results?.results.length ?? 0} entries</span>
+              </li>
+              <li>
+                <strong>Baseline</strong>
+                <span>{baselineDescription}</span>
               </li>
               <li>
                 <strong>Active findings</strong>
