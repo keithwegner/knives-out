@@ -231,6 +231,12 @@ pre {
   color: var(--ink);
 }
 
+.danger-button {
+  border-color: rgba(180, 35, 24, 0.24);
+  background: rgba(180, 35, 24, 0.08);
+  color: var(--danger);
+}
+
 .primary-button:hover,
 .secondary-button:hover,
 .ghost-button:hover,

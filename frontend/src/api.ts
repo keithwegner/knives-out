@@ -2,10 +2,13 @@ import type {
   ApiReportFormat,
   AttackResults,
   AttackSuite,
+  DeleteJobResponse,
   DiscoverResponse,
   GenerateResponse,
   InspectResponse,
   JobStatusResponse,
+  PruneJobsRequest,
+  PruneJobsResponse,
   ProjectJobsResponse,
   ProjectListResponse,
   ProjectRecord,
@@ -121,6 +124,19 @@ export function deleteProject(projectId: string) {
 
 export function listProjectJobs(projectId: string) {
   return request<ProjectJobsResponse>(`/v1/projects/${projectId}/jobs`);
+}
+
+export function deleteProjectJob(projectId: string, jobId: string) {
+  return request<DeleteJobResponse>(`/v1/projects/${projectId}/jobs/${jobId}`, {
+    method: "DELETE",
+  });
+}
+
+export function pruneProjectJobs(projectId: string, payload: PruneJobsRequest) {
+  return request<PruneJobsResponse>(`/v1/projects/${projectId}/jobs/prune`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function inspectSource(payload: {
