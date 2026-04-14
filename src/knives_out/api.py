@@ -9,8 +9,9 @@ from typing import Annotated
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
+from knives_out import __version__
 from knives_out.api_models import (
     ApiJobStatus,
     ArtifactListResponse,
@@ -330,7 +331,7 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(
         title="knives-out API",
-        version="0.11.0",
+        version=__version__,
         description="Local-first API for adversarial API testing from specs and observed traffic.",
     )
     root = data_dir or _default_data_dir()
@@ -341,6 +342,10 @@ def create_app(
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        return RedirectResponse(url="/app/")
 
     @app.get("/v1/projects", response_model=ProjectListResponse)
     def list_projects() -> ProjectListResponse:
@@ -704,6 +709,11 @@ def create_app(
 
     @app.get("/app", include_in_schema=False)
     def serve_frontend_index():
+        frontend_root: Path = app.state.frontend_dir
+        return _frontend_response(frontend_root, "")
+
+    @app.get("/app/", include_in_schema=False)
+    def serve_frontend_index_slash():
         frontend_root: Path = app.state.frontend_dir
         return _frontend_response(frontend_root, "")
 

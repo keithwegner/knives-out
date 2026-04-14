@@ -165,9 +165,17 @@ def test_frontend_routes_serve_index_assets_and_spa_fallback(tmp_path) -> None:
 
     client = TestClient(create_app(data_dir=tmp_path / "api-data", frontend_dir=frontend_dir))
 
+    root_response = client.get("/", follow_redirects=False)
+    assert root_response.status_code == 307
+    assert root_response.headers["location"] == "/app/"
+
     index_response = client.get("/app")
     assert index_response.status_code == 200
     assert "Workbench" in index_response.text
+
+    slash_index_response = client.get("/app/")
+    assert slash_index_response.status_code == 200
+    assert "Workbench" in slash_index_response.text
 
     asset_response = client.get("/app/assets/main.js")
     assert asset_response.status_code == 200
