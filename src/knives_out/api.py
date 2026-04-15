@@ -792,6 +792,7 @@ def create_app(
                 detail="Active jobs cannot be deleted; wait for completion or failure first.",
             ) from exc
         return DeleteJobResponse(deleted=_retention_entry(deleted))
+
     @app.post("/v1/inspect", response_model=InspectResponse)
     def inspect_endpoint(request: InspectRequest) -> InspectResponse:
         result = inspect_source_inline(

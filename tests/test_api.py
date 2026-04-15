@@ -426,7 +426,7 @@ def test_job_finding_evidence_endpoint_returns_workflow_and_profile_artifacts(tm
                 "started_at": datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
                 "completed_at": datetime(2026, 4, 13, 12, 1, tzinfo=UTC),
             }
-    )
+        )
     )
     store.write_result(record.id, _workflow_profile_results())
     artifact_root = store.artifact_dir(record.id)
