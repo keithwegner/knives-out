@@ -805,6 +805,9 @@ def _validate_response_schema(
     attack: AttackCase,
     response: httpx.Response,
 ) -> tuple[str | None, bool | None, str | None]:
+    if attack.protocol == "graphql":
+        return None, None, None
+
     if "graphql_error" in {
         expected.strip().lower() for expected in attack.expected_outcomes
     } and _response_has_graphql_errors(response):

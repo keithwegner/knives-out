@@ -34,6 +34,9 @@ guesswork.
 - v0.17: Artifact deep dive drawer
   - ships finding-first current-run evidence drilldown, typed artifact references, and inline
     request/response, workflow, profile, and auth-event inspection in the review workbench
+- v0.18: fragment-aware GraphQL contracts
+  - ships nested object/interface/union GraphQL contract generation with parity across emitted
+    documents, output-shape validation, and response-schema metadata
 
 ## v0.12 — local-first HTTP API
 

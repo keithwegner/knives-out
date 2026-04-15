@@ -402,6 +402,8 @@ want to keep only the highest-signal regressions around, follow `verify` with
 workflow, secret setup, filtering patterns, baseline-aware CI flows, and checked-in suppressions.
 GraphQL schemas follow the same `inspect` / `generate` / `run` / `report` / `verify` flow, with
 `generate` automatically emitting variable-coercion attacks from SDL or introspection input.
+Generated GraphQL contracts now stay fragment-aware across nested selection sets, response-shape
+validation, and response-schema metadata for object, interface, and union results.
 Subscription roots are now staged into the same artifact flow as `SUBSCRIBE` attacks when the
 schema exposes them, using the `graphql-transport-ws` protocol and capturing the first event or
 error frame within the normal `--timeout` budget.
