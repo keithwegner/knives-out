@@ -34,6 +34,7 @@ from knives_out.api_models import (
     JobRetentionEntry,
     JobStatusResponse,
     ProjectCreateRequest,
+    ProjectDuplicateRequest,
     ProjectJobsResponse,
     ProjectListResponse,
     ProjectRecord,
@@ -564,6 +565,20 @@ def create_app(
             artifacts=request.artifacts,
         )
         return project_store.create_project(record)
+
+    @app.post("/v1/projects/{project_id}/duplicate", response_model=ProjectRecord)
+    def duplicate_project(
+        project_id: str,
+        request: ProjectDuplicateRequest | None = None,
+    ) -> ProjectRecord:
+        project_store: ProjectStore = app.state.project_store
+        try:
+            return project_store.duplicate_project(
+                project_id,
+                name=request.name if request is not None else None,
+            )
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found.") from exc
 
     @app.get("/v1/projects/{project_id}", response_model=ProjectRecord)
     def get_project(project_id: str) -> ProjectRecord:

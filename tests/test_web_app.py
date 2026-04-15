@@ -117,6 +117,78 @@ def test_project_crud_endpoints_and_project_summaries(tmp_path) -> None:
     assert client.get(f"/v1/projects/{project_id}").status_code == 404
 
 
+def test_duplicate_project_endpoint_clones_snapshot_without_job_links(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path))
+
+    create_response = client.post(
+        "/v1/projects",
+        json={
+            "name": "Workbench demo",
+            "source_mode": "graphql",
+            "active_step": "review",
+            "source": {
+                "name": "schema.graphql",
+                "content": "type Query { ping: String! }",
+            },
+            "generate_draft": {
+                "kind": ["missing_auth"],
+            },
+            "run_draft": {
+                "base_url": "https://example.com",
+                "headers": {"Authorization": "Bearer token"},
+            },
+            "review_draft": {
+                "baseline_job_id": "job-baseline",
+                "baseline": {
+                    "source": "unit",
+                    "base_url": "https://baseline.example.com",
+                    "executed_at": "2026-04-13T20:06:00Z",
+                    "profiles": [],
+                    "auth_events": [],
+                    "results": [],
+                },
+            },
+            "artifacts": {
+                "latest_markdown_report": "# report",
+                "latest_results": {
+                    "source": "unit",
+                    "base_url": "https://example.com",
+                    "executed_at": "2026-04-13T20:06:00Z",
+                    "profiles": [],
+                    "auth_events": [],
+                    "results": [],
+                },
+                "last_run_job_id": "job-current",
+            },
+        },
+    )
+
+    assert create_response.status_code == 200
+    original = create_response.json()
+
+    duplicate_response = client.post(f"/v1/projects/{original['id']}/duplicate")
+
+    assert duplicate_response.status_code == 200
+    duplicate = duplicate_response.json()
+    assert duplicate["id"] != original["id"]
+    assert duplicate["name"] == "Workbench demo copy"
+    assert duplicate["created_at"] != original["created_at"]
+    assert duplicate["updated_at"] != original["updated_at"]
+    assert duplicate["source"] == original["source"]
+    assert duplicate["generate_draft"] == original["generate_draft"]
+    assert duplicate["run_draft"] == original["run_draft"]
+    assert duplicate["review_draft"]["baseline_job_id"] is None
+    assert duplicate["review_draft"]["baseline"] == original["review_draft"]["baseline"]
+    assert duplicate["artifacts"]["last_run_job_id"] is None
+    assert duplicate["artifacts"]["latest_markdown_report"] == "# report"
+    assert duplicate["artifacts"]["latest_results"] == original["artifacts"]["latest_results"]
+
+    second_duplicate_response = client.post(f"/v1/projects/{original['id']}/duplicate")
+
+    assert second_duplicate_response.status_code == 200
+    assert second_duplicate_response.json()["name"] == "Workbench demo copy 2"
+
+
 def test_run_jobs_are_attached_to_projects_and_removed_on_project_delete(
     tmp_path,
     monkeypatch,
