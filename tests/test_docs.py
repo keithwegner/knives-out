@@ -24,6 +24,7 @@ def test_readme_includes_ci_guidance() -> None:
     assert "KNIVES_OUT_BASE_URL" in readme
     assert "`knives-out run` currently exits with status `0`" in readme
     assert "knives-out verify results.json" in readme
+    assert "knives-out export results.json --format sarif --out results.sarif" in readme
     assert "status, severity, confidence, or schema outcome drifted" in readme
     assert "knives-out promote results.json" in readme
     assert "knives-out triage results.json" in readme
@@ -35,6 +36,7 @@ def test_readme_includes_ci_guidance() -> None:
     assert "KNIVES_OUT_API_DATA_DIR" in readme
     assert "POST /v1/inspect" in readme
     assert "POST /v1/summary" in readme
+    assert "POST /v1/export" in readme
     assert "POST /v1/runs" in readme
     assert "DELETE /v1/jobs/{id}" in readme
     assert "POST /v1/jobs/prune" in readme
@@ -101,6 +103,9 @@ def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     assert "--profile anonymous" in workflow
     assert 'knives-out run attacks.json "${args[@]}"' in workflow
     assert "knives-out report results.json --out report.md" in workflow
+    assert "knives-out export results.json --format sarif --out results.sarif" in workflow
+    assert "github/codeql-action/upload-sarif@v4" in workflow
+    assert "sarif_file: results.sarif" in workflow
     assert (
         "knives-out report results.json --format html --artifact-root artifacts --out report.html"
         in workflow
@@ -111,6 +116,8 @@ def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     assert ".knives-out-ignore.yml" in workflow
     assert "knives-out promote results.json" in workflow
     assert "KNIVES_OUT_BASE_URL" in workflow
+    assert "security-events: write" in workflow
+    assert "results.sarif" in workflow
 
 
 def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
@@ -119,6 +126,7 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "results.json" in ci_doc
     assert "report.md" in ci_doc
     assert "report.html" in ci_doc
+    assert "results.sarif" in ci_doc
     assert "artifacts/" in ci_doc
     assert "Simple gating with no baseline" in ci_doc
     assert "Baseline-aware gating" in ci_doc
@@ -151,12 +159,15 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "knives-out serve --host 127.0.0.1 --port 8787" in ci_doc
     assert "POST /v1/inspect" in ci_doc
     assert "POST /v1/summary" in ci_doc
+    assert "POST /v1/export" in ci_doc
     assert "POST /v1/runs" in ci_doc
     assert "DELETE /v1/jobs/{id}" in ci_doc
     assert "POST /v1/jobs/prune" in ci_doc
     assert "GET /v1/jobs/{id}/findings/{attack_id}/evidence" in ci_doc
     assert "KNIVES_OUT_API_DATA_DIR" in ci_doc
     assert "knives-out summary results.json --out summary.json" in ci_doc
+    assert "knives-out export results.json --format sarif --out results.sarif" in ci_doc
+    assert "github/codeql-action/upload-sarif@v4" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc
     assert "--tag orders" in ci_doc
     assert "--path /draft-orders/{draftId}" in ci_doc

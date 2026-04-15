@@ -538,6 +538,147 @@ def test_summary_command_prints_json_to_stdout(tmp_path: Path) -> None:
     assert summary["top_findings"][0]["schema_status"] == "graphql-mismatch"
 
 
+def test_export_command_writes_sarif_to_file(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    export_path = tmp_path / "results.sarif"
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_server",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                path="/pets",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "export",
+            str(results_path),
+            "--format",
+            "sarif",
+            "--out",
+            str(export_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    export_payload = json.loads(export_path.read_text(encoding="utf-8"))
+    assert export_payload["version"] == "2.1.0"
+    assert export_payload["runs"][0]["results"][0]["ruleId"] == "knives-out/server_error"
+
+
+def test_export_command_prints_sarif_with_baseline_changes_to_stdout(tmp_path: Path) -> None:
+    current_path = tmp_path / "current.json"
+    baseline_path = tmp_path / "baseline.json"
+    _write_results(
+        current_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Persisting failure",
+                method="POST",
+                path="/pets",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="critical",
+                confidence="medium",
+            )
+        ),
+    )
+    _write_results(
+        baseline_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_shared",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Persisting failure",
+                method="POST",
+                path="/pets",
+                url="https://example.com/pets",
+                status_code=401,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "export",
+            str(current_path),
+            "--baseline",
+            str(baseline_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    export_payload = json.loads(result.stdout)
+    sarif_result = export_payload["runs"][0]["results"][0]
+    assert sarif_result["properties"]["change"] == "persisting"
+    assert {change["field"] for change in sarif_result["properties"]["delta_changes"]} == {
+        "confidence",
+        "severity",
+        "status",
+    }
+
+
+def test_export_command_auto_loads_suppressions_and_excludes_suppressed_findings() -> None:
+    with runner.isolated_filesystem():
+        results_path = Path("results.json")
+        _write_results(
+            results_path,
+            _results_with_findings(
+                AttackResult(
+                    attack_id="atk_suppressed",
+                    operation_id="createPet",
+                    kind="missing_request_body",
+                    name="Suppressed failure",
+                    method="POST",
+                    path="/pets",
+                    url="https://example.com/pets",
+                    status_code=500,
+                    flagged=True,
+                    issue="server_error",
+                    severity="high",
+                    confidence="high",
+                )
+            ),
+        )
+        Path(".knives-out-ignore.yml").write_text(
+            "suppressions:\n"
+            "  - attack_id: atk_suppressed\n"
+            "    reason: Known issue\n"
+            "    owner: api-team\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["export", str(results_path)])
+
+        assert result.exit_code == 0
+        export_payload = json.loads(result.stdout)
+        assert export_payload["runs"][0]["results"] == []
+
+
 def test_report_command_supports_html_and_artifact_links(tmp_path: Path) -> None:
     results_path = tmp_path / "results.json"
     report_path = tmp_path / "report.html"
