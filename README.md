@@ -15,6 +15,33 @@ Project wiki: [GitHub Wiki](https://github.com/keithwegner/knives-out/wiki)
 
 It helps developers break their APIs on purpose before someone else does.
 
+## Table of contents
+
+- [What it does](#what-it-does)
+- [Current attack types](#current-attack-types)
+- [Why this shape](#why-this-shape)
+- [Quick start](#quick-start)
+- [Web workbench](#web-workbench)
+  - [GitHub Pages](#github-pages)
+- [Local API](#local-api)
+- [CI usage](#ci-usage)
+- [CLI](#cli)
+  - [`inspect`](#inspect)
+  - [`generate`](#generate)
+  - [`run`](#run)
+  - [`report`](#report)
+  - [`export`](#export)
+  - [`verify`](#verify)
+  - [`promote`](#promote)
+  - [`triage`](#triage)
+- [Development](#development)
+  - [Dev Container](#dev-container)
+- [Custom attack packs](#custom-attack-packs)
+- [Custom workflow packs](#custom-workflow-packs)
+- [Built-in auth configs](#built-in-auth-configs)
+- [Auth/session plugins](#authsession-plugins)
+- [Roadmap](#roadmap)
+
 ## What it does
 
 Given an OpenAPI spec, GraphQL schema, or learned traffic model, `knives-out` can:
