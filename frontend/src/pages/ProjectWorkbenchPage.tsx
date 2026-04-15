@@ -214,6 +214,22 @@ function defaultArtifactSelection(
   };
 }
 
+function toTrustedHttpUrl(value: string | null | undefined): URL | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const baseOrigin = typeof window === "undefined" ? "http://localhost" : window.location.origin;
+    const candidate = new URL(value, baseOrigin);
+    if (candidate.protocol !== "http:" && candidate.protocol !== "https:") {
+      return null;
+    }
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
 function filterFindings(findings: FindingSummaryResponse[], filter: string) {
   return findings.filter((finding) => {
     if (!filter) {
@@ -416,6 +432,7 @@ export default function ProjectWorkbenchPage() {
   const [artifactPreviewText, setArtifactPreviewText] = useState("");
   const [artifactPreviewError, setArtifactPreviewError] = useState<string | null>(null);
   const [artifactPreviewLoading, setArtifactPreviewLoading] = useState(false);
+  const [artifactActionBusy, setArtifactActionBusy] = useState<"download" | null>(null);
   const [trackedJobId, setTrackedJobId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pruneStatuses, setPruneStatuses] = useState<ApiJobStatus[]>([
@@ -581,6 +598,7 @@ export default function ProjectWorkbenchPage() {
     selectedArtifactJobId && selectedArtifactName
       ? buildJobArtifactUrl(selectedArtifactJobId, selectedArtifactName)
       : null;
+  const selectedArtifactLink = toTrustedHttpUrl(selectedArtifactUrl);
 
   useEffect(() => {
     if (!artifactSourceJobs.length) {
@@ -1375,6 +1393,45 @@ export default function ProjectWorkbenchPage() {
     setSelectedArtifactName(artifactName || null);
     setArtifactPreviewMode("structured");
     setArtifactPreviewError(null);
+  }
+
+  function handleOpenRawArtifact() {
+    if (!selectedArtifactLink) {
+      setArtifactPreviewError("Could not open the selected artifact.");
+      return;
+    }
+    window.open(selectedArtifactLink.toString(), "_blank", "noopener,noreferrer");
+  }
+
+  async function handleDownloadArtifact() {
+    if (!selectedArtifactLink || !selectedArtifactName) {
+      setArtifactPreviewError("Could not download the selected artifact.");
+      return;
+    }
+
+    setArtifactActionBusy("download");
+    setArtifactPreviewError(null);
+    try {
+      const response = await fetch(selectedArtifactLink.toString());
+      if (!response.ok) {
+        throw new Error(`Could not download artifact (${response.status}).`);
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = selectedArtifactName;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      setArtifactPreviewError(
+        error instanceof Error ? error.message : "Could not download the selected artifact.",
+      );
+    } finally {
+      setArtifactActionBusy(null);
+    }
   }
 
   async function handleDuplicateProject() {
@@ -2411,24 +2468,24 @@ export default function ProjectWorkbenchPage() {
                         </label>
                       </div>
 
-                      {selectedArtifactUrl ? (
+                      {selectedArtifactLink ? (
                         <div className="action-row">
                           <div className="artifact-action-row">
-                            <a
+                            <button
                               className="secondary-button"
-                              href={selectedArtifactUrl}
-                              rel="noreferrer"
-                              target="_blank"
+                              onClick={handleOpenRawArtifact}
+                              type="button"
                             >
                               Open raw
-                            </a>
-                            <a
+                            </button>
+                            <button
                               className="ghost-button"
-                              download={selectedArtifactName ?? undefined}
-                              href={selectedArtifactUrl}
+                              disabled={artifactActionBusy === "download"}
+                              onClick={() => void handleDownloadArtifact()}
+                              type="button"
                             >
-                              Download
-                            </a>
+                              {artifactActionBusy === "download" ? "Downloading…" : "Download"}
+                            </button>
                             {artifactPreviewRecord ? (
                               <button
                                 className="ghost-button"

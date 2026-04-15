@@ -403,14 +403,8 @@ describe("ProjectWorkbenchPage", () => {
     expect(within(attackSummary.closest("article") ?? document.body).getByText("Artifact attack")).toBeInTheDocument();
     expect(screen.getByText("Request summary")).toBeInTheDocument();
     expect(screen.getByText("Response summary")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open raw" })).toHaveAttribute(
-      "href",
-      "/v1/jobs/job-current/artifacts/atk-current.json",
-    );
-    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute(
-      "href",
-      "/v1/jobs/job-current/artifacts/atk-current.json",
-    );
+    expect(screen.getByRole("button", { name: "Open raw" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
   });
 
   it("falls back artifact browsing to the baseline run when the current run has no artifacts", async () => {
@@ -595,12 +589,27 @@ describe("ProjectWorkbenchPage", () => {
     expect(await screen.findByText("Artifact not found.")).toBeInTheDocument();
   });
 
-  it("uses the configured API base for artifact preview and raw links", async () => {
+  it("uses the configured API base for artifact preview and raw actions", async () => {
     window.localStorage.setItem("knives-out.api-base-url", "https://api.example.com");
     const artifactJob = makeRunJob({
       id: "job-current",
       artifact_names: ["profiles/atk-current.json"],
     });
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const createObjectUrlSpy = vi.fn(() => "blob:artifact");
+    const revokeObjectUrlSpy = vi.fn();
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: createObjectUrlSpy,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectUrlSpy,
+    });
+
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -633,14 +642,28 @@ describe("ProjectWorkbenchPage", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.example.com/v1/jobs/job-current/artifacts/profiles/atk-current.json",
     );
-    expect(screen.getByRole("link", { name: "Open raw" })).toHaveAttribute(
-      "href",
+
+    fireEvent.click(screen.getByRole("button", { name: "Open raw" }));
+    expect(openSpy).toHaveBeenCalledWith(
       "https://api.example.com/v1/jobs/job-current/artifacts/profiles/atk-current.json",
+      "_blank",
+      "noopener,noreferrer",
     );
-    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute(
-      "href",
-      "https://api.example.com/v1/jobs/job-current/artifacts/profiles/atk-current.json",
+
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    await waitFor(() =>
+      expect(createObjectUrlSpy).toHaveBeenCalledTimes(1),
     );
+    const artifactRequests = fetchMock.mock.calls.filter(
+      ([input]) =>
+        String(input) === "https://api.example.com/v1/jobs/job-current/artifacts/profiles/atk-current.json",
+    );
+    expect(artifactRequests).toHaveLength(2);
+    expect(anchorClickSpy).toHaveBeenCalledTimes(1);
+    expect(revokeObjectUrlSpy).toHaveBeenCalledTimes(1);
+
+    openSpy.mockRestore();
+    anchorClickSpy.mockRestore();
   });
 
   it("loads and clears a saved run baseline from the review workspace", async () => {
