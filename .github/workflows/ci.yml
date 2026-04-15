@@ -41,3 +41,45 @@ jobs:
       - name: Test frontend
         working-directory: frontend
         run: npm test -- --run
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build image
+        run: docker build -t knives-out:test .
+      - name: Smoke test container
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          wait_for_health() {
+            local url="$1"
+            for _ in $(seq 1 30); do
+              if curl -fsS "$url" >/dev/null; then
+                return 0
+              fi
+              sleep 2
+            done
+            return 1
+          }
+
+          cleanup() {
+            docker rm -f knives-out-noauth knives-out-auth >/dev/null 2>&1 || true
+          }
+
+          trap cleanup EXIT
+
+          docker run -d --name knives-out-noauth -p 127.0.0.1:8787:8787 knives-out:test
+          wait_for_health "http://127.0.0.1:8787/healthz"
+          curl -fsS "http://127.0.0.1:8787/healthz"
+
+          docker run -d \
+            --name knives-out-auth \
+            -p 127.0.0.1:8788:8787 \
+            -e KNIVES_OUT_BASIC_AUTH_USERNAME=demo \
+            -e KNIVES_OUT_BASIC_AUTH_PASSWORD=change-me \
+            knives-out:test
+          wait_for_health "http://127.0.0.1:8788/healthz"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8788/v1/projects)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -u demo:change-me http://127.0.0.1:8788/v1/projects)" = "200"

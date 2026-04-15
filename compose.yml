@@ -1,0 +1,29 @@
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - "${KNIVES_OUT_BIND_HOST:-127.0.0.1}:${KNIVES_OUT_PORT:-8787}:8787"
+    environment:
+      KNIVES_OUT_API_DATA_DIR: "${KNIVES_OUT_API_DATA_DIR:-/var/lib/knives-out}"
+      KNIVES_OUT_BASIC_AUTH_USERNAME: "${KNIVES_OUT_BASIC_AUTH_USERNAME:-}"
+      KNIVES_OUT_BASIC_AUTH_PASSWORD: "${KNIVES_OUT_BASIC_AUTH_PASSWORD:-}"
+      KNIVES_OUT_CORS_ALLOW_ORIGINS: "${KNIVES_OUT_CORS_ALLOW_ORIGINS:-}"
+    volumes:
+      - knives-out-data:${KNIVES_OUT_API_DATA_DIR:-/var/lib/knives-out}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/healthz').read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  knives-out-data:

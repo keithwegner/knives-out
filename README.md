@@ -28,6 +28,7 @@ It helps developers break their APIs on purpose before someone else does.
 - [Web workbench](#web-workbench)
   - [GitHub Pages](#github-pages)
 - [Local API](#local-api)
+- [Container deployment](#container-deployment)
 - [CI usage](#ci-usage)
 - [CLI](#cli)
   - [`inspect`](#inspect)
@@ -299,8 +300,10 @@ npm run dev -- --host 127.0.0.1
 Then open [http://127.0.0.1:4173/app/](http://127.0.0.1:4173/app/). The Vite dev server proxies
 `/v1` and `/healthz` to the API on `127.0.0.1:8787`.
 
-The workbench is intentionally local-only and single-user in v1. Saved project drafts, jobs, and
-artifacts all live under `.knives-out-api/` unless you override `KNIVES_OUT_API_DATA_DIR`.
+The workbench is still single-user and self-hosted in v1. You can run it directly on localhost or
+inside a small same-origin Docker deployment, but it is not intended as a multi-tenant service.
+Saved project drafts, jobs, and artifacts all live under `.knives-out-api/` unless you override
+`KNIVES_OUT_API_DATA_DIR`.
 
 ### GitHub Pages
 
@@ -391,6 +394,63 @@ to external baseline JSON when the review draft switches to external baseline mo
 The API accepts uploaded source content and JSON artifacts in the request body. It does not expose
 arbitrary server-side file reads. FastAPI also publishes the schema at `/openapi.json` and the
 interactive docs at `/docs`.
+
+## Container deployment
+
+The repository now includes a first-party `Dockerfile`, `compose.yml`, and `compose.env.example`
+for a same-origin self-hosted deployment. That path avoids the GitHub Pages CORS and API-base
+setup dance because the frontend shell and `/v1/*` API live behind one origin.
+
+Build the image:
+
+```bash
+docker build -t knives-out .
+```
+
+Run it directly with a persistent volume:
+
+```bash
+docker run --rm \
+  -p 127.0.0.1:8787:8787 \
+  -v knives-out-data:/var/lib/knives-out \
+  knives-out
+```
+
+Then open [http://127.0.0.1:8787/app/](http://127.0.0.1:8787/app/).
+
+If you want a lightweight exposure guard for an end user, set both
+`KNIVES_OUT_BASIC_AUTH_USERNAME` and `KNIVES_OUT_BASIC_AUTH_PASSWORD`:
+
+```bash
+docker run --rm \
+  -p 127.0.0.1:8787:8787 \
+  -v knives-out-data:/var/lib/knives-out \
+  -e KNIVES_OUT_BASIC_AUTH_USERNAME=demo \
+  -e KNIVES_OUT_BASIC_AUTH_PASSWORD=change-me \
+  knives-out
+```
+
+That enables HTTP Basic auth for `/`, `/app/*`, `/v1/*`, `/docs`, and `/openapi.json`, while
+keeping `/healthz` unauthenticated for container and load-balancer health checks.
+
+For the default self-hosted path, use Compose:
+
+```bash
+cp compose.env.example .env
+# edit .env before exposing the service
+docker compose up --build -d
+```
+
+The example env file documents:
+
+- bind host and published port
+- the persistent data directory inside the container
+- optional basic-auth credentials
+- optional `KNIVES_OUT_CORS_ALLOW_ORIGINS` for advanced split-origin deployments
+
+The same-origin container deployment is the recommended exposed setup in v1. It is still
+single-user and not a multi-tenant service, and TLS is expected to be terminated outside the app
+when you move beyond localhost.
 
 ## CI usage
 

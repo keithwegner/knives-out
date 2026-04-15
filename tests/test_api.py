@@ -292,6 +292,20 @@ def test_create_app_uses_env_data_dir_and_healthz_endpoint(tmp_path, monkeypatch
     assert app.state.job_store.root == configured
 
 
+def test_create_app_requires_complete_basic_auth_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("KNIVES_OUT_BASIC_AUTH_USERNAME", "demo")
+    monkeypatch.delenv("KNIVES_OUT_BASIC_AUTH_PASSWORD", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Set both KNIVES_OUT_BASIC_AUTH_USERNAME and "
+            "KNIVES_OUT_BASIC_AUTH_PASSWORD or leave both unset."
+        ),
+    ):
+        create_app()
+
+
 def test_inspect_endpoint_supports_inline_graphql_schema(tmp_path) -> None:
     client = TestClient(create_app(data_dir=tmp_path))
 
