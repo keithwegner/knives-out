@@ -1,5 +1,9 @@
 # knives-out
 
+<p align="center">
+  <img src="docs/assets/knives-out-logo.svg" alt="knives-out logo" width="460">
+</p>
+
 [![CI](https://github.com/keithwegner/knives-out/actions/workflows/ci.yml/badge.svg)](https://github.com/keithwegner/knives-out/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/keithwegner/knives-out/badges/coverage-badge.json)](https://github.com/keithwegner/knives-out/actions/workflows/main-maintenance.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
