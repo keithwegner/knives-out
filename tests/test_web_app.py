@@ -152,11 +152,62 @@ def test_run_jobs_are_attached_to_projects_and_removed_on_project_delete(
     assert jobs_payload is not None
     assert jobs_payload["jobs"][0]["id"] == job_id
     assert jobs_payload["jobs"][0]["project_id"] == project_id
+    assert jobs_payload["jobs"][0]["completed_at"] is not None
+    assert jobs_payload["jobs"][0]["result_available"] is True
+    assert jobs_payload["jobs"][0]["result_summary"]["total_results"] == 1
     assert client.get(f"/v1/jobs/{job_id}").json()["project_id"] == project_id
 
     delete_response = client.delete(f"/v1/projects/{project_id}")
     assert delete_response.status_code == 200
     assert client.get(f"/v1/jobs/{job_id}").status_code == 404
+
+
+def test_project_review_artifact_evidence_endpoint_supports_current_run_drilldown(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _install_stub_response(monkeypatch, httpx.Response(422, text="missing auth"))
+    client = TestClient(create_app(data_dir=tmp_path))
+    project_id = client.post("/v1/projects", json={"name": "Review demo"}).json()["id"]
+
+    run_response = client.post(
+        "/v1/runs",
+        json={
+            "project_id": project_id,
+            "suite": _attack_suite().model_dump(mode="json"),
+            "base_url": "https://example.com",
+            "store_artifacts": True,
+        },
+    )
+    assert run_response.status_code == 200
+
+    job_id = run_response.json()["id"]
+    for _ in range(50):
+        job_response = client.get(f"/v1/jobs/{job_id}")
+        assert job_response.status_code == 200
+        if job_response.json()["status"] == "completed":
+            break
+        time.sleep(0.02)
+
+    review_response = client.post(f"/v1/projects/{project_id}/review", json={})
+    assert review_response.status_code == 200
+    assert review_response.json()["current_job_id"] == job_id
+
+    evidence_response = client.get(f"/v1/jobs/{job_id}/findings/atk_api/evidence")
+    assert evidence_response.status_code == 200
+    payload = evidence_response.json()
+    assert payload["job_id"] == job_id
+    assert payload["result"]["attack_id"] == "atk_api"
+    assert payload["artifacts"] == [
+        {
+            "label": "Request artifact",
+            "kind": "request",
+            "artifact_name": "atk_api.json",
+            "available": True,
+            "profile": None,
+            "step_index": None,
+        }
+    ]
 
 
 def test_frontend_routes_serve_index_assets_and_spa_fallback(tmp_path) -> None:

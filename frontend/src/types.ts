@@ -2,6 +2,13 @@ export type ProjectSourceMode = "openapi" | "graphql" | "learned" | "capture_upl
 export type ProjectStep = "source" | "inspect" | "generate" | "run" | "review";
 export type ApiJobStatus = "pending" | "running" | "completed" | "failed";
 export type ApiReportFormat = "markdown" | "html";
+export type ProjectReviewBaselineMode = "job" | "external";
+export type ArtifactReferenceKind =
+  | "request"
+  | "workflow_terminal"
+  | "workflow_step"
+  | "profile_request"
+  | "profile_workflow_step";
 
 export interface SourcePayload {
   name: string;
@@ -95,14 +102,35 @@ export interface AuthEvent {
 }
 
 export interface ProfileAttackResult {
+  protocol?: string;
   profile: string;
   level: number;
   anonymous: boolean;
   url: string;
   status_code?: number | null;
+  error?: string | null;
+  duration_ms?: number | null;
+  flagged?: boolean;
   issue?: string | null;
   severity: string;
   confidence: string;
+  response_excerpt?: string | null;
+  response_schema_status?: string | null;
+  response_schema_valid?: boolean | null;
+  response_schema_error?: string | null;
+  graphql_response_valid?: boolean | null;
+  graphql_response_error?: string | null;
+  graphql_response_hint?: string | null;
+  workflow_steps?: Array<{
+    name: string;
+    operation_id: string;
+    method: string;
+    url: string;
+    status_code?: number | null;
+    error?: string | null;
+    duration_ms?: number | null;
+    response_excerpt?: string | null;
+  }> | null;
 }
 
 export interface AttackResult {
@@ -133,6 +161,8 @@ export interface AttackResult {
     url: string;
     status_code?: number | null;
     error?: string | null;
+    duration_ms?: number | null;
+    response_excerpt?: string | null;
   }> | null;
   profile_results?: ProfileAttackResult[] | null;
 }
@@ -286,6 +316,30 @@ export interface JobStatusResponse {
   result_summary?: ResultsSummary | null;
 }
 
+export interface ArtifactReferenceResponse {
+  label: string;
+  kind: ArtifactReferenceKind;
+  artifact_name: string;
+  available: boolean;
+  profile?: string | null;
+  step_index?: number | null;
+}
+
+export interface JobFindingEvidenceResponse {
+  job_id: string;
+  attack_id: string;
+  result: AttackResult;
+  artifacts: ArtifactReferenceResponse[];
+  auth_events: AuthEvent[];
+  highlighted_auth_events: AuthEvent[];
+}
+
+export interface JobArtifactDocument {
+  artifact_name: string;
+  format: "json" | "text";
+  content: unknown;
+}
+
 export interface JobRetentionEntry {
   id: string;
   status: ApiJobStatus;
@@ -363,11 +417,35 @@ export interface ProjectRunDraft {
 }
 
 export interface ProjectReviewDraft {
+  baseline_mode: ProjectReviewBaselineMode;
   baseline_job_id?: string | null;
   baseline?: AttackResults | null;
   suppressions_yaml?: string | null;
   min_severity: string;
   min_confidence: string;
+}
+
+export interface ProjectReviewRequest {
+  baseline_mode?: ProjectReviewBaselineMode | null;
+  baseline_job_id?: string | null;
+  baseline?: AttackResults | null;
+  suppressions_yaml?: string | null;
+  min_severity?: string | null;
+  min_confidence?: string | null;
+}
+
+export interface ProjectReviewResponse {
+  project_id: string;
+  current_job_id: string;
+  baseline_mode: ProjectReviewBaselineMode;
+  baseline_job_id?: string | null;
+  baseline_used: boolean;
+  waiting_for_new_run: boolean;
+  results: AttackResults;
+  summary: ResultsSummary;
+  verification: VerifyResponse;
+  markdown_report: string;
+  html_report: string;
 }
 
 export interface ProjectArtifacts {

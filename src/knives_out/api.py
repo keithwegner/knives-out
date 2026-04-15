@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -16,6 +17,8 @@ from knives_out import __version__
 from knives_out.api_models import (
     ApiJobStatus,
     ArtifactListResponse,
+    ArtifactReferenceKind,
+    ArtifactReferenceResponse,
     DeleteJobResponse,
     DeltaChangeResponse,
     DiscoverRequest,
@@ -25,6 +28,7 @@ from knives_out.api_models import (
     GenerateResponse,
     InspectRequest,
     InspectResponse,
+    JobFindingEvidenceResponse,
     JobListResponse,
     JobRecord,
     JobRetentionEntry,
@@ -33,6 +37,10 @@ from knives_out.api_models import (
     ProjectJobsResponse,
     ProjectListResponse,
     ProjectRecord,
+    ProjectReviewBaselineMode,
+    ProjectReviewDraft,
+    ProjectReviewRequest,
+    ProjectReviewResponse,
     ProjectSourceMode,
     ProjectSummaryResponse,
     ProjectUpdateRequest,
@@ -52,7 +60,7 @@ from knives_out.api_models import (
     VerifyResponse,
 )
 from knives_out.api_store import ActiveJobDeletionError, DeletedJob, JobNotFoundError, JobStore
-from knives_out.models import AttackResults, ResultsSummary
+from knives_out.models import AttackResult, AttackResults, ResultsSummary
 from knives_out.project_store import ProjectNotFoundError, ProjectStore
 from knives_out.services import (
     InlineInput,
@@ -69,6 +77,8 @@ from knives_out.services import (
 
 PRUNEABLE_JOB_STATUSES = frozenset({ApiJobStatus.completed, ApiJobStatus.failed})
 JOB_SUMMARY_TOP_LIMIT = 3
+PROJECT_REVIEW_TOP_LIMIT = 50
+_PROFILE_ARTIFACT_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _finding_summary(finding) -> FindingSummaryResponse:
@@ -233,6 +243,94 @@ def _default_source_for_mode(source_mode: ProjectSourceMode) -> SourcePayload | 
     return None
 
 
+def _profile_artifact_segment(profile_name: str) -> str:
+    return _PROFILE_ARTIFACT_SEGMENT_RE.sub("-", profile_name).strip("-") or "profile"
+
+
+def _artifact_reference(
+    available_artifacts: set[str],
+    *,
+    label: str,
+    kind: ArtifactReferenceKind,
+    artifact_name: str,
+    profile: str | None = None,
+    step_index: int | None = None,
+) -> ArtifactReferenceResponse:
+    return ArtifactReferenceResponse(
+        label=label,
+        kind=kind,
+        artifact_name=artifact_name,
+        available=artifact_name in available_artifacts,
+        profile=profile,
+        step_index=step_index,
+    )
+
+
+def _finding_artifact_references(
+    available_artifacts: set[str],
+    result: AttackResult,
+) -> list[ArtifactReferenceResponse]:
+    references = [
+        _artifact_reference(
+            available_artifacts,
+            label="Request artifact" if result.type == "request" else "Workflow terminal artifact",
+            kind=(
+                ArtifactReferenceKind.request
+                if result.type == "request"
+                else ArtifactReferenceKind.workflow_terminal
+            ),
+            artifact_name=f"{result.attack_id}.json",
+        )
+    ]
+    for index, _ in enumerate(result.workflow_steps or [], start=1):
+        references.append(
+            _artifact_reference(
+                available_artifacts,
+                label=f"Workflow step {index}",
+                kind=ArtifactReferenceKind.workflow_step,
+                artifact_name=f"{result.attack_id}-step-{index:02d}.json",
+                step_index=index,
+            )
+        )
+    for profile_result in result.profile_results or []:
+        profile_segment = _profile_artifact_segment(profile_result.profile)
+        references.append(
+            _artifact_reference(
+                available_artifacts,
+                label=f"{profile_result.profile} profile artifact",
+                kind=ArtifactReferenceKind.profile_request,
+                artifact_name=f"{profile_segment}/{result.attack_id}.json",
+                profile=profile_result.profile,
+            )
+        )
+        for index, _ in enumerate(profile_result.workflow_steps or [], start=1):
+            references.append(
+                _artifact_reference(
+                    available_artifacts,
+                    label=f"{profile_result.profile} step {index}",
+                    kind=ArtifactReferenceKind.profile_workflow_step,
+                    artifact_name=f"{profile_segment}/{result.attack_id}-step-{index:02d}.json",
+                    profile=profile_result.profile,
+                    step_index=index,
+                )
+            )
+    return references
+
+
+def _finding_result(results: AttackResults, attack_id: str) -> AttackResult:
+    for result in results.results:
+        if result.attack_id == attack_id:
+            return result
+    raise HTTPException(status_code=404, detail="Finding not found for job.")
+
+
+def _highlighted_auth_events(results: AttackResults, result: AttackResult):
+    if not result.profile_results:
+        return []
+    profiles = {profile_result.profile for profile_result in result.profile_results}
+    return [event for event in results.auth_events if event.profile in profiles]
+
+
 def _project_source_name(project: ProjectRecord) -> str | None:
     if project.source is not None:
         return project.source.name
@@ -270,6 +368,51 @@ def _project_summary(
         ),
         active_flagged_count=active_flagged_count,
     )
+
+
+def _effective_project_review_draft(
+    project: ProjectRecord,
+    request: ProjectReviewRequest,
+) -> ProjectReviewDraft:
+    changes = request.model_dump(exclude_unset=True)
+    if not changes:
+        return project.review_draft
+    return ProjectReviewDraft.model_validate(
+        {
+            **project.review_draft.model_dump(mode="python"),
+            **changes,
+        }
+    )
+
+
+def _latest_completed_project_job(job_store: JobStore, project_id: str) -> JobRecord | None:
+    for record in job_store.list_job_records():
+        if record.project_id != project_id:
+            continue
+        if record.status != ApiJobStatus.completed:
+            continue
+        if not job_store.result_exists(record.id):
+            continue
+        return record
+    return None
+
+
+def _project_baseline_job(job_store: JobStore, project_id: str, baseline_job_id: str) -> JobRecord:
+    try:
+        record = job_store.load_job(baseline_job_id)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Baseline job not found.") from exc
+    if record.project_id != project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Baseline job must belong to the same project.",
+        )
+    if record.status != ApiJobStatus.completed or not job_store.result_exists(record.id):
+        raise HTTPException(
+            status_code=400,
+            detail="Baseline job must be completed and have stored results.",
+        )
+    return record
 
 
 def _frontend_missing_response(frontend_root: Path) -> HTMLResponse:
@@ -497,6 +640,82 @@ def create_app(
         return ProjectJobsResponse(
             project_id=project_id,
             jobs=jobs,
+        )
+
+    @app.post("/v1/projects/{project_id}/review", response_model=ProjectReviewResponse)
+    def review_project(
+        project_id: str,
+        request: ProjectReviewRequest,
+    ) -> ProjectReviewResponse:
+        project_store: ProjectStore = app.state.project_store
+        job_store: JobStore = app.state.job_store
+        try:
+            project = project_store.load_project(project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found.") from exc
+
+        review_draft = _effective_project_review_draft(project, request)
+        current_job = _latest_completed_project_job(job_store, project_id)
+        if current_job is None:
+            raise HTTPException(
+                status_code=409,
+                detail="No completed project run with stored results is available for review.",
+            )
+
+        waiting_for_new_run = False
+        baseline_results = None
+        if review_draft.baseline_mode == ProjectReviewBaselineMode.job:
+            if review_draft.baseline_job_id:
+                baseline_job = _project_baseline_job(
+                    job_store,
+                    project_id,
+                    review_draft.baseline_job_id,
+                )
+                if baseline_job.id == current_job.id:
+                    waiting_for_new_run = True
+                else:
+                    baseline_results = job_store.load_result(baseline_job.id)
+        elif review_draft.baseline is not None:
+            baseline_results = review_draft.baseline
+
+        results = job_store.load_result(current_job.id)
+        summary = summarize_results_from_models(
+            results,
+            baseline=baseline_results,
+            suppressions_yaml=review_draft.suppressions_yaml,
+            top_limit=PROJECT_REVIEW_TOP_LIMIT,
+        )
+        verification = verify_results_from_models(
+            results,
+            baseline=baseline_results,
+            suppressions_yaml=review_draft.suppressions_yaml,
+            min_severity=review_draft.min_severity,
+            min_confidence=review_draft.min_confidence,
+        )
+        markdown_report = render_report_from_models(
+            results,
+            baseline=baseline_results,
+            suppressions_yaml=review_draft.suppressions_yaml,
+            format="markdown",
+        )
+        html_report = render_report_from_models(
+            results,
+            baseline=baseline_results,
+            suppressions_yaml=review_draft.suppressions_yaml,
+            format="html",
+        )
+        return ProjectReviewResponse(
+            project_id=project_id,
+            current_job_id=current_job.id,
+            baseline_mode=review_draft.baseline_mode,
+            baseline_job_id=review_draft.baseline_job_id,
+            baseline_used=summary.baseline_used,
+            waiting_for_new_run=waiting_for_new_run,
+            results=results,
+            summary=SummaryResponse(**summary.model_dump(mode="python")),
+            verification=_verify_response(verification),
+            markdown_report=markdown_report,
+            html_report=html_report,
         )
 
     @app.post("/v1/projects/{project_id}/jobs/prune", response_model=PruneJobsResponse)
@@ -797,6 +1016,32 @@ def create_app(
             return job_store.load_result(job_id)
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job result not available.") from exc
+
+    @app.get(
+        "/v1/jobs/{job_id}/findings/{attack_id}/evidence",
+        response_model=JobFindingEvidenceResponse,
+    )
+    def get_job_finding_evidence(job_id: str, attack_id: str) -> JobFindingEvidenceResponse:
+        job_store: JobStore = app.state.job_store
+        try:
+            job_store.load_job(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found.") from exc
+        try:
+            results = job_store.load_result(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job result not available.") from exc
+
+        result = _finding_result(results, attack_id)
+        artifacts = _finding_artifact_references(set(job_store.list_artifacts(job_id)), result)
+        return JobFindingEvidenceResponse(
+            job_id=job_id,
+            attack_id=attack_id,
+            result=result,
+            artifacts=artifacts,
+            auth_events=results.auth_events,
+            highlighted_auth_events=_highlighted_auth_events(results, result),
+        )
 
     @app.get("/v1/jobs/{job_id}/artifacts", response_model=ArtifactListResponse)
     def get_job_artifacts(job_id: str) -> ArtifactListResponse:

@@ -38,11 +38,15 @@ def test_readme_includes_ci_guidance() -> None:
     assert "POST /v1/runs" in readme
     assert "DELETE /v1/jobs/{id}" in readme
     assert "POST /v1/jobs/prune" in readme
+    assert "GET /v1/jobs/{id}/findings/{attack_id}/evidence" in readme
     assert "GET /v1/jobs/{id}/artifacts" in readme
     assert "completed or failed jobs" in readme
     assert "GET /v1/jobs" in readme
     assert "GET /v1/jobs/{id}/artifacts" in readme
     assert "result_summary" in readme
+    assert "POST /v1/projects/{id}/review" in readme
+    assert "baseline_job_id" in readme
+    assert "external baseline mode" in readme
     assert "--profile-file examples/auth_profiles/anonymous-user-admin.yml" in readme
     assert "anonymous_access" in readme
     assert "--auto-workflows" in readme
@@ -132,6 +136,8 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "knives-out discover capture.ndjson --out learned-model.json" in ci_doc
     assert "GET /v1/jobs" in ci_doc
     assert "result_summary" in ci_doc
+    assert "POST /v1/projects/{id}/review" in ci_doc
+    assert "baseline_job_id" in ci_doc
     assert "examples/auth_configs/user-admin.yml" in ci_doc
     assert "examples/auth_configs/client-credentials.yml" in ci_doc
     assert "examples/auth_profiles/anonymous-user-admin.yml" in ci_doc
@@ -148,6 +154,7 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "POST /v1/runs" in ci_doc
     assert "DELETE /v1/jobs/{id}" in ci_doc
     assert "POST /v1/jobs/prune" in ci_doc
+    assert "GET /v1/jobs/{id}/findings/{attack_id}/evidence" in ci_doc
     assert "KNIVES_OUT_API_DATA_DIR" in ci_doc
     assert "knives-out summary results.json --out summary.json" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc
@@ -216,6 +223,8 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "learned-model artifacts" in roadmap
     assert "v0.11: deeper GraphQL coverage" in roadmap
     assert "v0.15: staged GraphQL subscription coverage" in roadmap
+    assert "v0.16: ReviewOps baseline workbench" in roadmap
+    assert "v0.17: Artifact deep dive drawer" in roadmap
     assert "## v0.14 — smoke-test integration coverage" in roadmap
     assert "deterministic fixture apps and checked-in inputs only" in roadmap
     assert "#58: CLI happy path against a local API fixture" in roadmap

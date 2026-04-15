@@ -216,6 +216,14 @@ The API mirrors the same JSON artifacts through `POST /v1/inspect`, `POST /v1/ge
 `GET /v1/jobs/{id}` polling.
 Completed jobs expose a compact `result_summary` on the collection and status responses so
 downstream local tools can rank recent runs before fetching full result payloads.
+Saved projects also expose `GET /v1/projects/{id}/jobs` plus `POST /v1/projects/{id}/review` for
+the workbench’s baseline-aware review loop. That review endpoint always compares the latest
+completed run in the project against an optional pinned `baseline_job_id` from the same project,
+with external baseline JSON kept as an explicit advanced fallback.
+For current-run drilldown, `GET /v1/jobs/{id}/findings/{attack_id}/evidence` returns the selected
+finding result, typed artifact references derived from stored filenames, workflow/profile metadata,
+and the run’s auth-event context. Raw artifact bodies stay on
+`GET /v1/jobs/{id}/artifacts/{artifact_name}` so local tools can load them lazily.
 When local tools need cleanup, use `DELETE /v1/jobs/{id}` for a specific completed or failed run or
 `POST /v1/jobs/prune` to remove older completed/failed jobs in batch.
 Use `KNIVES_OUT_API_DATA_DIR` when you want the job store somewhere other than `.knives-out-api/`.

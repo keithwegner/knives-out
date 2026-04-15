@@ -6,11 +6,15 @@ import type {
   DiscoverResponse,
   GenerateResponse,
   InspectResponse,
+  JobArtifactDocument,
+  JobFindingEvidenceResponse,
   JobStatusResponse,
   PruneJobsRequest,
   PruneJobsResponse,
   ProjectJobsResponse,
   ProjectListResponse,
+  ProjectReviewRequest,
+  ProjectReviewResponse,
   ProjectRecord,
   ProjectReviewDraft,
   PromoteResponse,
@@ -90,6 +94,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function requestText(path: string, init?: RequestInit): Promise<string> {
+  if (needsConfiguredApiBase()) {
+    throw new Error("Set the API base URL before using the GitHub Pages workbench.");
+  }
+
+  const requestUrl = buildApiUrl(path);
+  const response = await fetch(requestUrl, {
+    ...init,
+    headers: {
+      ...(init?.headers ?? {}),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, requestUrl));
+  }
+
+  return await response.text();
+}
+
 export function getHealthStatus() {
   return request<{ status: string }>("/healthz");
 }
@@ -136,6 +160,23 @@ export function pruneProjectJobs(projectId: string, payload: PruneJobsRequest) {
   return request<PruneJobsResponse>(`/v1/projects/${projectId}/jobs/prune`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function refreshProjectReview(
+  projectId: string,
+  review: ProjectReviewDraft | ProjectReviewRequest,
+) {
+  return request<ProjectReviewResponse>(`/v1/projects/${projectId}/review`, {
+    method: "POST",
+    body: JSON.stringify({
+      baseline_mode: review.baseline_mode ?? null,
+      baseline_job_id: review.baseline_job_id ?? null,
+      baseline: review.baseline ?? null,
+      suppressions_yaml: review.suppressions_yaml ?? null,
+      min_severity: review.min_severity ?? null,
+      min_confidence: review.min_confidence ?? null,
+    }),
   });
 }
 
@@ -215,6 +256,33 @@ export function createRun(payload: {
 
 export function getJobResult(jobId: string) {
   return request<AttackResults>(`/v1/jobs/${jobId}/result`);
+}
+
+export function getJobFindingEvidence(jobId: string, attackId: string) {
+  return request<JobFindingEvidenceResponse>(
+    `/v1/jobs/${encodeURIComponent(jobId)}/findings/${encodeURIComponent(attackId)}/evidence`,
+  );
+}
+
+export async function getJobArtifact(jobId: string, artifactName: string): Promise<JobArtifactDocument> {
+  const encodedName = artifactName
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  const text = await requestText(`/v1/jobs/${encodeURIComponent(jobId)}/artifacts/${encodedName}`);
+  try {
+    return {
+      artifact_name: artifactName,
+      format: "json",
+      content: JSON.parse(text) as unknown,
+    };
+  } catch {
+    return {
+      artifact_name: artifactName,
+      format: "text",
+      content: text,
+    };
+  }
 }
 
 export function summarizeResults(results: AttackResults, review: ProjectReviewDraft) {
