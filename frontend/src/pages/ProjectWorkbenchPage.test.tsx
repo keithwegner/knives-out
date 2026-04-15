@@ -774,6 +774,10 @@ describe("ProjectWorkbenchPage", () => {
   it("loads and clears a saved run baseline from the review workspace", async () => {
     let projectState = structuredClone(baseProjectPayload);
     projectState.artifacts.last_run_job_id = "job-current";
+    const latestVerification = projectState.artifacts.latest_verification;
+    if (!latestVerification) {
+      throw new Error("Expected latest verification fixture to be present");
+    }
 
     const baselineResults = {
       source: "unit",
@@ -785,20 +789,20 @@ describe("ProjectWorkbenchPage", () => {
     };
 
     const comparisonVerification = {
-      ...projectState.artifacts.latest_verification,
+      ...latestVerification,
       baseline_used: true,
       new_findings_count: 1,
       resolved_findings_count: 1,
       persisting_findings_count: 1,
       current_findings: [
-        projectState.artifacts.latest_verification.current_findings[0],
+        latestVerification.current_findings[0],
         {
-          ...projectState.artifacts.latest_verification.current_findings[1],
+          ...latestVerification.current_findings[1],
           change: "persisting",
           delta_changes: [{ field: "status", baseline: "500", current: "200" }],
         },
       ],
-      new_findings: [projectState.artifacts.latest_verification.current_findings[0]],
+      new_findings: [latestVerification.current_findings[0]],
       resolved_findings: [
         {
           change: "resolved",
@@ -819,7 +823,7 @@ describe("ProjectWorkbenchPage", () => {
       ],
       persisting_findings: [
         {
-          ...projectState.artifacts.latest_verification.current_findings[1],
+          ...latestVerification.current_findings[1],
           change: "persisting",
           delta_changes: [{ field: "status", baseline: "500", current: "200" }],
         },
