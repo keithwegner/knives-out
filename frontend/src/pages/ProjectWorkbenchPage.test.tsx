@@ -719,17 +719,17 @@ describe("ProjectWorkbenchPage", () => {
 
   it("duplicates the active project and opens the copied workbench", async () => {
     const duplicatedProject = {
-      ...structuredClone(projectPayload),
+      ...structuredClone(baseProjectPayload),
       id: "project-2",
       name: "Workbench demo copy",
       created_at: "2026-04-13T20:06:00Z",
       updated_at: "2026-04-13T20:06:00Z",
       review_draft: {
-        ...structuredClone(projectPayload.review_draft),
+        ...structuredClone(baseProjectPayload.review_draft),
         baseline_job_id: null,
       },
       artifacts: {
-        ...structuredClone(projectPayload.artifacts),
+        ...structuredClone(baseProjectPayload.artifacts),
         last_run_job_id: null,
       },
     };
@@ -738,7 +738,7 @@ describe("ProjectWorkbenchPage", () => {
       const url = String(input);
       const method = init?.method ?? "GET";
       if (url.endsWith("/v1/projects/project-1") && method === "GET") {
-        return Response.json(projectPayload);
+        return Response.json(baseProjectPayload);
       }
       if (url.endsWith("/v1/projects/project-1/jobs") && method === "GET") {
         return Response.json({ project_id: "project-1", jobs: [] });
@@ -772,7 +772,7 @@ describe("ProjectWorkbenchPage", () => {
   });
 
   it("loads and clears a saved run baseline from the review workspace", async () => {
-    let projectState = structuredClone(projectPayload);
+    let projectState = structuredClone(baseProjectPayload);
     projectState.artifacts.last_run_job_id = "job-current";
 
     const baselineResults = {
@@ -900,12 +900,16 @@ describe("ProjectWorkbenchPage", () => {
         }
         if (url.endsWith("/v1/summary") && method === "POST") {
           const body = JSON.parse(String(init?.body ?? "{}"));
-          return Response.json(body.baseline ? comparisonSummary : projectPayload.artifacts.latest_summary);
+          return Response.json(
+            body.baseline ? comparisonSummary : baseProjectPayload.artifacts.latest_summary,
+          );
         }
         if (url.endsWith("/v1/verify") && method === "POST") {
           const body = JSON.parse(String(init?.body ?? "{}"));
           return Response.json(
-            body.baseline ? comparisonVerification : projectPayload.artifacts.latest_verification,
+            body.baseline
+              ? comparisonVerification
+              : baseProjectPayload.artifacts.latest_verification,
           );
         }
         if (url.endsWith("/v1/report") && method === "POST") {
