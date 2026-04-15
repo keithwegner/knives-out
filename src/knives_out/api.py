@@ -23,6 +23,8 @@ from knives_out.api_models import (
     DeltaChangeResponse,
     DiscoverRequest,
     DiscoverResponse,
+    ExportRequest,
+    ExportResponse,
     FindingSummaryResponse,
     GenerateRequest,
     GenerateResponse,
@@ -66,6 +68,7 @@ from knives_out.project_store import ProjectNotFoundError, ProjectStore
 from knives_out.services import (
     InlineInput,
     discover_model_inline,
+    export_results_from_models,
     generate_suite_from_inline,
     inspect_source_inline,
     promote_results_from_models,
@@ -866,6 +869,16 @@ def create_app(
             format=request.format.value,
         )
         return ReportResponse(format=request.format, content=rendered)
+
+    @app.post("/v1/export", response_model=ExportResponse)
+    def export_endpoint(request: ExportRequest) -> ExportResponse:
+        content = export_results_from_models(
+            request.results,
+            baseline=request.baseline,
+            suppressions_yaml=request.suppressions_yaml,
+            format=request.format.value,
+        )
+        return ExportResponse(format=request.format, content=content)
 
     @app.post("/v1/summary", response_model=SummaryResponse)
     def summary_endpoint(request: SummaryRequest) -> SummaryResponse:

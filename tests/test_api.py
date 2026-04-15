@@ -1132,6 +1132,19 @@ def test_report_verify_promote_and_triage_endpoints(tmp_path) -> None:
     results = _flagged_results()
     suite = _attack_suite()
 
+    export_response = client.post(
+        "/v1/export",
+        json={
+            "results": results.model_dump(mode="json"),
+            "format": "sarif",
+        },
+    )
+    assert export_response.status_code == 200
+    export_payload = export_response.json()
+    assert export_payload["format"] == "sarif"
+    assert export_payload["content"]["version"] == "2.1.0"
+    assert export_payload["content"]["runs"][0]["results"][0]["ruleId"] == "knives-out/server_error"
+
     summary_response = client.post(
         "/v1/summary",
         json={"results": results.model_dump(mode="json"), "top_limit": 5},
@@ -1218,3 +1231,88 @@ def test_verify_endpoint_reports_delta_changes_and_report_supports_html(tmp_path
     report_payload = report_response.json()
     assert report_payload["format"] == "html"
     assert "<!DOCTYPE html>" in report_payload["content"]
+
+
+def test_export_endpoint_reports_baseline_changes_and_applies_suppressions(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path))
+    current = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_api",
+                operation_id="getSecret",
+                kind="missing_auth",
+                name="Server failure",
+                method="GET",
+                path="/secrets",
+                url="https://example.com/secrets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="medium",
+            ),
+            AttackResult(
+                attack_id="atk_suppressed",
+                operation_id="listPets",
+                kind="wrong_type_param",
+                name="Suppressed failure",
+                method="GET",
+                path="/pets",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            ),
+        ],
+    )
+    baseline = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_api",
+                operation_id="getSecret",
+                kind="missing_auth",
+                name="Server failure",
+                method="GET",
+                path="/secrets",
+                url="https://example.com/secrets",
+                status_code=401,
+                flagged=True,
+                issue="server_error",
+                severity="medium",
+                confidence="high",
+            )
+        ],
+    )
+
+    export_response = client.post(
+        "/v1/export",
+        json={
+            "results": current.model_dump(mode="json"),
+            "baseline": baseline.model_dump(mode="json"),
+            "format": "sarif",
+            "suppressions_yaml": (
+                "suppressions:\n"
+                "  - attack_id: atk_suppressed\n"
+                "    reason: Known issue\n"
+                "    owner: api-team\n"
+            ),
+        },
+    )
+
+    assert export_response.status_code == 200
+    export_payload = export_response.json()
+    sarif_results = export_payload["content"]["runs"][0]["results"]
+    assert len(sarif_results) == 1
+    assert sarif_results[0]["properties"]["attack_id"] == "atk_api"
+    assert sarif_results[0]["properties"]["change"] == "persisting"
+    assert {change["field"] for change in sarif_results[0]["properties"]["delta_changes"]} == {
+        "confidence",
+        "severity",
+        "status",
+    }

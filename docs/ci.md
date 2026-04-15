@@ -7,10 +7,11 @@
 3. run that suite against a dev or staging deployment
 4. render a Markdown report for review
 5. optionally render an HTML report with linked artifacts
-6. verify the results against a CI policy
-7. optionally promote qualifying findings into a smaller regression suite
-8. optionally maintain a checked-in suppressions file for accepted findings
-9. publish the JSON results, reports, regression suite, and per-attack artifacts
+6. optionally export SARIF for code scanning or PR-native review
+7. verify the results against a CI policy
+8. optionally promote qualifying findings into a smaller regression suite
+9. optionally maintain a checked-in suppressions file for accepted findings
+10. publish the JSON results, reports, SARIF export, regression suite, and per-attack artifacts
 
 The repository includes a ready-to-adapt GitHub Actions example at
 `.github/workflows/dev-environment-example.yml`.
@@ -63,6 +64,7 @@ That default behavior is intentional for review-first workflows:
 - `results.json` stays available for automation
 - `report.md` stays available for humans
 - `report.html` can present a linked artifact index for faster triage
+- `results.sarif` can feed code scanning and pipeline-native review systems
 - `artifacts/` keeps one request/response record per attack for debugging
 
 `knives-out verify` is the built-in gating step. It reads `results.json`, applies severity and
@@ -104,6 +106,46 @@ The tool does not fetch that baseline for you. Your workflow is responsible for 
 `previous-results.json` in the workspace before this step.
 When you use a baseline, `verify` also prints a compact summary for persisting findings whose
 status, severity, confidence, or schema outcome changed between runs.
+
+## Optional: SARIF export for code scanning
+
+Use this when you want the active unsuppressed findings to show up in GitHub code scanning or any
+other SARIF-capable pipeline sink. This export is complementary to `verify`: it helps teams review
+findings in native CI surfaces, but it does not change pass/fail behavior by itself.
+
+The simplest form is:
+
+```bash
+knives-out export results.json --format sarif --out results.sarif
+```
+
+```yaml
+permissions:
+  contents: read
+  security-events: write
+```
+
+```yaml
+- name: Export SARIF findings
+  if: always()
+  run: |
+    knives-out export results.json \
+      --format sarif \
+      --out results.sarif
+    # To add regression context to the SARIF properties:
+    # knives-out export results.json \
+    #   --format sarif \
+    #   --baseline previous-results.json \
+    #   --out results.sarif
+```
+
+```yaml
+- name: Upload SARIF to GitHub code scanning
+  if: always()
+  uses: github/codeql-action/upload-sarif@v4
+  with:
+    sarif_file: results.sarif
+```
 
 ## Optional: checked-in suppressions
 
@@ -211,8 +253,8 @@ server on loopback:
 ```
 
 The API mirrors the same JSON artifacts through `POST /v1/inspect`, `POST /v1/generate`,
-`POST /v1/discover`, `POST /v1/report`, `POST /v1/summary`, `POST /v1/verify`, `POST /v1/promote`,
-`POST /v1/triage`, and background `POST /v1/runs` jobs with `GET /v1/jobs` browsing and
+`POST /v1/discover`, `POST /v1/export`, `POST /v1/report`, `POST /v1/summary`, `POST /v1/verify`,
+`POST /v1/promote`, `POST /v1/triage`, and background `POST /v1/runs` jobs with `GET /v1/jobs` browsing and
 `GET /v1/jobs/{id}` polling.
 Completed jobs expose a compact `result_summary` on the collection and status responses so
 downstream local tools can rank recent runs before fetching full result payloads.

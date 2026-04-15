@@ -19,6 +19,7 @@ from knives_out.services import (
     DEFAULT_SUPPRESSIONS_PATH,
     SuppressionRule,
     discover_model_paths,
+    export_results_from_paths,
     generate_suite_from_path,
     inspect_source_path,
     load_attack_results_or_raise,
@@ -57,6 +58,10 @@ class ConfidenceThresholdOption(StrEnum):
 class ReportFormatOption(StrEnum):
     markdown = "markdown"
     html = "html"
+
+
+class ExportFormatOption(StrEnum):
+    sarif = "sarif"
 
 
 class InspectFormatOption(StrEnum):
@@ -614,6 +619,49 @@ def run(
             f"Recorded {auth_failures} auth failure(s)."
         )
     console.print(f"Wrote results to [bold]{out}[/bold].")
+
+
+@app.command()
+def export(
+    results: Path,
+    baseline: Annotated[
+        Path | None,
+        typer.Option(help="Optional baseline results file for regression comparison."),
+    ] = None,
+    suppressions: Annotated[
+        Path | None,
+        typer.Option(
+            help="Optional suppressions file. Defaults to .knives-out-ignore.yml if present."
+        ),
+    ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option(help="Optional export output file."),
+    ] = None,
+    format: Annotated[
+        ExportFormatOption,
+        typer.Option(help="Machine-readable export format."),
+    ] = ExportFormatOption.sarif,
+) -> None:
+    """Render a machine-readable CI export from a results file."""
+    try:
+        export_result = export_results_from_paths(
+            results,
+            baseline_path=baseline,
+            suppressions_path=suppressions,
+            format=format.value,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    rendered = json.dumps(export_result.content, indent=2)
+    if out is None:
+        typer.echo(rendered)
+        return
+
+    out.write_text(rendered + "\n", encoding="utf-8")
+    _print_suppression_summary(export_result.suppressions_path, export_result.suppressions)
+    console.print(f"Wrote {format.value} export to [bold]{out}[/bold].")
 
 
 @app.command()

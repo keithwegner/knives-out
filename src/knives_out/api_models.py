@@ -26,6 +26,10 @@ class ApiReportFormat(StrEnum):
     html = "html"
 
 
+class ApiExportFormat(StrEnum):
+    sarif = "sarif"
+
+
 class ApiJobStatus(StrEnum):
     pending = "pending"
     running = "running"
@@ -204,6 +208,18 @@ class ReportRequest(BaseModel):
 class ReportResponse(BaseModel):
     format: ApiReportFormat
     content: str
+
+
+class ExportRequest(BaseModel):
+    results: AttackResults
+    baseline: AttackResults | None = None
+    suppressions_yaml: str | None = None
+    format: ApiExportFormat = ApiExportFormat.sarif
+
+
+class ExportResponse(BaseModel):
+    format: ApiExportFormat
+    content: dict[str, Any]
 
 
 class SummaryResponse(ResultsSummary):

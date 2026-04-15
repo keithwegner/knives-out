@@ -17,6 +17,7 @@ from knives_out.auth_config import (
     select_auth_configs,
 )
 from knives_out.auth_plugins import LoadedAuthPlugin, load_auth_plugins
+from knives_out.exporting import render_sarif_export
 from knives_out.filtering import filter_attack_suite, filter_operations
 from knives_out.generator import generate_attack_suite
 from knives_out.learned_discovery import discover_learned_model
@@ -98,6 +99,13 @@ class VerifyServiceResult:
 @dataclass(frozen=True)
 class SummaryServiceResult:
     summary: ResultsSummary
+    suppressions_path: Path | None
+    suppressions: list[SuppressionRule]
+
+
+@dataclass(frozen=True)
+class ExportServiceResult:
+    content: dict[str, Any]
     suppressions_path: Path | None
     suppressions: list[SuppressionRule]
 
@@ -677,6 +685,63 @@ def summarize_results_from_models(
         baseline=baseline,
         suppressions=suppression_rules,
         top_limit=top_limit,
+    )
+
+
+def export_results(
+    results: AttackResults,
+    *,
+    baseline: AttackResults | None = None,
+    suppressions: list[SuppressionRule] | None = None,
+    format: str = "sarif",
+) -> dict[str, Any]:
+    if format == "sarif":
+        return render_sarif_export(
+            results,
+            baseline=baseline,
+            suppressions=suppressions,
+        )
+    raise ValueError(f"Unsupported export format: {format!r}")
+
+
+def export_results_from_paths(
+    results_path: Path,
+    *,
+    baseline_path: Path | None = None,
+    suppressions_path: Path | None = None,
+    format: str = "sarif",
+) -> ExportServiceResult:
+    attack_results = load_attack_results_or_raise(results_path, label="current")
+    baseline_results = (
+        load_attack_results_or_raise(baseline_path, label="baseline")
+        if baseline_path is not None
+        else None
+    )
+    resolved_suppressions_path, suppression_rules = load_suppressions_or_default(suppressions_path)
+    return ExportServiceResult(
+        content=export_results(
+            attack_results,
+            baseline=baseline_results,
+            suppressions=suppression_rules,
+            format=format,
+        ),
+        suppressions_path=resolved_suppressions_path,
+        suppressions=suppression_rules,
+    )
+
+
+def export_results_from_models(
+    results: AttackResults,
+    *,
+    baseline: AttackResults | None = None,
+    suppressions_yaml: str | None = None,
+    format: str = "sarif",
+) -> dict[str, Any]:
+    return export_results(
+        results,
+        baseline=baseline,
+        suppressions=_load_suppressions_from_text(suppressions_yaml),
+        format=format,
     )
 
 

@@ -33,6 +33,7 @@ Given an OpenAPI spec, GraphQL schema, or learned traffic model, `knives-out` ca
 - run those attacks against a live base URL
 - produce a Markdown report that highlights suspicious outcomes
 - produce an HTML report with linked request and response artifacts
+- export SARIF findings for CI-native code-scanning review
 - verify findings for CI gating
 - promote qualifying findings back into a reusable regression suite
 - suppress or triage known findings so CI stays focused on active risk
@@ -204,6 +205,12 @@ Generate a machine-readable summary for dashboards or CI annotations:
 knives-out summary results.json --out summary.json
 ```
 
+Export active findings as SARIF for CI-native code scanning:
+
+```bash
+knives-out export results.json --format sarif --out results.sarif
+```
+
 Promote qualifying findings back into a reusable regression suite:
 
 ```bash
@@ -306,6 +313,7 @@ The synchronous endpoints mirror the short CLI flows:
 - `POST /v1/inspect`
 - `POST /v1/generate`
 - `POST /v1/discover`
+- `POST /v1/export`
 - `POST /v1/report`
 - `POST /v1/summary`
 - `POST /v1/verify`
@@ -390,6 +398,9 @@ status, severity, confidence, or schema outcome drifted between runs.
 When you want a compact machine-readable artifact for dashboards, annotations, or follow-on
 automation, `knives-out summary results.json --out summary.json` emits the same counts and top
 findings as structured JSON.
+When you want code-scanning or PR-native triage inside CI, `knives-out export results.json --format sarif --out results.sarif`
+emits SARIF 2.1.0 from the same active unsuppressed findings, with optional baseline change
+metadata when you also pass `--baseline previous-results.json`.
 When you want stateful coverage, generate with `--auto-workflows` first, then add
 `--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py` or your own custom pack as
 you move from generic coverage to app-specific journeys. For protected APIs, keep simple static
@@ -410,7 +421,8 @@ error frame within the normal `--timeout` budget.
 Shadow Twin capture and discovery fit the same path too:
 `capture -> discover -> generate -> run -> report -> verify`.
 If you want to drive that workflow from another local tool instead of shelling out, `knives-out serve`
-now exposes the same core actions over HTTP with background `run` jobs, summary responses, and
+now exposes the same core actions over HTTP with background `run` jobs, summary responses, export
+responses, and
 artifact download routes.
 If you keep a `.knives-out-ignore.yml` file in the repo root, `report`, `verify`, and `promote`
 will load it automatically. Use `knives-out triage results.json` to seed new entries when you want
@@ -595,6 +607,27 @@ If `.knives-out-ignore.yml` exists in the repo root, `report` will automatically
 findings separately. You can also point at another file explicitly with `--suppressions path/to.yml`.
 When the run used `--profile-file`, the report includes a per-profile outcome table under each
 attack so you can compare status codes and issues by identity.
+
+### `export`
+
+Renders a machine-readable CI export from a results JSON file.
+
+```bash
+knives-out export results.json --format sarif --out results.sarif
+```
+
+You can include a prior `results.json` as a baseline to attach `new` vs `persisting` metadata and
+persisting delta details to the exported SARIF findings:
+
+```bash
+knives-out export results.json \
+  --format sarif \
+  --baseline previous-results.json \
+  --out results.sarif
+```
+
+`export` auto-loads `.knives-out-ignore.yml` when present and excludes suppressed findings by
+default, so CI-facing SARIF stays aligned with the rest of the review flow.
 
 ### `verify`
 
