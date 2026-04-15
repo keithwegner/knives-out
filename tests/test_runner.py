@@ -234,6 +234,87 @@ def _graphql_shape_book(*, nullable: bool = True) -> GraphQLOutputShape:
     )
 
 
+def _graphql_shape_author(*, nullable: bool = True) -> GraphQLOutputShape:
+    return GraphQLOutputShape(
+        kind="object",
+        type_name="Author",
+        nullable=nullable,
+        fields={
+            "__typename": GraphQLOutputShape(
+                kind="scalar",
+                type_name="String",
+                nullable=False,
+            ),
+            "id": GraphQLOutputShape(
+                kind="scalar",
+                type_name="ID",
+                nullable=False,
+            ),
+            "name": GraphQLOutputShape(
+                kind="scalar",
+                type_name="String",
+                nullable=False,
+            ),
+        },
+    )
+
+
+def _graphql_shape_book_with_author(*, nullable: bool = True) -> GraphQLOutputShape:
+    return GraphQLOutputShape(
+        kind="object",
+        type_name="Book",
+        nullable=nullable,
+        fields={
+            "__typename": GraphQLOutputShape(
+                kind="scalar",
+                type_name="String",
+                nullable=False,
+            ),
+            "id": GraphQLOutputShape(
+                kind="scalar",
+                type_name="ID",
+                nullable=False,
+            ),
+            "title": GraphQLOutputShape(
+                kind="scalar",
+                type_name="String",
+                nullable=False,
+            ),
+            "author": _graphql_shape_author(),
+        },
+    )
+
+
+def _graphql_shape_magazine(*, nullable: bool = True) -> GraphQLOutputShape:
+    return GraphQLOutputShape(
+        kind="object",
+        type_name="Magazine",
+        nullable=nullable,
+        fields={
+            "__typename": GraphQLOutputShape(
+                kind="scalar",
+                type_name="String",
+                nullable=False,
+            ),
+            "id": GraphQLOutputShape(
+                kind="scalar",
+                type_name="ID",
+                nullable=False,
+            ),
+            "title": GraphQLOutputShape(
+                kind="scalar",
+                type_name="String",
+                nullable=False,
+            ),
+            "issue": GraphQLOutputShape(
+                kind="scalar",
+                type_name="Int",
+                nullable=False,
+            ),
+        },
+    )
+
+
 def _graphql_attack_case(
     *,
     output_shape: GraphQLOutputShape | None = None,
@@ -265,6 +346,7 @@ def _graphql_subscription_attack_case(
     *,
     body_json: dict[str, object] | None = None,
     expected_outcomes: list[str] | None = None,
+    output_shape: GraphQLOutputShape | None = None,
 ) -> AttackCase:
     return AttackCase(
         id="atk_graphql_subscription",
@@ -287,7 +369,7 @@ def _graphql_subscription_attack_case(
         expected_outcomes=list(expected_outcomes or ["2xx"]),
         graphql_operation_type="subscription",
         graphql_root_field_name="bookEvents",
-        graphql_output_shape=_graphql_shape_book(),
+        graphql_output_shape=output_shape or _graphql_shape_book(),
     )
 
 
@@ -1753,6 +1835,127 @@ def test_execute_attack_suite_flags_wrong_graphql_scalar_type(monkeypatch) -> No
     assert result.graphql_response_error == "$.data.book.rating: expected Int, got string"
 
 
+def test_execute_attack_suite_flags_missing_nested_graphql_selected_field(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "book": {
+                        "__typename": "Book",
+                        "id": "1",
+                        "title": "Dune",
+                        "author": {"__typename": "Author", "id": "a1"},
+                    }
+                }
+            },
+        ),
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                _graphql_attack_case(
+                    output_shape=_graphql_shape_book_with_author(),
+                )
+            ],
+        ),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "graphql_response_shape_mismatch"
+    assert result.graphql_response_error == "$.data.book.author: missing selected field 'name'"
+
+
+def test_execute_attack_suite_flags_wrong_nested_graphql_scalar_type(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "book": {
+                        "__typename": "Book",
+                        "id": "1",
+                        "title": "Dune",
+                        "author": {"__typename": "Author", "id": "a1", "name": 99},
+                    }
+                }
+            },
+        ),
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                _graphql_attack_case(
+                    output_shape=_graphql_shape_book_with_author(),
+                )
+            ],
+        ),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "graphql_response_shape_mismatch"
+    assert result.graphql_response_error == "$.data.book.author.name: expected String, got integer"
+
+
+def test_execute_attack_suite_flags_graphql_list_item_shape_mismatch(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "books": [
+                        {
+                            "__typename": "Book",
+                            "id": "1",
+                            "title": 7,
+                            "rating": 5,
+                        }
+                    ]
+                }
+            },
+        ),
+    )
+
+    attack = _graphql_attack_case(
+        output_shape=GraphQLOutputShape(
+            kind="list",
+            type_name="Book",
+            nullable=False,
+            item_shape=_graphql_shape_book(nullable=False),
+        )
+    ).model_copy(
+        update={
+            "operation_id": "books",
+            "graphql_root_field_name": "books",
+            "body_json": {
+                "query": "query Books { books { __typename id title rating } }",
+                "variables": {},
+            },
+        }
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(source="unit", attacks=[attack]),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "graphql_response_shape_mismatch"
+    assert result.graphql_response_error == "$.data.books[0].title: expected String, got integer"
+
+
 def test_execute_attack_suite_allows_partial_graphql_data_when_shape_is_valid(monkeypatch) -> None:
     _install_stub_response(
         monkeypatch,
@@ -1863,6 +2066,141 @@ def test_execute_attack_suite_validates_graphql_union_typename(monkeypatch) -> N
     assert "expected one of ['Book']" in (result.graphql_response_error or "")
 
 
+def test_execute_attack_suite_accepts_valid_graphql_interface_runtime_type(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "node": {
+                        "__typename": "Magazine",
+                        "id": "1",
+                        "title": "Issue 1",
+                        "issue": 7,
+                    }
+                }
+            },
+        ),
+    )
+
+    attack = _graphql_attack_case(
+        output_shape=GraphQLOutputShape(
+            kind="interface",
+            type_name="Node",
+            nullable=True,
+            possible_types={
+                "Book": _graphql_shape_book(),
+                "Magazine": _graphql_shape_magazine(),
+            },
+        )
+    ).model_copy(
+        update={
+            "operation_id": "node",
+            "graphql_root_field_name": "node",
+            "body_json": {
+                "query": (
+                    "query Node($id: ID!) { "
+                    "node(id: $id) { __typename ... on Book { id title rating } "
+                    "... on Magazine { id title issue } } }"
+                ),
+                "variables": {"id": "1"},
+            },
+        }
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(source="unit", attacks=[attack]),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "unexpected_success"
+    assert result.graphql_response_valid is True
+
+
+def test_execute_attack_suite_flags_missing_graphql_fragment_field(monkeypatch) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={"data": {"node": {"__typename": "Book", "id": "1", "rating": 5}}},
+        ),
+    )
+
+    attack = _graphql_attack_case(
+        output_shape=GraphQLOutputShape(
+            kind="interface",
+            type_name="Node",
+            nullable=True,
+            possible_types={"Book": _graphql_shape_book()},
+        )
+    ).model_copy(
+        update={
+            "operation_id": "node",
+            "graphql_root_field_name": "node",
+            "body_json": {
+                "query": (
+                    "query Node($id: ID!) { "
+                    "node(id: $id) { __typename ... on Book { id title rating } } "
+                    "}"
+                ),
+                "variables": {"id": "1"},
+            },
+        }
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(source="unit", attacks=[attack]),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "graphql_response_shape_mismatch"
+    assert result.graphql_response_error == "$.data.node: missing selected field 'title'"
+
+
+def test_execute_attack_suite_flags_partial_graphql_fragment_data_when_shape_is_invalid(
+    monkeypatch,
+) -> None:
+    _install_stub_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "data": {
+                    "book": {
+                        "__typename": "Book",
+                        "id": "1",
+                        "title": "Dune",
+                        "author": {"__typename": "Author", "id": "a1"},
+                    }
+                },
+                "errors": [{"message": "author.name resolver failed"}],
+            },
+        ),
+    )
+
+    results = execute_attack_suite(
+        AttackSuite(
+            source="unit",
+            attacks=[
+                _graphql_attack_case(
+                    output_shape=_graphql_shape_book_with_author(),
+                )
+            ],
+        ),
+        base_url="https://example.com",
+    )
+
+    result = results.results[0]
+    assert result.flagged is True
+    assert result.issue == "graphql_response_shape_mismatch"
+    assert result.graphql_response_error == "$.data.book.author: missing selected field 'name'"
+
+
 def test_execute_attack_suite_runs_graphql_subscription_over_websocket() -> None:
     def _handler(websocket) -> None:
         init_frame = json.loads(websocket.recv())
@@ -1904,6 +2242,61 @@ def test_execute_attack_suite_runs_graphql_subscription_over_websocket() -> None
     assert result.status_code == 200
     assert result.graphql_response_valid is True
     assert result.url.endswith("/graphql")
+
+
+def test_execute_attack_suite_validates_nested_graphql_subscription_payload() -> None:
+    def _handler(websocket) -> None:
+        init_frame = json.loads(websocket.recv())
+        assert init_frame == {"type": "connection_init"}
+        websocket.send(json.dumps({"type": "connection_ack"}))
+
+        subscribe_frame = json.loads(websocket.recv())
+        assert subscribe_frame["type"] == "subscribe"
+        websocket.send(
+            json.dumps(
+                {
+                    "type": "next",
+                    "id": subscribe_frame["id"],
+                    "payload": {
+                        "data": {
+                            "bookEvents": {
+                                "__typename": "Book",
+                                "id": "1",
+                                "title": "Dune",
+                                "author": {
+                                    "__typename": "Author",
+                                    "id": "a1",
+                                    "name": "Frank Herbert",
+                                },
+                            }
+                        }
+                    },
+                }
+            )
+        )
+
+    attack = _graphql_subscription_attack_case(
+        body_json={
+            "query": (
+                "subscription BookEvents($id: ID!) { "
+                "bookEvents(id: $id) { __typename id title author { __typename id name } } "
+                "}"
+            ),
+            "variables": {"id": "1"},
+        },
+        output_shape=_graphql_shape_book_with_author(nullable=False),
+    )
+
+    with _graphql_subscription_server(_handler) as base_url:
+        results = execute_attack_suite(
+            AttackSuite(source="unit", attacks=[attack]),
+            base_url=base_url,
+        )
+
+    result = results.results[0]
+    assert result.flagged is False
+    assert result.issue is None
+    assert result.graphql_response_valid is True
 
 
 def test_execute_attack_suite_handles_graphql_subscription_ping_frames() -> None:

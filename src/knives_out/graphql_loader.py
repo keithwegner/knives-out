@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -94,66 +95,35 @@ def _nullable_schema(schema: dict[str, Any], *, nullable: bool) -> dict[str, Any
     return {**schema, "nullable": True}
 
 
-def _json_schema_for_output_type(type_: Any, *, schema: GraphQLSchema) -> dict[str, Any]:
-    if isinstance(type_, GraphQLNonNull):
-        output_schema = dict(_json_schema_for_output_type(type_.of_type, schema=schema))
-        output_schema.pop("nullable", None)
-        return output_schema
+@dataclass(frozen=True)
+class _GraphQLContract:
+    shape: GraphQLOutputShape
+    selection_set: str
+    response_schema: dict[str, Any]
 
-    named_type = get_named_type(type_)
-    nullable = not isinstance(type_, GraphQLNonNull)
 
-    if isinstance(type_, GraphQLList):
-        item_schema = _json_schema_for_output_type(type_.of_type, schema=schema)
-        return _nullable_schema({"type": "array", "items": item_schema}, nullable=nullable)
+def _typename_shape() -> GraphQLOutputShape:
+    return GraphQLOutputShape(
+        kind="scalar",
+        type_name="String",
+        nullable=False,
+    )
 
-    if isinstance(named_type, GraphQLScalarType):
-        scalar_name = named_type.name
-        if scalar_name == "Int":
-            return _nullable_schema({"type": "integer"}, nullable=nullable)
-        if scalar_name == "Float":
-            return _nullable_schema({"type": "number"}, nullable=nullable)
-        if scalar_name == "Boolean":
-            return _nullable_schema({"type": "boolean"}, nullable=nullable)
-        return _nullable_schema({"type": "string"}, nullable=nullable)
 
-    if isinstance(named_type, GraphQLEnumType):
-        return _nullable_schema(
-            {"type": "string", "enum": list(named_type.values)},
-            nullable=nullable,
-        )
+def _typename_schema(type_name: str) -> dict[str, Any]:
+    return {
+        "type": "string",
+        "const": type_name,
+    }
 
-    if isinstance(named_type, GraphQLObjectType):
-        return _nullable_schema(
-            {
-                "type": "object",
-                "properties": {
-                    "__typename": {
-                        "type": "string",
-                        "const": named_type.name,
-                    }
-                },
-                "required": ["__typename"],
-            },
-            nullable=nullable,
-        )
 
-    if isinstance(named_type, (GraphQLInterfaceType, GraphQLUnionType)):
-        possible_types = [possible.name for possible in schema.get_possible_types(named_type)]
-        typename_schema: dict[str, Any] = {"type": "string"}
-        if possible_types:
-            typename_schema["enum"] = possible_types
-        return _nullable_schema(
-            {
-                "type": "object",
-                "properties": {
-                    "__typename": typename_schema,
-                },
-                "required": ["__typename"],
-            },
-            nullable=nullable,
-        )
-
+def _graphql_scalar_schema(type_name: str, *, nullable: bool) -> dict[str, Any]:
+    if type_name == "Int":
+        return _nullable_schema({"type": "integer"}, nullable=nullable)
+    if type_name == "Float":
+        return _nullable_schema({"type": "number"}, nullable=nullable)
+    if type_name == "Boolean":
+        return _nullable_schema({"type": "boolean"}, nullable=nullable)
     return _nullable_schema({"type": "string"}, nullable=nullable)
 
 
@@ -170,141 +140,162 @@ def _federated_entity_type(type_: Any) -> bool:
     return any(getattr(directive.name, "value", None) == "key" for directive in directives)
 
 
-def _graphql_shape(
+def _graphql_contract(
     type_: Any,
     *,
     schema: GraphQLSchema,
     depth: int = 0,
     seen: tuple[str, ...] = (),
     federated_schema: bool = False,
-) -> tuple[GraphQLOutputShape, str]:
+) -> _GraphQLContract:
     nullable = not isinstance(type_, GraphQLNonNull)
     inner_type = type_.of_type if isinstance(type_, GraphQLNonNull) else type_
 
     if isinstance(inner_type, GraphQLList):
-        item_shape, item_selection = _graphql_shape(
+        item_contract = _graphql_contract(
             inner_type.of_type,
             schema=schema,
             depth=depth,
             seen=seen,
             federated_schema=federated_schema,
         )
-        return (
-            GraphQLOutputShape(
+        return _GraphQLContract(
+            shape=GraphQLOutputShape(
                 kind="list",
                 type_name=str(get_named_type(inner_type)),
                 nullable=nullable,
-                item_shape=item_shape,
+                item_shape=item_contract.shape,
                 federation_hint=(
                     "Selection crosses a federated list boundary."
-                    if federated_schema and item_shape.kind in {"object", "interface", "union"}
+                    if federated_schema
+                    and item_contract.shape.kind in {"object", "interface", "union"}
                     else None
                 ),
             ),
-            item_selection,
+            selection_set=item_contract.selection_set,
+            response_schema=_nullable_schema(
+                {"type": "array", "items": item_contract.response_schema},
+                nullable=nullable,
+            ),
         )
 
     named_type = get_named_type(inner_type)
     if isinstance(named_type, GraphQLScalarType):
-        return (
-            GraphQLOutputShape(
+        return _GraphQLContract(
+            shape=GraphQLOutputShape(
                 kind="scalar",
                 type_name=named_type.name,
                 nullable=nullable,
             ),
-            "",
+            selection_set="",
+            response_schema=_graphql_scalar_schema(named_type.name, nullable=nullable),
         )
 
     if isinstance(named_type, GraphQLEnumType):
-        return (
-            GraphQLOutputShape(
+        return _GraphQLContract(
+            shape=GraphQLOutputShape(
                 kind="enum",
                 type_name=named_type.name,
                 nullable=nullable,
             ),
-            "",
+            selection_set="",
+            response_schema=_nullable_schema(
+                {"type": "string", "enum": list(named_type.values)},
+                nullable=nullable,
+            ),
         )
 
     if isinstance(named_type, GraphQLObjectType):
         type_name = named_type.name
+        federated_entity = federated_schema and _federated_entity_type(named_type)
+        response_properties = {"__typename": _typename_schema(type_name)}
+        required = ["__typename"]
         if type_name in seen or depth >= 3:
-            fields = {
-                "__typename": GraphQLOutputShape(
-                    kind="scalar",
-                    type_name="String",
-                    nullable=False,
-                )
-            }
-            return (
-                GraphQLOutputShape(
+            fields = {"__typename": _typename_shape()}
+            return _GraphQLContract(
+                shape=GraphQLOutputShape(
                     kind="object",
                     type_name=type_name,
                     nullable=nullable,
                     fields=fields,
-                    federated_entity=federated_schema and _federated_entity_type(named_type),
+                    federated_entity=federated_entity,
                     federation_hint=(
                         f"Type '{type_name}' is revisited inside a federated schema."
                         if federated_schema
                         else None
                     ),
                 ),
-                "{ __typename }",
+                selection_set="{ __typename }",
+                response_schema=_nullable_schema(
+                    {
+                        "type": "object",
+                        "properties": response_properties,
+                        "required": required,
+                    },
+                    nullable=nullable,
+                ),
             )
 
-        fields: dict[str, GraphQLOutputShape] = {
-            "__typename": GraphQLOutputShape(
-                kind="scalar",
-                type_name="String",
-                nullable=False,
-            )
-        }
+        fields: dict[str, GraphQLOutputShape] = {"__typename": _typename_shape()}
         selections = ["__typename"]
         for field_name, field in named_type.fields.items():
             if field_name.startswith("__") or not _selectable_field(field):
                 continue
-            field_shape, field_selection = _graphql_shape(
+            field_contract = _graphql_contract(
                 field.type,
                 schema=schema,
                 depth=depth + 1,
                 seen=(*seen, type_name),
                 federated_schema=federated_schema,
             )
-            fields[field_name] = field_shape
-            if field_selection:
-                selections.append(f"{field_name} {field_selection}")
+            fields[field_name] = field_contract.shape
+            response_properties[field_name] = field_contract.response_schema
+            required.append(field_name)
+            if field_contract.selection_set:
+                selections.append(f"{field_name} {field_contract.selection_set}")
             else:
                 selections.append(field_name)
-        return (
-            GraphQLOutputShape(
+        return _GraphQLContract(
+            shape=GraphQLOutputShape(
                 kind="object",
                 type_name=type_name,
                 nullable=nullable,
                 fields=fields,
-                federated_entity=federated_schema and _federated_entity_type(named_type),
+                federated_entity=federated_entity,
                 federation_hint=(
                     f"Type '{type_name}' may resolve across federated entity boundaries."
-                    if federated_schema and _federated_entity_type(named_type)
+                    if federated_entity
                     else None
                 ),
             ),
-            "{ " + " ".join(selections) + " }",
+            selection_set="{ " + " ".join(selections) + " }",
+            response_schema=_nullable_schema(
+                {
+                    "type": "object",
+                    "properties": response_properties,
+                    "required": required,
+                },
+                nullable=nullable,
+            ),
         )
 
     if isinstance(named_type, GraphQLInterfaceType):
         possible_types: dict[str, GraphQLOutputShape] = {}
+        response_variants: list[dict[str, Any]] = []
         fragments: list[str] = ["__typename"]
         for possible_type in schema.get_possible_types(named_type):
-            possible_shape, possible_selection = _graphql_shape(
-                possible_type,
+            possible_contract = _graphql_contract(
+                GraphQLNonNull(possible_type),
                 schema=schema,
                 depth=depth + 1,
                 seen=(*seen, named_type.name),
                 federated_schema=federated_schema,
             )
-            possible_types[possible_type.name] = possible_shape
-            fragments.append(f"... on {possible_type.name} {possible_selection}")
-        return (
-            GraphQLOutputShape(
+            possible_types[possible_type.name] = possible_contract.shape
+            response_variants.append(possible_contract.response_schema)
+            fragments.append(f"... on {possible_type.name} {possible_contract.selection_set}")
+        return _GraphQLContract(
+            shape=GraphQLOutputShape(
                 kind="interface",
                 type_name=named_type.name,
                 nullable=nullable,
@@ -316,24 +307,27 @@ def _graphql_shape(
                     else None
                 ),
             ),
-            "{ " + " ".join(fragments) + " }",
+            selection_set="{ " + " ".join(fragments) + " }",
+            response_schema=_nullable_schema({"oneOf": response_variants}, nullable=nullable),
         )
 
     if isinstance(named_type, GraphQLUnionType):
-        possible_types = {}
+        possible_types: dict[str, GraphQLOutputShape] = {}
+        response_variants: list[dict[str, Any]] = []
         fragments = ["__typename"]
         for possible_type in named_type.types:
-            possible_shape, possible_selection = _graphql_shape(
-                possible_type,
+            possible_contract = _graphql_contract(
+                GraphQLNonNull(possible_type),
                 schema=schema,
                 depth=depth + 1,
                 seen=(*seen, named_type.name),
                 federated_schema=federated_schema,
             )
-            possible_types[possible_type.name] = possible_shape
-            fragments.append(f"... on {possible_type.name} {possible_selection}")
-        return (
-            GraphQLOutputShape(
+            possible_types[possible_type.name] = possible_contract.shape
+            response_variants.append(possible_contract.response_schema)
+            fragments.append(f"... on {possible_type.name} {possible_contract.selection_set}")
+        return _GraphQLContract(
+            shape=GraphQLOutputShape(
                 kind="union",
                 type_name=named_type.name,
                 nullable=nullable,
@@ -345,16 +339,18 @@ def _graphql_shape(
                     else None
                 ),
             ),
-            "{ " + " ".join(fragments) + " }",
+            selection_set="{ " + " ".join(fragments) + " }",
+            response_schema=_nullable_schema({"oneOf": response_variants}, nullable=nullable),
         )
 
-    return (
-        GraphQLOutputShape(
+    return _GraphQLContract(
+        shape=GraphQLOutputShape(
             kind="scalar",
             type_name=str(named_type),
             nullable=nullable,
         ),
-        "",
+        selection_set="",
+        response_schema=_graphql_scalar_schema(str(named_type), nullable=nullable),
     )
 
 
@@ -363,8 +359,7 @@ def _graphql_document(
     operation_type: str,
     field_name: str,
     field: Any,
-    schema: GraphQLSchema,
-    federated_schema: bool,
+    selection_set: str,
 ) -> str:
     variable_definitions: list[str] = []
     argument_bindings: list[str] = []
@@ -375,11 +370,6 @@ def _graphql_document(
     operation_name = field_name[:1].upper() + field_name[1:]
     definitions = f"({', '.join(variable_definitions)})" if variable_definitions else ""
     bindings = f"({', '.join(argument_bindings)})" if argument_bindings else ""
-    _, selection_set = _graphql_shape(
-        field.type,
-        schema=schema,
-        federated_schema=federated_schema,
-    )
     selection = f" {selection_set}" if selection_set else ""
     return f"{operation_type} {operation_name}{definitions} {{ {field_name}{bindings}{selection} }}"
 
@@ -418,14 +408,14 @@ def _request_body_schema(document: str, variables_schema: dict[str, Any]) -> dic
     return schema
 
 
-def _response_schema(field_name: str, field: Any, *, schema: GraphQLSchema) -> dict[str, Any]:
+def _response_schema(field_name: str, field_response_schema: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
             "data": {
                 "type": "object",
                 "properties": {
-                    field_name: _json_schema_for_output_type(field.type, schema=schema),
+                    field_name: field_response_schema,
                 },
                 "required": [field_name],
             }
@@ -448,7 +438,7 @@ def _operation_specs(
     operations: list[OperationSpec] = []
     for field_name, field in root.fields.items():
         variables_schema = _variables_schema(field)
-        output_shape, _ = _graphql_shape(
+        contract = _graphql_contract(
             field.type,
             schema=schema,
             federated_schema=federated_schema,
@@ -457,16 +447,15 @@ def _operation_specs(
             operation_type=operation_type,
             field_name=field_name,
             field=field,
-            schema=schema,
-            federated_schema=federated_schema,
+            selection_set=contract.selection_set,
         )
         entity_types = sorted(
             type_name
-            for type_name, shape in output_shape.possible_types.items()
+            for type_name, shape in contract.shape.possible_types.items()
             if shape.federated_entity
         )
-        if output_shape.federated_entity:
-            entity_types.append(output_shape.type_name)
+        if contract.shape.federated_entity:
+            entity_types.append(contract.shape.type_name)
         operations.append(
             OperationSpec(
                 operation_id=field_name,
@@ -490,14 +479,14 @@ def _operation_specs(
                 response_schemas={
                     "200": ResponseSpec(
                         content_type="application/json",
-                        schema_def=_response_schema(field_name, field, schema=schema),
+                        schema_def=_response_schema(field_name, contract.response_schema),
                     )
                 },
                 graphql_operation_type=operation_type,
                 graphql_document=document,
                 graphql_variables_schema=variables_schema,
                 graphql_root_field_name=field_name,
-                graphql_output_shape=output_shape,
+                graphql_output_shape=contract.shape,
                 graphql_federated=federated_schema,
                 graphql_entity_types=sorted(set(entity_types)),
             )

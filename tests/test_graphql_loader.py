@@ -21,6 +21,7 @@ def _graphql_schema_text() -> str:
           book(id: ID!): Book
           books(limit: Int, genre: Genre): [Book!]!
           node(id: ID!): Node
+          search(id: ID!): SearchResult
         }
 
         type Mutation {
@@ -31,6 +32,19 @@ def _graphql_schema_text() -> str:
           id: ID!
           title: String!
           genre: Genre!
+          author: Author
+        }
+
+        type Author {
+          id: ID!
+          name: String!
+          favoriteBook: Book
+        }
+
+        type Magazine implements Node {
+          id: ID!
+          title: String!
+          issue: Int!
         }
 
         input CreateBookInput {
@@ -43,6 +57,8 @@ def _graphql_schema_text() -> str:
           FICTION
           NONFICTION
         }
+
+        union SearchResult = Book | Magazine
         """
     ).strip()
 
@@ -77,6 +93,7 @@ def test_load_graphql_operations_from_sdl(tmp_path) -> None:
         "book",
         "books",
         "node",
+        "search",
         "createBook",
     ]
 
@@ -86,40 +103,50 @@ def test_load_graphql_operations_from_sdl(tmp_path) -> None:
     assert book.method == "POST"
     assert book.path == "/api/graphql"
     assert book.tags == ["graphql", "query"]
-    assert (
-        book.graphql_document
-        == "query Book($id: ID!) { book(id: $id) { __typename id title genre } }"
+    assert book.graphql_document == (
+        "query Book($id: ID!) { "
+        "book(id: $id) { "
+        "__typename id title genre author { __typename id name favoriteBook { __typename } } "
+        "} }"
     )
     assert book.graphql_root_field_name == "book"
     assert book.graphql_output_shape is not None
     assert book.graphql_output_shape.kind == "object"
-    assert sorted(book.graphql_output_shape.fields) == ["__typename", "genre", "id", "title"]
+    assert sorted(book.graphql_output_shape.fields) == [
+        "__typename",
+        "author",
+        "genre",
+        "id",
+        "title",
+    ]
+    assert sorted(book.graphql_output_shape.fields["author"].fields["favoriteBook"].fields) == [
+        "__typename"
+    ]
     assert book.graphql_variables_schema == {
         "type": "object",
         "properties": {"id": {"type": "string"}},
         "required": ["id"],
     }
     assert book.response_schemas["200"].content_type == "application/json"
-    assert book.response_schemas["200"].schema_def == {
+    book_schema = book.response_schemas["200"].schema_def["properties"]["data"]["properties"][
+        "book"
+    ]
+    assert book_schema["required"] == ["__typename", "id", "title", "genre", "author"]
+    assert book_schema["properties"]["author"]["required"] == [
+        "__typename",
+        "id",
+        "name",
+        "favoriteBook",
+    ]
+    assert book_schema["properties"]["author"]["properties"]["favoriteBook"] == {
         "type": "object",
         "properties": {
-            "data": {
-                "type": "object",
-                "properties": {
-                    "book": {
-                        "type": "object",
-                        "properties": {
-                            "__typename": {"type": "string", "const": "Book"},
-                        },
-                        "required": ["__typename"],
-                        "nullable": True,
-                    }
-                },
-                "required": ["book"],
-            }
+            "__typename": {"type": "string", "const": "Book"},
         },
-        "required": ["data"],
+        "required": ["__typename"],
+        "nullable": True,
     }
+    assert book_schema["properties"]["author"]["nullable"] is True
 
     create_book = operations[-1]
     assert create_book.graphql_operation_type == "mutation"
@@ -140,30 +167,48 @@ def test_load_graphql_operations_from_sdl(tmp_path) -> None:
     }
     assert create_book.graphql_output_shape is not None
     assert create_book.graphql_output_shape.fields["title"].type_name == "String"
-    assert create_book.response_schemas["200"].schema_def == {
-        "type": "object",
-        "properties": {
-            "data": {
-                "type": "object",
-                "properties": {
-                    "createBook": {
-                        "type": "object",
-                        "properties": {
-                            "__typename": {"type": "string", "const": "Book"},
-                        },
-                        "required": ["__typename"],
-                    }
-                },
-                "required": ["createBook"],
-            }
-        },
-        "required": ["data"],
-    }
+    create_book_schema = create_book.response_schemas["200"].schema_def["properties"]["data"][
+        "properties"
+    ]["createBook"]
+    assert create_book_schema["required"] == ["__typename", "id", "title", "genre", "author"]
+    assert create_book_schema["properties"]["author"]["properties"]["name"] == {"type": "string"}
 
     node = next(operation for operation in operations if operation.operation_id == "node")
     assert node.graphql_output_shape is not None
     assert node.graphql_output_shape.kind == "interface"
-    assert "Book" in node.graphql_output_shape.possible_types
+    assert sorted(node.graphql_output_shape.possible_types) == ["Book", "Magazine"]
+    assert "... on Book { __typename id title genre author" in (node.graphql_document or "")
+    assert "... on Magazine { __typename id title issue }" in (node.graphql_document or "")
+    node_schema = node.response_schemas["200"].schema_def["properties"]["data"]["properties"][
+        "node"
+    ]
+    assert len(node_schema["oneOf"]) == 2
+    book_variant = next(
+        variant
+        for variant in node_schema["oneOf"]
+        if variant["properties"]["__typename"]["const"] == "Book"
+    )
+    magazine_variant = next(
+        variant
+        for variant in node_schema["oneOf"]
+        if variant["properties"]["__typename"]["const"] == "Magazine"
+    )
+    assert "author" in book_variant["properties"]
+    assert "issue" in magazine_variant["properties"]
+
+    search = next(operation for operation in operations if operation.operation_id == "search")
+    assert search.graphql_output_shape is not None
+    assert search.graphql_output_shape.kind == "union"
+    assert "... on Book { __typename id title genre author" in (search.graphql_document or "")
+    assert "... on Magazine { __typename id title issue }" in (search.graphql_document or "")
+    search_schema = search.response_schemas["200"].schema_def["properties"]["data"]["properties"][
+        "search"
+    ]
+    assert len(search_schema["oneOf"]) == 2
+    assert {variant["properties"]["__typename"]["const"] for variant in search_schema["oneOf"]} == {
+        "Book",
+        "Magazine",
+    }
 
 
 def test_load_graphql_operations_includes_subscription_roots(tmp_path) -> None:
@@ -205,6 +250,7 @@ def test_spec_loader_detects_graphql_introspection_json(tmp_path) -> None:
         "book",
         "books",
         "node",
+        "search",
         "createBook",
     }
 

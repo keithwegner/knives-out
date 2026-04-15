@@ -29,6 +29,39 @@ def _graphql_subscription_schema_text() -> str:
     ).strip()
 
 
+def _graphql_fragment_schema_text() -> str:
+    return dedent(
+        """
+        interface Node {
+          id: ID!
+        }
+
+        type Query {
+          search(id: ID!): SearchResult
+        }
+
+        type Book implements Node {
+          id: ID!
+          title: String!
+          author: Author
+        }
+
+        type Author {
+          id: ID!
+          name: String!
+        }
+
+        type Magazine implements Node {
+          id: ID!
+          title: String!
+          issue: Int!
+        }
+
+        union SearchResult = Book | Magazine
+        """
+    ).strip()
+
+
 def test_generate_graphql_attack_suite_emits_variable_mutations() -> None:
     suite = generate_attack_suite(
         load_operations(GRAPHQL_SPEC),
@@ -62,8 +95,15 @@ def test_generate_graphql_attack_suite_emits_variable_mutations() -> None:
                         "type": "object",
                         "properties": {
                             "__typename": {"type": "string", "const": "Book"},
+                            "id": {"type": "string"},
+                            "title": {"type": "string"},
+                            "genre": {
+                                "type": "string",
+                                "enum": ["FICTION", "NONFICTION", "REFERENCE"],
+                            },
+                            "rating": {"type": "integer", "nullable": True},
                         },
-                        "required": ["__typename"],
+                        "required": ["__typename", "id", "title", "genre", "rating"],
                     }
                 },
                 "required": ["createBook"],
@@ -101,3 +141,33 @@ def test_generate_graphql_attack_suite_includes_subscription_attacks(tmp_path) -
         attack for attack in subscription_attacks if attack.kind == "wrong_type_variable"
     )
     assert wrong_type_attack.body_json["query"].startswith("subscription BookEvents")
+
+
+def test_generate_graphql_attack_suite_preserves_fragment_aware_contracts(tmp_path) -> None:
+    schema_path = tmp_path / "fragments.graphql"
+    schema_path.write_text(_graphql_fragment_schema_text(), encoding="utf-8")
+
+    suite = generate_attack_suite(
+        load_operations(schema_path),
+        source=str(schema_path),
+    )
+
+    search_attacks = [attack for attack in suite.attacks if attack.operation_id == "search"]
+    wrong_type_attack = next(
+        attack for attack in search_attacks if attack.kind == "wrong_type_variable"
+    )
+
+    assert (
+        "... on Book { __typename id title author { __typename id name } }"
+        in (wrong_type_attack.body_json["query"])
+    )
+    assert "... on Magazine { __typename id title issue }" in wrong_type_attack.body_json["query"]
+
+    search_schema = wrong_type_attack.response_schemas["200"].schema_def["properties"]["data"][
+        "properties"
+    ]["search"]
+    assert len(search_schema["oneOf"]) == 2
+    assert {variant["properties"]["__typename"]["const"] for variant in search_schema["oneOf"]} == {
+        "Book",
+        "Magazine",
+    }
