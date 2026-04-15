@@ -22,6 +22,13 @@ import type {
 } from "./types";
 import { buildApiUrl, needsConfiguredApiBase } from "./apiConfig";
 
+function encodeArtifactName(artifactName: string): string {
+  return artifactName
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
 function requestFailureMessage(requestUrl: string, response: Response): string {
   return `Request to ${requestUrl} failed with ${response.status}${response.statusText ? ` ${response.statusText}` : ""}.`;
 }
@@ -92,6 +99,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getHealthStatus() {
   return request<{ status: string }>("/healthz");
+}
+
+export function buildJobArtifactUrl(jobId: string, artifactName: string) {
+  return buildApiUrl(
+    `/v1/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeArtifactName(artifactName)}`,
+  );
+}
+
+export async function fetchJobArtifactText(jobId: string, artifactName: string) {
+  if (needsConfiguredApiBase()) {
+    throw new Error("Set the API base URL before using the GitHub Pages workbench.");
+  }
+
+  const requestUrl = buildJobArtifactUrl(jobId, artifactName);
+  const response = await fetch(requestUrl);
+
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, requestUrl));
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("text/html")) {
+    throw new Error(
+      `Request to ${requestUrl} succeeded but returned HTML instead of an artifact file. Check the configured API base URL.`,
+    );
+  }
+
+  return response.text();
 }
 
 export function listProjects() {

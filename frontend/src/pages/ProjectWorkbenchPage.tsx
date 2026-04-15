@@ -12,10 +12,12 @@ import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../api
 import ApiConnectionPanel from "../components/ApiConnectionPanel";
 import CodeEditor from "../components/CodeEditor";
 import {
+  buildJobArtifactUrl,
   createRun,
   deleteProjectJob,
   discoverModel,
   duplicateProject,
+  fetchJobArtifactText,
   generateSuite,
   getJobResult,
   getProject,
@@ -55,9 +57,38 @@ type ReviewTab =
 
 type FindingScope = "current" | "new" | "resolved" | "persisting";
 type RunHistoryFilter = "all" | "active" | "completed" | "failed";
+type ArtifactPreviewMode = "structured" | "raw";
 
 const STEP_ORDER: ProjectStep[] = ["source", "inspect", "generate", "run", "review"];
 const PRUNEABLE_JOB_STATUSES: ApiJobStatus[] = ["completed", "failed"];
+
+type ArtifactPreviewRecord = {
+  attack: {
+    id?: string;
+    name?: string;
+    kind?: string;
+    operation_id?: string;
+    path?: string | null;
+  };
+  request: {
+    method: string;
+    url: string;
+    headers?: Record<string, string>;
+    query?: Record<string, unknown>;
+    body?: {
+      present?: boolean;
+      kind?: string;
+      content_type?: string | null;
+      excerpt?: string | null;
+    } | null;
+  };
+  response: {
+    status_code?: number | null;
+    error?: string | null;
+    duration_ms?: number | null;
+    body_excerpt?: string | null;
+  };
+};
 
 function defaultSourceForMode(mode: ProjectSourceMode): SourcePayload | null {
   if (mode === "openapi") {
@@ -105,6 +136,82 @@ function shortJobId(jobId: string | null | undefined): string {
 function formatJobOptionLabel(job: JobStatusResponse): string {
   const flaggedCount = job.result_summary?.active_flagged_count ?? 0;
   return `${shortJobId(job.id)} • ${formatDateTime(jobTimestamp(job))} • ${flaggedCount} flagged`;
+}
+
+function formatArtifactJobOptionLabel(job: JobStatusResponse): string {
+  return `${shortJobId(job.id)} • ${formatDateTime(jobTimestamp(job))} • ${job.artifact_names.length} artifact(s)`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
+}
+
+function isArtifactPreviewRecord(value: unknown): value is ArtifactPreviewRecord {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const attack = value.attack;
+  const request = value.request;
+  const response = value.response;
+  const headers = isRecord(request) ? request.headers : null;
+  return (
+    isRecord(attack) &&
+    isRecord(request) &&
+    typeof request.method === "string" &&
+    typeof request.url === "string" &&
+    (headers == null || isStringRecord(headers)) &&
+    isRecord(response)
+  );
+}
+
+function parseArtifactPreview(text: string): {
+  structured: ArtifactPreviewRecord | null;
+  raw: string;
+} {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return {
+      structured: isArtifactPreviewRecord(parsed) ? parsed : null,
+      raw: formatJson(parsed),
+    };
+  } catch {
+    return {
+      structured: null,
+      raw: text,
+    };
+  }
+}
+
+function defaultArtifactSelection(
+  jobs: JobStatusResponse[],
+  options: {
+    currentRunJob: JobStatusResponse | null;
+    baselineJob: JobStatusResponse | null;
+  },
+): { jobId: string; artifactName: string } | null {
+  const { currentRunJob, baselineJob } = options;
+  const preferredJobs = [
+    currentRunJob && currentRunJob.artifact_names.length ? currentRunJob : null,
+    baselineJob &&
+    baselineJob.artifact_names.length &&
+    baselineJob.id !== currentRunJob?.id
+      ? baselineJob
+      : null,
+    ...jobs.filter((job) => job.id !== currentRunJob?.id && job.id !== baselineJob?.id),
+  ].filter((job): job is JobStatusResponse => Boolean(job));
+
+  const selectedJob = preferredJobs[0];
+  if (!selectedJob || !selectedJob.artifact_names.length) {
+    return null;
+  }
+  return {
+    jobId: selectedJob.id,
+    artifactName: selectedJob.artifact_names[0],
+  };
 }
 
 function filterFindings(findings: FindingSummaryResponse[], filter: string) {
@@ -300,6 +407,15 @@ export default function ProjectWorkbenchPage() {
   const [findingScope, setFindingScope] = useState<FindingScope>("current");
   const [reviewFilter, setReviewFilter] = useState("");
   const [runHistoryFilter, setRunHistoryFilter] = useState<RunHistoryFilter>("all");
+  const [selectedArtifactJobId, setSelectedArtifactJobId] = useState<string | null>(null);
+  const [selectedArtifactName, setSelectedArtifactName] = useState<string | null>(null);
+  const [artifactPreviewMode, setArtifactPreviewMode] = useState<ArtifactPreviewMode>("structured");
+  const [artifactPreviewRecord, setArtifactPreviewRecord] = useState<ArtifactPreviewRecord | null>(
+    null,
+  );
+  const [artifactPreviewText, setArtifactPreviewText] = useState("");
+  const [artifactPreviewError, setArtifactPreviewError] = useState<string | null>(null);
+  const [artifactPreviewLoading, setArtifactPreviewLoading] = useState(false);
   const [trackedJobId, setTrackedJobId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [pruneStatuses, setPruneStatuses] = useState<ApiJobStatus[]>([
@@ -447,6 +563,113 @@ export default function ProjectWorkbenchPage() {
     setPrunePreview(null);
   }, [pruneCompletedBefore, pruneLimit, pruneStatuses]);
 
+  const currentJobs = projectJobsQuery.data?.jobs ?? [];
+  const latestJob = currentJobs[0] ?? null;
+  const currentRunJob = draft
+    ? currentJobs.find((job) => job.id === draft.artifacts.last_run_job_id) ?? latestJob
+    : latestJob;
+  const selectedBaselineJob =
+    draft?.review_draft.baseline_job_id != null
+      ? currentJobs.find((job) => job.id === draft.review_draft.baseline_job_id) ?? null
+      : null;
+  const artifactSourceJobs = currentJobs.filter((job) => job.artifact_names.length > 0);
+  const selectedArtifactJob =
+    selectedArtifactJobId != null
+      ? artifactSourceJobs.find((job) => job.id === selectedArtifactJobId) ?? null
+      : null;
+  const selectedArtifactUrl =
+    selectedArtifactJobId && selectedArtifactName
+      ? buildJobArtifactUrl(selectedArtifactJobId, selectedArtifactName)
+      : null;
+
+  useEffect(() => {
+    if (!artifactSourceJobs.length) {
+      setSelectedArtifactJobId(null);
+      setSelectedArtifactName(null);
+      setArtifactPreviewRecord(null);
+      setArtifactPreviewText("");
+      setArtifactPreviewError(null);
+      setArtifactPreviewLoading(false);
+      return;
+    }
+
+    if (selectedArtifactJobId != null) {
+      const matchingJob = artifactSourceJobs.find((job) => job.id === selectedArtifactJobId);
+      if (matchingJob) {
+        if (selectedArtifactName && matchingJob.artifact_names.includes(selectedArtifactName)) {
+          return;
+        }
+        setSelectedArtifactName(matchingJob.artifact_names[0] ?? null);
+        setArtifactPreviewMode("structured");
+        return;
+      }
+    }
+
+    const nextSelection = defaultArtifactSelection(artifactSourceJobs, {
+      currentRunJob,
+      baselineJob: selectedBaselineJob,
+    });
+    if (!nextSelection) {
+      return;
+    }
+    setSelectedArtifactJobId(nextSelection.jobId);
+    setSelectedArtifactName(nextSelection.artifactName);
+    setArtifactPreviewMode("structured");
+  }, [
+    artifactSourceJobs,
+    currentRunJob,
+    selectedBaselineJob,
+    selectedArtifactJobId,
+    selectedArtifactName,
+  ]);
+
+  useEffect(() => {
+    if (reviewTab !== "artifacts") {
+      setArtifactPreviewLoading(false);
+      return;
+    }
+    if (!selectedArtifactJobId || !selectedArtifactName) {
+      setArtifactPreviewLoading(false);
+      setArtifactPreviewRecord(null);
+      setArtifactPreviewText("");
+      setArtifactPreviewError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setArtifactPreviewLoading(true);
+    setArtifactPreviewError(null);
+    void (async () => {
+      try {
+        const previewText = await fetchJobArtifactText(selectedArtifactJobId, selectedArtifactName);
+        if (cancelled) {
+          return;
+        }
+        const preview = parseArtifactPreview(previewText);
+        setArtifactPreviewRecord(preview.structured);
+        setArtifactPreviewText(preview.raw);
+        setArtifactPreviewMode(preview.structured ? "structured" : "raw");
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setArtifactPreviewRecord(null);
+        setArtifactPreviewText("");
+        setArtifactPreviewError(
+          error instanceof Error ? error.message : "Could not load the selected artifact.",
+        );
+      } finally {
+        if (!cancelled) {
+          setArtifactPreviewLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reviewTab, selectedArtifactJobId, selectedArtifactName]);
+
   if (!projectId) {
     return (
       <main className="shell">
@@ -526,17 +749,11 @@ export default function ProjectWorkbenchPage() {
     );
   }
 
-  const currentJobs = projectJobsQuery.data?.jobs ?? [];
   const runHistoryJobs = currentJobs.filter((job) => matchesRunHistoryFilter(job, runHistoryFilter));
   const pruneableJobCount = currentJobs.filter((job) => isPruneableJobStatus(job.status)).length;
-  const latestJob = currentJobs[0];
-  const currentRunJob =
-    currentJobs.find((job) => job.id === draft.artifacts.last_run_job_id) ?? latestJob ?? null;
   const baselineCandidates = currentJobs.filter(
     (job) => job.status === "completed" && job.result_available && job.id !== currentRunJob?.id,
   );
-  const selectedBaselineJob =
-    currentJobs.find((job) => job.id === draft.review_draft.baseline_job_id) ?? null;
   const reviewVerification = draft.artifacts.latest_verification;
   const findingBuckets = {
     current: filterFindings(reviewVerification?.current_findings ?? [], deferredReviewFilter),
@@ -553,6 +770,7 @@ export default function ProjectWorkbenchPage() {
     : draft.review_draft.baseline
       ? `Manual baseline • ${formatDateTime(draft.review_draft.baseline.executed_at)}`
       : "No comparison baseline selected";
+  const selectedArtifactNames = selectedArtifactJob?.artifact_names ?? [];
 
   async function handleSourceUpload(files: FileList | null) {
     if (!files?.length) {
@@ -1131,6 +1349,32 @@ export default function ProjectWorkbenchPage() {
     } finally {
       setBusyAction(null);
     }
+  }
+
+  function handleInspectArtifacts(job: JobStatusResponse) {
+    if (!job.artifact_names.length) {
+      return;
+    }
+    setReviewTab("artifacts");
+    setSelectedArtifactJobId(job.id);
+    setSelectedArtifactName(job.artifact_names[0]);
+    setArtifactPreviewMode("structured");
+    setArtifactPreviewError(null);
+    setActivityMessage(`Inspecting artifacts from run ${shortJobId(job.id)}.`);
+  }
+
+  function handleArtifactSourceChange(jobId: string) {
+    const nextJob = artifactSourceJobs.find((job) => job.id === jobId);
+    setSelectedArtifactJobId(jobId || null);
+    setSelectedArtifactName(nextJob?.artifact_names[0] ?? null);
+    setArtifactPreviewMode("structured");
+    setArtifactPreviewError(null);
+  }
+
+  function handleArtifactSelection(artifactName: string) {
+    setSelectedArtifactName(artifactName || null);
+    setArtifactPreviewMode("structured");
+    setArtifactPreviewError(null);
   }
 
   async function handleDuplicateProject() {
@@ -2112,6 +2356,250 @@ export default function ProjectWorkbenchPage() {
 
             {reviewTab === "artifacts" ? (
               <div className="stack">
+                <div className="comparison-panel artifact-browser-shell">
+                  <div className="section-heading">
+                    <div>
+                      <p className="eyebrow">Artifact browser</p>
+                      <h3>Inspect saved request and response artifacts across project runs.</h3>
+                    </div>
+                    <div className="meta-pill">
+                      {artifactSourceJobs.length}
+                      <span>runs with artifacts</span>
+                    </div>
+                  </div>
+
+                  {artifactSourceJobs.length ? (
+                    <div className="stack">
+                      <div className="field-grid field-grid-2">
+                        <label className="field">
+                          <span className="field-label">Artifact source run</span>
+                          <select
+                            aria-label="Artifact source run"
+                            className="text-input"
+                            onChange={(event) => handleArtifactSourceChange(event.target.value)}
+                            value={selectedArtifactJobId ?? ""}
+                          >
+                            {artifactSourceJobs.map((job) => (
+                              <option key={job.id} value={job.id}>
+                                {formatArtifactJobOptionLabel(job)}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="field-hint">
+                            The artifact browser includes every saved project run with stored files,
+                            regardless of the run-history filter below.
+                          </span>
+                        </label>
+                        <label className="field">
+                          <span className="field-label">Artifact file</span>
+                          <select
+                            aria-label="Artifact file"
+                            className="text-input"
+                            disabled={!selectedArtifactNames.length}
+                            onChange={(event) => handleArtifactSelection(event.target.value)}
+                            value={selectedArtifactName ?? ""}
+                          >
+                            {selectedArtifactNames.map((artifactName) => (
+                              <option key={artifactName} value={artifactName}>
+                                {artifactName}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="field-hint">
+                            Choose a stored artifact from the selected run for inline review.
+                          </span>
+                        </label>
+                      </div>
+
+                      {selectedArtifactUrl ? (
+                        <div className="action-row">
+                          <div className="artifact-action-row">
+                            <a
+                              className="secondary-button"
+                              href={selectedArtifactUrl}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              Open raw
+                            </a>
+                            <a
+                              className="ghost-button"
+                              download={selectedArtifactName ?? undefined}
+                              href={selectedArtifactUrl}
+                            >
+                              Download
+                            </a>
+                            {artifactPreviewRecord ? (
+                              <button
+                                className="ghost-button"
+                                onClick={() =>
+                                  setArtifactPreviewMode((current) =>
+                                    current === "structured" ? "raw" : "structured",
+                                  )
+                                }
+                                type="button"
+                              >
+                                {artifactPreviewMode === "structured"
+                                  ? "View raw JSON"
+                                  : "View structured"}
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="field-hint">
+                            {selectedArtifactJob
+                              ? `Run ${shortJobId(selectedArtifactJob.id)} • ${selectedArtifactNames.length} artifact(s)`
+                              : "No artifact selected"}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {artifactPreviewError ? (
+                        <div className="error-banner">{artifactPreviewError}</div>
+                      ) : null}
+
+                      {artifactPreviewLoading ? (
+                        <p className="empty-copy">Loading artifact preview…</p>
+                      ) : artifactPreviewMode === "raw" || !artifactPreviewRecord ? (
+                        <article className="report-card">
+                          <h3>Raw artifact preview</h3>
+                          <pre className="json-preview">
+                            {artifactPreviewText || "Select an artifact to preview it here."}
+                          </pre>
+                        </article>
+                      ) : (
+                        <div className="stack">
+                          <div className="summary-card-grid">
+                            <div className="summary-card">
+                              <span>Attack</span>
+                              <strong>{artifactPreviewRecord.attack.name ?? "Unnamed artifact"}</strong>
+                            </div>
+                            <div className="summary-card">
+                              <span>Kind</span>
+                              <strong>{artifactPreviewRecord.attack.kind ?? "—"}</strong>
+                            </div>
+                            <div className="summary-card">
+                              <span>Status</span>
+                              <strong>{artifactPreviewRecord.response.status_code ?? "—"}</strong>
+                            </div>
+                          </div>
+                          <div className="artifact-preview-grid">
+                            <article className="artifact-preview-panel">
+                              <h3>Attack summary</h3>
+                              <dl className="artifact-detail-grid">
+                                <div>
+                                  <dt>ID</dt>
+                                  <dd>{artifactPreviewRecord.attack.id ?? "—"}</dd>
+                                </div>
+                                <div>
+                                  <dt>Name</dt>
+                                  <dd>{artifactPreviewRecord.attack.name ?? "—"}</dd>
+                                </div>
+                                <div>
+                                  <dt>Kind</dt>
+                                  <dd>{artifactPreviewRecord.attack.kind ?? "—"}</dd>
+                                </div>
+                                <div>
+                                  <dt>Operation</dt>
+                                  <dd>{artifactPreviewRecord.attack.operation_id ?? "—"}</dd>
+                                </div>
+                                <div>
+                                  <dt>Path</dt>
+                                  <dd>{artifactPreviewRecord.attack.path ?? "—"}</dd>
+                                </div>
+                              </dl>
+                            </article>
+                            <article className="artifact-preview-panel">
+                              <h3>Request summary</h3>
+                              <dl className="artifact-detail-grid">
+                                <div>
+                                  <dt>Method</dt>
+                                  <dd>{artifactPreviewRecord.request.method}</dd>
+                                </div>
+                                <div>
+                                  <dt>URL</dt>
+                                  <dd>{artifactPreviewRecord.request.url}</dd>
+                                </div>
+                                <div>
+                                  <dt>Headers</dt>
+                                  <dd>
+                                    <pre className="artifact-code">
+                                      {artifactPreviewRecord.request.headers &&
+                                      Object.keys(artifactPreviewRecord.request.headers).length
+                                        ? formatJson(artifactPreviewRecord.request.headers)
+                                        : "{}"}
+                                    </pre>
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>Query</dt>
+                                  <dd>
+                                    <pre className="artifact-code">
+                                      {artifactPreviewRecord.request.query &&
+                                      Object.keys(artifactPreviewRecord.request.query).length
+                                        ? formatJson(artifactPreviewRecord.request.query)
+                                        : "{}"}
+                                    </pre>
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>Body</dt>
+                                  <dd>
+                                    <pre className="artifact-code">
+                                      {formatJson({
+                                        present:
+                                          artifactPreviewRecord.request.body?.present ?? false,
+                                        kind: artifactPreviewRecord.request.body?.kind ?? null,
+                                        content_type:
+                                          artifactPreviewRecord.request.body?.content_type ?? null,
+                                        excerpt:
+                                          artifactPreviewRecord.request.body?.excerpt ?? null,
+                                      })}
+                                    </pre>
+                                  </dd>
+                                </div>
+                              </dl>
+                            </article>
+                            <article className="artifact-preview-panel">
+                              <h3>Response summary</h3>
+                              <dl className="artifact-detail-grid">
+                                <div>
+                                  <dt>Status</dt>
+                                  <dd>{artifactPreviewRecord.response.status_code ?? "—"}</dd>
+                                </div>
+                                <div>
+                                  <dt>Error</dt>
+                                  <dd>{artifactPreviewRecord.response.error ?? "—"}</dd>
+                                </div>
+                                <div>
+                                  <dt>Duration</dt>
+                                  <dd>
+                                    {artifactPreviewRecord.response.duration_ms != null
+                                      ? `${artifactPreviewRecord.response.duration_ms} ms`
+                                      : "—"}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>Body excerpt</dt>
+                                  <dd>
+                                    <pre className="artifact-code">
+                                      {artifactPreviewRecord.response.body_excerpt ?? "—"}
+                                    </pre>
+                                  </dd>
+                                </div>
+                              </dl>
+                            </article>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="empty-state">
+                      <p>No artifacts stored for this project yet.</p>
+                      <p>Run a suite with artifact storage enabled to inspect request and response snapshots here.</p>
+                    </div>
+                  )}
+                </div>
+
                 <div className="comparison-panel">
                   <div className="section-heading">
                     <div>
@@ -2244,37 +2732,35 @@ export default function ProjectWorkbenchPage() {
                     formatDateTime(job.created_at),
                     job.artifact_names.length,
                     job.result_summary?.active_flagged_count ?? "—",
-                    isPruneableJobStatus(job.status) ? (
-                      <button
-                        aria-label={`Delete run ${shortJobId(job.id)}`}
-                        className="ghost-button danger-button"
-                        disabled={Boolean(busyAction)}
-                        onClick={() => void handleDeleteJob(job)}
-                        type="button"
-                      >
-                        {busyAction === `delete-job:${job.id}` ? "Deleting…" : "Delete"}
-                      </button>
+                    job.artifact_names.length || isPruneableJobStatus(job.status) ? (
+                      <div className="artifact-action-row">
+                        {job.artifact_names.length ? (
+                          <button
+                            aria-label={`Inspect artifacts from run ${shortJobId(job.id)}`}
+                            className="secondary-button"
+                            onClick={() => handleInspectArtifacts(job)}
+                            type="button"
+                          >
+                            Inspect artifacts
+                          </button>
+                        ) : null}
+                        {isPruneableJobStatus(job.status) ? (
+                          <button
+                            aria-label={`Delete run ${shortJobId(job.id)}`}
+                            className="ghost-button danger-button"
+                            disabled={Boolean(busyAction)}
+                            onClick={() => void handleDeleteJob(job)}
+                            type="button"
+                          >
+                            {busyAction === `delete-job:${job.id}` ? "Deleting…" : "Delete"}
+                          </button>
+                        ) : null}
+                      </div>
                     ) : (
                       "—"
                     ),
                   ])}
                 />
-                <ul className="artifact-list">
-                  {(currentRunJob?.artifact_names ?? []).length ? (
-                    currentRunJob?.artifact_names.map((artifactName) => (
-                      <li key={artifactName}>
-                        <a
-                          href={`/v1/jobs/${currentRunJob.id}/artifacts/${artifactName}`}
-                          target="_blank"
-                        >
-                          {artifactName}
-                        </a>
-                      </li>
-                    ))
-                  ) : (
-                    <li>No artifacts linked to the current run.</li>
-                  )}
-                </ul>
               </div>
             ) : null}
 

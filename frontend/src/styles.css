@@ -520,6 +520,66 @@ pre {
   gap: 16px;
 }
 
+.artifact-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.artifact-preview-panel {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.artifact-preview-panel h3 {
+  margin: 0;
+}
+
+.artifact-detail-grid,
+.artifact-detail-grid div {
+  display: grid;
+  gap: 6px;
+}
+
+.artifact-detail-grid {
+  margin: 0;
+}
+
+.artifact-detail-grid dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.artifact-detail-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.artifact-code {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #1f2933;
+  color: #f4f7fb;
+  white-space: pre-wrap;
+}
+
+.artifact-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
 .report-card pre,
 .json-preview {
   margin: 0;
@@ -611,7 +671,8 @@ pre {
   .field-grid-4,
   .field-grid-3,
   .field-grid-2,
-  .report-grid {
+  .report-grid,
+  .artifact-preview-grid {
     grid-template-columns: 1fr;
   }
 }
