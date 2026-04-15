@@ -48,7 +48,7 @@ jobs:
         run: pytest --cov=src/knives_out --cov-report=term-missing --cov-report=json:coverage.json
 
       - name: Upload coverage baseline artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: main-maintenance-coverage
           path: coverage.json
