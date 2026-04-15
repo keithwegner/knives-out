@@ -94,7 +94,11 @@ class ProjectStore:
     def duplicate_project(self, project_id: str, *, name: str | None = None) -> ProjectRecord:
         current = self.load_project(project_id)
         now = datetime.now(UTC)
-        duplicate_name = name.strip() if name and name.strip() else self._default_duplicate_name(current.name)
+        duplicate_name = (
+            name.strip()
+            if name and name.strip()
+            else self._default_duplicate_name(current.name)
+        )
         duplicated = current.model_copy(
             deep=True,
             update={
