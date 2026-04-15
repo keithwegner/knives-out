@@ -25,6 +25,11 @@ def test_readme_includes_ci_guidance() -> None:
     assert "`knives-out run` currently exits with status `0`" in readme
     assert "knives-out verify results.json" in readme
     assert "knives-out export results.json --format sarif --out results.sarif" in readme
+    assert (
+        "knives-out bundle results.json --artifact-dir artifacts --out review-bundle.zip" in readme
+    )
+    assert "Import review bundle" in readme
+    assert "review-only project" in readme
     assert "status, severity, confidence, or schema outcome drifted" in readme
     assert "knives-out promote results.json" in readme
     assert "knives-out triage results.json" in readme
@@ -47,6 +52,7 @@ def test_readme_includes_ci_guidance() -> None:
     assert "GET /v1/jobs/{id}/artifacts" in readme
     assert "result_summary" in readme
     assert "POST /v1/projects/{id}/review" in readme
+    assert "POST /v1/projects/import-review-bundle" in readme
     assert "baseline_job_id" in readme
     assert "external baseline mode" in readme
     assert "--profile-file examples/auth_profiles/anonymous-user-admin.yml" in readme
@@ -77,9 +83,8 @@ def test_readme_includes_ci_guidance() -> None:
     assert "--auth-config examples/auth_configs/user-admin.yml" in readme
     assert "--auth-profile user" in readme
     assert "examples/workflow_packs/listed_pet_lookup.py" in readme
-    assert "**v0.11:** deeper GraphQL coverage" in readme
-    assert "Shadow Twin learned-model capture is now" in readme
-    assert "available." in readme
+    assert "**v0.21:** rerunnable full-project snapshot bundles" in readme
+    assert "**v0.22:** richer CI/workbench syncing" in readme
 
 
 def test_dev_environment_workflow_matches_current_cli_surface() -> None:
@@ -127,6 +132,7 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "report.md" in ci_doc
     assert "report.html" in ci_doc
     assert "results.sarif" in ci_doc
+    assert "review-bundle.zip" in ci_doc
     assert "artifacts/" in ci_doc
     assert "Simple gating with no baseline" in ci_doc
     assert "Baseline-aware gating" in ci_doc
@@ -145,6 +151,7 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "GET /v1/jobs" in ci_doc
     assert "result_summary" in ci_doc
     assert "POST /v1/projects/{id}/review" in ci_doc
+    assert "POST /v1/projects/import-review-bundle" in ci_doc
     assert "baseline_job_id" in ci_doc
     assert "examples/auth_configs/user-admin.yml" in ci_doc
     assert "examples/auth_configs/client-credentials.yml" in ci_doc
@@ -167,6 +174,7 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "KNIVES_OUT_API_DATA_DIR" in ci_doc
     assert "knives-out summary results.json --out summary.json" in ci_doc
     assert "knives-out export results.json --format sarif --out results.sarif" in ci_doc
+    assert "knives-out bundle results.json" in ci_doc
     assert "github/codeql-action/upload-sarif@v4" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc
     assert "--tag orders" in ci_doc
@@ -236,9 +244,11 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "v0.15: staged GraphQL subscription coverage" in roadmap
     assert "v0.16: ReviewOps baseline workbench" in roadmap
     assert "v0.17: Artifact deep dive drawer" in roadmap
-    assert "## v0.14 — smoke-test integration coverage" in roadmap
-    assert "deterministic fixture apps and checked-in inputs only" in roadmap
-    assert "#58: CLI happy path against a local API fixture" in roadmap
+    assert "v0.19: CI-native SARIF export" in roadmap
+    assert "v0.20: portable review bundles" in roadmap
+    assert "## v0.21 — full snapshot portability" in roadmap
+    assert "## v0.22 — CI and workbench sync ergonomics" in roadmap
+    assert "review-only portable bundle handoff" in roadmap
     assert "LLM application and tool-misuse testing" in roadmap
 
     assert "capture.py" in architecture
@@ -263,10 +273,3 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "CLI and the HTTP API now sit on top of `services.py`" in architecture
     assert "FastAPI surface" in architecture
     assert "redirect-driven OAuth auth-code flows" in architecture
-
-    assert "v0.11: deeper GraphQL coverage" in roadmap
-    assert "response-shape validation, federation-aware diagnostics" in roadmap
-    assert "## v0.12 — local-first HTTP API" in roadmap
-    assert "FastAPI server that mirrors the current CLI surface" in roadmap
-    assert "background run jobs with polling and artifact retrieval" in roadmap
-    assert "## v0.13 — richer CI and triage ergonomics" in roadmap

@@ -42,6 +42,7 @@ class ProjectSourceMode(StrEnum):
     graphql = "graphql"
     learned = "learned"
     capture_upload = "capture_upload"
+    review_bundle = "review_bundle"
 
 
 class ProjectStep(StrEnum):

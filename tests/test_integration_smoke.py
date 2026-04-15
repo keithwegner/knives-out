@@ -10,8 +10,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+from knives_out.api import create_app
 from knives_out.capture import read_capture_events, serve_capture_proxy
 from knives_out.cli import app
 from knives_out.generator import generate_attack_suite
@@ -371,6 +373,85 @@ def test_workflow_attack_smoke_against_local_stateful_api(tmp_path: Path) -> Non
         assert result.workflow_steps[0].status_code == 200
         assert (artifact_dir / f"{workflow_attack.id}.json").exists()
         assert (artifact_dir / f"{workflow_attack.id}-step-01.json").exists()
+    finally:
+        _shutdown_server(server, thread)
+
+
+def test_review_bundle_round_trip_smoke(tmp_path: Path) -> None:
+    server, thread = _start_server(_PermissiveStorefrontHandler)
+    try:
+        attacks_path = tmp_path / "attacks.json"
+        results_path = tmp_path / "results.json"
+        artifact_dir = tmp_path / "artifacts"
+        bundle_path = tmp_path / "review-bundle.zip"
+        base_url = f"http://127.0.0.1:{server.server_port}"
+
+        generate_result = runner.invoke(
+            app,
+            ["generate", str(STOREFRONT_SPEC), "--tag", "orders", "--out", str(attacks_path)],
+        )
+        run_result = runner.invoke(
+            app,
+            [
+                "run",
+                str(attacks_path),
+                "--base-url",
+                base_url,
+                "--artifact-dir",
+                str(artifact_dir),
+                "--out",
+                str(results_path),
+            ],
+        )
+        bundle_result = runner.invoke(
+            app,
+            [
+                "bundle",
+                str(results_path),
+                "--artifact-dir",
+                str(artifact_dir),
+                "--name",
+                "CI review bundle",
+                "--out",
+                str(bundle_path),
+            ],
+        )
+
+        assert generate_result.exit_code == 0
+        assert run_result.exit_code == 0
+        assert bundle_result.exit_code == 0
+
+        results = AttackResults.model_validate_json(results_path.read_text(encoding="utf-8"))
+        client = TestClient(create_app(data_dir=tmp_path / "api-data"))
+        import_response = client.post(
+            "/v1/projects/import-review-bundle",
+            files={
+                "bundle": (
+                    "review-bundle.zip",
+                    bundle_path.read_bytes(),
+                    "application/zip",
+                )
+            },
+        )
+
+        assert import_response.status_code == 200
+        project = import_response.json()
+        assert project["name"] == "CI review bundle"
+        assert project["source_mode"] == "review_bundle"
+        assert project["artifacts"]["latest_results"]["base_url"] == base_url
+        assert len(project["artifacts"]["latest_results"]["results"]) == len(results.results)
+
+        jobs_response = client.get(f"/v1/projects/{project['id']}/jobs")
+        assert jobs_response.status_code == 200
+        [job] = jobs_response.json()["jobs"]
+        assert job["kind"] == "import"
+        assert job["artifact_names"]
+
+        artifact_response = client.get(
+            f"/v1/jobs/{job['id']}/artifacts/{job['artifact_names'][0]}",
+        )
+        assert artifact_response.status_code == 200
+        assert artifact_response.text
     finally:
         _shutdown_server(server, thread)
 

@@ -2,6 +2,7 @@ import json
 import re
 from pathlib import Path
 from textwrap import dedent
+from zipfile import ZipFile
 
 from fastapi import FastAPI
 from typer.testing import CliRunner
@@ -2369,3 +2370,148 @@ def test_serve_command_starts_local_api(monkeypatch) -> None:
     assert isinstance(captured["app"], FastAPI)
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8787
+
+
+def test_bundle_command_writes_review_bundle_zip(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    out_path = tmp_path / "review-bundle.zip"
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_secret",
+                operation_id="getSecret",
+                kind="missing_auth",
+                name="Missing auth",
+                protocol="openapi",
+                method="GET",
+                path="/secret",
+                url="https://example.com/secret",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+
+    result = runner.invoke(app, ["bundle", str(results_path), "--out", str(out_path)])
+
+    assert result.exit_code == 0
+    assert out_path.exists()
+    with ZipFile(out_path) as archive:
+        assert set(archive.namelist()) == {"manifest.json", "current/results.json"}
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["bundle_kind"] == "review"
+        assert manifest["bundle_version"] == 1
+        assert manifest["name"] == "Imported review"
+        assert manifest["result_count"] == 1
+        assert manifest["includes_baseline"] is False
+        assert manifest["includes_suppressions"] is False
+        assert manifest["includes_artifacts"] is False
+        current = json.loads(archive.read("current/results.json"))
+        assert current["results"][0]["attack_id"] == "atk_secret"
+
+
+def test_bundle_command_includes_optional_review_inputs_and_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    current_results_path = tmp_path / "results.json"
+    baseline_results_path = tmp_path / "baseline.json"
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "atk_secret.json").write_text('{"request":"demo"}', encoding="utf-8")
+    suppressions_path = tmp_path / ".knives-out-ignore.yml"
+    suppressions_path.write_text(
+        dedent(
+            """
+            suppressions:
+              - attack_id: atk_secret
+                reason: accepted
+                owner: api-team
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    _write_results(
+        current_results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_secret",
+                operation_id="getSecret",
+                kind="missing_auth",
+                name="Missing auth",
+                protocol="openapi",
+                method="GET",
+                path="/secret",
+                url="https://example.com/secret",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+    _write_results(
+        baseline_results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_baseline",
+                operation_id="getSecret",
+                kind="missing_auth",
+                name="Older auth issue",
+                protocol="openapi",
+                method="GET",
+                path="/secret",
+                url="https://example.com/secret",
+                status_code=401,
+                flagged=True,
+                issue="unexpected_success",
+                severity="medium",
+                confidence="medium",
+            )
+        ),
+    )
+    monkeypatch.chdir(tmp_path)
+    out_path = tmp_path / "review-bundle.zip"
+
+    result = runner.invoke(
+        app,
+        [
+            "bundle",
+            str(current_results_path),
+            "--baseline",
+            str(baseline_results_path),
+            "--artifact-dir",
+            str(artifact_dir),
+            "--name",
+            "Bundle demo",
+            "--min-severity",
+            "medium",
+            "--min-confidence",
+            "low",
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    with ZipFile(out_path) as archive:
+        assert {
+            "manifest.json",
+            "current/results.json",
+            "baseline/results.json",
+            "review/suppressions.yml",
+            "artifacts/atk_secret.json",
+        } == set(archive.namelist())
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["name"] == "Bundle demo"
+        assert manifest["includes_baseline"] is True
+        assert manifest["includes_suppressions"] is True
+        assert manifest["includes_artifacts"] is True
+        assert manifest["min_severity"] == "medium"
+        assert manifest["min_confidence"] == "low"
+        assert "accepted" in archive.read("review/suppressions.yml").decode("utf-8")

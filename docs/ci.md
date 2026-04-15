@@ -8,10 +8,11 @@
 4. render a Markdown report for review
 5. optionally render an HTML report with linked artifacts
 6. optionally export SARIF for code scanning or PR-native review
-7. verify the results against a CI policy
-8. optionally promote qualifying findings into a smaller regression suite
-9. optionally maintain a checked-in suppressions file for accepted findings
-10. publish the JSON results, reports, SARIF export, regression suite, and per-attack artifacts
+7. optionally bundle the review inputs for local workbench import
+8. verify the results against a CI policy
+9. optionally promote qualifying findings into a smaller regression suite
+10. optionally maintain a checked-in suppressions file for accepted findings
+11. publish the JSON results, reports, SARIF export, review bundle, regression suite, and per-attack artifacts
 
 The repository includes a ready-to-adapt GitHub Actions example at
 `.github/workflows/dev-environment-example.yml`.
@@ -194,6 +195,40 @@ If you keep that file at the repo root, the standard commands pick it up automat
       --out regression-attacks.json
 ```
 
+## Optional: portable review bundle handoff
+
+When CI needs to hand the exact review inputs to a developer’s local workbench, build a portable
+zip bundle after the run finishes:
+
+```yaml
+- name: Package a portable review bundle
+  if: always()
+  run: |
+    knives-out bundle results.json \
+      --artifact-dir artifacts \
+      --out review-bundle.zip
+    # Optional review context:
+    # knives-out bundle results.json \
+    #   --baseline previous-results.json \
+    #   --artifact-dir artifacts \
+    #   --name "Staging review handoff" \
+    #   --min-severity medium \
+    #   --min-confidence low \
+    #   --out review-bundle.zip
+```
+
+The resulting zip has a fixed layout:
+
+- `manifest.json`
+- `current/results.json`
+- `baseline/results.json` when `--baseline` is present
+- `review/suppressions.yml` when suppressions are present
+- `artifacts/**` when `--artifact-dir` is present
+
+Import that file from the workbench home page with **Import review bundle**. v1 imports are
+review-only on purpose: they materialize one completed `import` job plus project review state so
+the existing review tabs, suppressions editor, run history, and artifact inspection keep working.
+
 ## Optional: stateful workflow coverage
 
 Start simple with request-only generation:
@@ -258,10 +293,12 @@ The API mirrors the same JSON artifacts through `POST /v1/inspect`, `POST /v1/ge
 `GET /v1/jobs/{id}` polling.
 Completed jobs expose a compact `result_summary` on the collection and status responses so
 downstream local tools can rank recent runs before fetching full result payloads.
-Saved projects also expose `GET /v1/projects/{id}/jobs` plus `POST /v1/projects/{id}/review` for
-the workbench’s baseline-aware review loop. That review endpoint always compares the latest
-completed run in the project against an optional pinned `baseline_job_id` from the same project,
-with external baseline JSON kept as an explicit advanced fallback.
+Saved projects also expose `POST /v1/projects/import-review-bundle`,
+`GET /v1/projects/{id}/jobs`, and `POST /v1/projects/{id}/review` for the workbench’s
+baseline-aware review loop. Imported review bundles create a new `review_bundle` project plus one
+completed `import` job, while the review endpoint always compares the latest completed run in the
+project against an optional pinned `baseline_job_id` from the same project, with external baseline
+JSON kept as an explicit advanced fallback.
 For current-run drilldown, `GET /v1/jobs/{id}/findings/{attack_id}/evidence` returns the selected
 finding result, typed artifact references derived from stored filenames, workflow/profile metadata,
 and the run’s auth-event context. Raw artifact bodies stay on

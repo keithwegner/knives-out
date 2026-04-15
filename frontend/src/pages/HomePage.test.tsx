@@ -1,8 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import HomePage from "./HomePage";
+
+function ProjectRoute() {
+  const { projectId } = useParams();
+  return <div>{`Opened ${projectId}`}</div>;
+}
 
 function renderHomePage() {
   const queryClient = new QueryClient({
@@ -13,8 +18,11 @@ function renderHomePage() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <HomePage />
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/projects/:projectId" element={<ProjectRoute />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -201,6 +209,99 @@ describe("HomePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
 
     expect(await screen.findByText("Storefront triage copy")).toBeInTheDocument();
+  });
+
+  it("imports a review bundle and opens the imported project", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/healthz")) {
+          return Response.json({ status: "ok" });
+        }
+        if (url.endsWith("/v1/projects") && method === "GET") {
+          return Response.json({ projects: [] });
+        }
+        if (url.endsWith("/v1/projects/import-review-bundle") && method === "POST") {
+          expect(init?.body).toBeInstanceOf(FormData);
+          return Response.json({
+            id: "project-imported",
+            name: "Imported review bundle",
+            source_mode: "review_bundle",
+            active_step: "review",
+            created_at: "2026-04-15T04:00:00Z",
+            updated_at: "2026-04-15T04:00:00Z",
+            graphql_endpoint: "/graphql",
+            source: null,
+            discover_inputs: [],
+            inspect_draft: { tag: [], exclude_tag: [], path: [], exclude_path: [] },
+            generate_draft: {
+              operation: [],
+              exclude_operation: [],
+              method: [],
+              exclude_method: [],
+              kind: [],
+              exclude_kind: [],
+              tag: [],
+              exclude_tag: [],
+              path: [],
+              exclude_path: [],
+              pack_names: [],
+              auto_workflows: false,
+              workflow_pack_names: [],
+            },
+            run_draft: {
+              base_url: "",
+              headers: {},
+              query: {},
+              timeout: 10,
+              store_artifacts: true,
+              auth_plugin_names: [],
+              auth_config_yaml: null,
+              auth_profile_names: [],
+              profile_file_yaml: null,
+              profile_names: [],
+              operation: [],
+              exclude_operation: [],
+              method: [],
+              exclude_method: [],
+              kind: [],
+              exclude_kind: [],
+              tag: [],
+              exclude_tag: [],
+              path: [],
+              exclude_path: [],
+            },
+            review_draft: {
+              baseline_mode: "job",
+              baseline_job_id: null,
+              baseline: null,
+              suppressions_yaml: null,
+              min_severity: "high",
+              min_confidence: "medium",
+            },
+            artifacts: {},
+          });
+        }
+        throw new Error(`Unhandled fetch for ${method} ${url}`);
+      }),
+    );
+
+    const { container } = renderHomePage();
+
+    await screen.findByText("No saved projects yet.");
+    const bundleInput = container.querySelector('input[aria-label="Review bundle zip"]');
+    if (!(bundleInput instanceof HTMLInputElement)) {
+      throw new Error("Expected the review bundle input to render.");
+    }
+    fireEvent.change(bundleInput, {
+      target: {
+        files: [new File(["zip"], "review-bundle.zip", { type: "application/zip" })],
+      },
+    });
+
+    expect(await screen.findByText("Opened project-imported")).toBeInTheDocument();
   });
 
   it("saves a custom API endpoint", async () => {

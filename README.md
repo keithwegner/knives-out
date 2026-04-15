@@ -30,6 +30,7 @@ It helps developers break their APIs on purpose before someone else does.
   - [`generate`](#generate)
   - [`run`](#run)
   - [`report`](#report)
+  - [`bundle`](#bundle)
   - [`export`](#export)
   - [`verify`](#verify)
   - [`promote`](#promote)
@@ -314,6 +315,11 @@ That Pages site is only the frontend shell. To make it functional you must point
 If you prefer a baked-in default for the static build, set `VITE_API_BASE_URL` when building the
 frontend for Pages.
 
+When you need to hand CI evidence to the local review UX, export a portable review bundle from the
+CLI and import the zip on the home page. v1 imports are intentionally review-only: the workbench
+recomputes summary, verification, and reports from bundled `results.json`, optional baseline JSON,
+optional suppressions YAML, and optional request/response artifacts.
+
 ## Local API
 
 `knives-out` can also run as a local-first HTTP API instead of only as a CLI.
@@ -374,6 +380,7 @@ The web workbench also uses project resources for saved drafts and project-scope
 - `GET /v1/projects/{id}`
 - `PATCH /v1/projects/{id}`
 - `DELETE /v1/projects/{id}`
+- `POST /v1/projects/import-review-bundle`
 - `GET /v1/projects/{id}/jobs`
 - `POST /v1/projects/{id}/review`
 - `DELETE /v1/projects/{id}/jobs/{job_id}`
@@ -428,6 +435,10 @@ findings as structured JSON.
 When you want code-scanning or PR-native triage inside CI, `knives-out export results.json --format sarif --out results.sarif`
 emits SARIF 2.1.0 from the same active unsuppressed findings, with optional baseline change
 metadata when you also pass `--baseline previous-results.json`.
+When you want to move the exact review inputs into the local workbench, `knives-out bundle
+results.json --artifact-dir artifacts --out review-bundle.zip` packages the current results plus
+optional baseline JSON, suppressions, and artifacts into one zip that the home page can import as
+its own review-only project.
 When you want stateful coverage, generate with `--auto-workflows` first, then add
 `--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py` or your own custom pack as
 you move from generic coverage to app-specific journeys. For protected APIs, keep simple static
@@ -634,6 +645,32 @@ If `.knives-out-ignore.yml` exists in the repo root, `report` will automatically
 findings separately. You can also point at another file explicitly with `--suppressions path/to.yml`.
 When the run used `--profile-file`, the report includes a per-profile outcome table under each
 attack so you can compare status codes and issues by identity.
+
+### `bundle`
+
+Creates a portable review bundle zip from a results file and optional review evidence.
+
+```bash
+knives-out bundle results.json --artifact-dir artifacts --out review-bundle.zip
+```
+
+You can also include a baseline results file, checked-in suppressions, and imported review
+defaults:
+
+```bash
+knives-out bundle results.json \
+  --baseline previous-results.json \
+  --artifact-dir artifacts \
+  --name "Staging review handoff" \
+  --min-severity medium \
+  --min-confidence low \
+  --out review-bundle.zip
+```
+
+The bundle zip always carries `manifest.json` plus `current/results.json`, and it adds
+`baseline/results.json`, `review/suppressions.yml`, and `artifacts/**` when you supply those
+inputs. Use **Import review bundle** on the home page to create a new review-only project in the
+workbench.
 
 ### `export`
 
@@ -955,15 +992,14 @@ knives-out run attacks.json \
 
 ## Roadmap
 
-The built-in auth/config milestone, deeper GraphQL coverage, and Shadow Twin learned-model capture
-are now available. The next likely milestone is:
+Recently shipped milestones now include the fragment-aware GraphQL contract pass, SARIF export,
+and portable review bundles that bridge CI outputs into the local workbench.
 
-- **v0.11:** deeper GraphQL coverage with response validation, federation awareness, and
-  mixed-protocol reporting is now shipped
-- **v0.12:** a local-first HTTP API with shared service-layer execution, JSON-first endpoints,
-  and background run jobs with artifact retrieval
+The next likely follow-on is deeper portability rather than another brand-new surface:
 
-After that, the likely follow-on is richer CI and report navigation for large regression programs.
-LLM application testing stays deferred until after that API-focused expansion. See
-`docs/architecture.md` and `docs/roadmap.md` for the current milestone notes.
-Shadow Twin learned-model capture is now available.
+- **v0.21:** rerunnable full-project snapshot bundles instead of review-only imports
+- **v0.22:** richer CI/workbench syncing for bundles, baselines, and imported evidence history
+
+LLM application testing, browser-assisted auth flows, and broader protocol expansion stay
+deferred until after that portability pass. See `docs/architecture.md` and `docs/roadmap.md` for
+the current milestone notes.

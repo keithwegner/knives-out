@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 import time
+from io import BytesIO
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import httpx
 from fastapi.testclient import TestClient
 
 from knives_out.api import create_app
-from knives_out.models import AttackCase, AttackSuite
+from knives_out.models import AttackCase, AttackResult, AttackResults, AttackSuite
+from knives_out.review_bundles import render_review_bundle
 
 
 class _StubClient:
@@ -45,6 +49,39 @@ def _attack_suite() -> AttackSuite:
             )
         ],
     )
+
+
+def _bundle_results(*, base_url: str = "https://example.com") -> AttackResults:
+    return AttackResults(
+        source="bundle-test",
+        base_url=base_url,
+        executed_at="2026-04-15T04:00:00Z",
+        results=[
+            AttackResult(
+                attack_id="atk_api",
+                operation_id="getSecret",
+                kind="missing_auth",
+                name="Missing auth",
+                protocol="openapi",
+                method="GET",
+                path="/secrets",
+                url=f"{base_url}/secrets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ],
+    )
+
+
+def _zip_bytes(entries: dict[str, bytes | str]) -> bytes:
+    raw = BytesIO()
+    with ZipFile(raw, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+    return raw.getvalue()
 
 
 def test_project_crud_endpoints_and_project_summaries(tmp_path) -> None:
@@ -187,6 +224,105 @@ def test_duplicate_project_endpoint_clones_snapshot_without_job_links(tmp_path) 
 
     assert second_duplicate_response.status_code == 200
     assert second_duplicate_response.json()["name"] == "Workbench demo copy 2"
+
+
+def test_import_review_bundle_creates_review_only_project_and_completed_import_job(
+    tmp_path,
+) -> None:
+    client = TestClient(create_app(data_dir=tmp_path))
+    current_results = _bundle_results()
+    baseline_results = _bundle_results(base_url="https://baseline.example.com")
+    artifact_dir = tmp_path / "bundle-artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "atk_api.json").write_text('{"request":"demo"}', encoding="utf-8")
+    bundle = render_review_bundle(
+        current_results,
+        name="Imported bundle review",
+        baseline=baseline_results,
+        suppressions_yaml=(
+            "suppressions:\n  - attack_id: atk_api\n    reason: accepted\n    owner: api-team\n"
+        ),
+        artifact_dir=artifact_dir,
+        min_severity="medium",
+        min_confidence="low",
+    )
+
+    import_response = client.post(
+        "/v1/projects/import-review-bundle",
+        files={"bundle": ("review-bundle.zip", bundle, "application/zip")},
+    )
+
+    assert import_response.status_code == 200
+    project = import_response.json()
+    assert project["name"] == "Imported bundle review"
+    assert project["source_mode"] == "review_bundle"
+    assert project["active_step"] == "review"
+    assert project["review_draft"]["baseline_mode"] == "external"
+    assert project["review_draft"]["min_severity"] == "medium"
+    assert project["review_draft"]["min_confidence"] == "low"
+    assert "attack_id: atk_api" in project["review_draft"]["suppressions_yaml"]
+    assert project["artifacts"]["last_run_job_id"] is not None
+    assert project["artifacts"]["latest_results"]["base_url"] == "https://example.com"
+    assert project["artifacts"]["latest_summary"]["baseline_used"] is True
+    assert project["artifacts"]["latest_summary"]["total_results"] == 1
+
+    jobs_response = client.get(f"/v1/projects/{project['id']}/jobs")
+    assert jobs_response.status_code == 200
+    jobs = jobs_response.json()["jobs"]
+    assert len(jobs) == 1
+    assert jobs[0]["kind"] == "import"
+    assert jobs[0]["status"] == "completed"
+    assert jobs[0]["attack_count"] == 1
+    assert jobs[0]["artifact_names"] == ["atk_api.json"]
+
+    artifact_response = client.get(f"/v1/jobs/{jobs[0]['id']}/artifacts/atk_api.json")
+    assert artifact_response.status_code == 200
+    assert artifact_response.text == '{"request":"demo"}'
+
+
+def test_import_review_bundle_rejects_invalid_archives(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path))
+    manifest = {
+        "bundle_kind": "review",
+        "bundle_version": 1,
+        "name": "Broken import",
+        "created_at": "2026-04-15T04:00:00Z",
+        "base_url": "https://example.com",
+        "executed_at": "2026-04-15T04:00:00Z",
+        "result_count": 1,
+        "includes_baseline": False,
+        "includes_suppressions": False,
+        "includes_artifacts": False,
+        "min_severity": "high",
+        "min_confidence": "medium",
+    }
+    current_results = _bundle_results().model_dump_json(indent=2, exclude_none=True)
+
+    cases = [
+        (b"not-a-zip", "zip archive"),
+        (_zip_bytes({"current/results.json": current_results}), "manifest.json"),
+        (_zip_bytes({"manifest.json": '{"bundle_kind":"review","bundle_version":2}'}), "invalid"),
+        (_zip_bytes({"manifest.json": json.dumps(manifest)}), "current/results.json"),
+        (
+            _zip_bytes(
+                {
+                    "manifest.json": json.dumps(manifest),
+                    "current/results.json": current_results,
+                    "../escape.txt": "boom",
+                }
+            ),
+            "unsafe path",
+        ),
+    ]
+
+    for raw_bundle, expected_detail in cases:
+        response = client.post(
+            "/v1/projects/import-review-bundle",
+            files={"bundle": ("review-bundle.zip", raw_bundle, "application/zip")},
+        )
+
+        assert response.status_code == 400
+        assert expected_detail in response.json()["detail"]
 
 
 def test_run_jobs_are_attached_to_projects_and_removed_on_project_delete(

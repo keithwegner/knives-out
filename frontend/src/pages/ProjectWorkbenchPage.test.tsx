@@ -1037,6 +1037,102 @@ describe("ProjectWorkbenchPage", () => {
     expect(screen.queryByRole("button", { name: "Close evidence" })).not.toBeInTheDocument();
   });
 
+  it("renders imported bundles as review-only workspaces and keeps artifact inspection available", async () => {
+    const importedProject = clone(baseProjectPayload);
+    importedProject.name = "Imported review bundle";
+    importedProject.source_mode = "review_bundle";
+    importedProject.source = null;
+    importedProject.artifacts.last_run_job_id = "job-import";
+    importedProject.artifacts.latest_promoted_suite = null;
+    importedProject.artifacts.generated_suite = null;
+    importedProject.review_draft = {
+      ...importedProject.review_draft,
+      baseline_mode: "external",
+      baseline: {
+        source: "baseline",
+        base_url: "https://baseline.example.com",
+        executed_at: "2026-04-13T19:00:00Z",
+        profiles: [],
+        auth_events: [],
+        results: [],
+      },
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/v1/projects/project-1") && method === "GET") {
+          return Response.json(importedProject);
+        }
+        if (url.endsWith("/v1/projects/project-1") && method === "PATCH") {
+          return Response.json(importedProject);
+        }
+        if (url.endsWith("/v1/projects/project-1/jobs") && method === "GET") {
+          return Response.json({
+            project_id: "project-1",
+            jobs: [
+              {
+                id: "job-import",
+                kind: "import",
+                status: "completed",
+                created_at: "2026-04-15T04:00:00Z",
+                started_at: "2026-04-15T04:00:00Z",
+                completed_at: "2026-04-15T04:00:00Z",
+                base_url: "https://example.com",
+                attack_count: 2,
+                project_id: "project-1",
+                error: null,
+                result_available: true,
+                artifact_names: ["atk-login.json"],
+                result_summary: importedProject.artifacts.latest_summary,
+              },
+            ],
+          });
+        }
+        if (url.endsWith("/v1/jobs/job-import/artifacts/atk-login.json") && method === "GET") {
+          return new Response(
+            JSON.stringify({
+              attack: { id: "atk-login", name: "Login failure" },
+              request: {
+                method: "POST",
+                url: "https://example.com/login",
+                headers: { Authorization: "Bearer demo" },
+                query: {},
+                body: { present: true, kind: "json", excerpt: '{"username":"demo"}' },
+              },
+              response: {
+                status_code: 500,
+                error: "server exploded",
+                duration_ms: 23.4,
+                body_excerpt: '{"error":"boom"}',
+              },
+            }),
+          );
+        }
+        throw new Error(`Unhandled fetch for ${method} ${url}`);
+      }),
+    );
+
+    renderWorkbench();
+
+    expect(await screen.findByRole("heading", { name: "Imported review bundle" })).toBeInTheDocument();
+    expect(await screen.findByText("Review-only workspace")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Duplicate project" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Promote findings" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Choose how this project begins")).not.toBeInTheDocument();
+    const stepRail = screen.getByRole("navigation", { name: "Workbench steps" });
+    expect(within(stepRail).getByRole("button", { name: /01source/i })).toBeDisabled();
+    expect(within(stepRail).getByRole("button", { name: /02inspect/i })).toBeDisabled();
+    expect(within(stepRail).getByRole("button", { name: /03generate/i })).toBeDisabled();
+    expect(within(stepRail).getByRole("button", { name: /04run/i })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Artifacts" }));
+    expect(await screen.findByRole("button", { name: "atk-login.json" })).toBeInTheDocument();
+    expect(await screen.findByText(/server exploded/)).toBeInTheDocument();
+  });
+
   it("uses project-scoped retention actions from the artifacts panel", async () => {
     let projectState = clone(baseProjectPayload);
     projectState.review_draft = {

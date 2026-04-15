@@ -36,6 +36,7 @@ from knives_out.profiles import (
     select_auth_profiles,
 )
 from knives_out.promotion import PromotionError, PromotionResult, promote_attack_suite
+from knives_out.review_bundles import render_review_bundle
 from knives_out.reporting import (
     load_attack_results,
     render_html_report,
@@ -106,6 +107,13 @@ class SummaryServiceResult:
 @dataclass(frozen=True)
 class ExportServiceResult:
     content: dict[str, Any]
+    suppressions_path: Path | None
+    suppressions: list[SuppressionRule]
+
+
+@dataclass(frozen=True)
+class BundleServiceResult:
+    content: bytes
     suppressions_path: Path | None
     suppressions: list[SuppressionRule]
 
@@ -742,6 +750,47 @@ def export_results_from_models(
         baseline=baseline,
         suppressions=_load_suppressions_from_text(suppressions_yaml),
         format=format,
+    )
+
+
+def bundle_results_from_paths(
+    results_path: Path,
+    *,
+    out_name: str | None = None,
+    baseline_path: Path | None = None,
+    suppressions_path: Path | None = None,
+    artifact_dir: Path | None = None,
+    min_severity: str = "high",
+    min_confidence: str = "medium",
+) -> BundleServiceResult:
+    attack_results = load_attack_results_or_raise(results_path, label="current")
+    baseline_results = (
+        load_attack_results_or_raise(baseline_path, label="baseline")
+        if baseline_path is not None
+        else None
+    )
+    resolved_suppressions_path, suppression_rules = load_suppressions_or_default(suppressions_path)
+    suppressions_yaml = (
+        resolved_suppressions_path.read_text(encoding="utf-8")
+        if resolved_suppressions_path is not None
+        else None
+    )
+    if artifact_dir is not None and (not artifact_dir.exists() or not artifact_dir.is_dir()):
+        raise ValueError(
+            f"Artifact directory '{artifact_dir}' does not exist or is not a directory."
+        )
+    return BundleServiceResult(
+        content=render_review_bundle(
+            attack_results,
+            name=out_name,
+            baseline=baseline_results,
+            suppressions_yaml=suppressions_yaml,
+            artifact_dir=artifact_dir,
+            min_severity=min_severity,
+            min_confidence=min_confidence,
+        ),
+        suppressions_path=resolved_suppressions_path,
+        suppressions=suppression_rules,
     )
 
 

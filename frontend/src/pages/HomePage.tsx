@@ -1,4 +1,4 @@
-import { startTransition, useState } from "react";
+import { startTransition, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -6,6 +6,7 @@ import {
   deleteProject,
   duplicateProject,
   getHealthStatus,
+  importReviewBundle,
   listProjects,
 } from "../api";
 import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../apiConfig";
@@ -16,6 +17,7 @@ export default function HomePage() {
   const queryClient = useQueryClient();
   const [newProjectName, setNewProjectName] = useState("Security workbench");
   const [apiBaseUrl, setApiBaseUrl] = useState(() => getApiBaseUrl());
+  const bundleInputRef = useRef<HTMLInputElement | null>(null);
   const requiresApiBase = needsConfiguredApiBase(apiBaseUrl);
 
   const projectListQuery = useQuery({
@@ -56,6 +58,16 @@ export default function HomePage() {
     },
   });
 
+  const importReviewBundleMutation = useMutation({
+    mutationFn: importReviewBundle,
+    onSuccess: async (project) => {
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
+      startTransition(() => {
+        navigate(`/projects/${project.id}`);
+      });
+    },
+  });
+
   function applyApiBase(nextValue: string) {
     const normalized = persistApiBaseUrl(nextValue);
     setApiBaseUrl(normalized);
@@ -71,6 +83,8 @@ export default function HomePage() {
           ? deleteProjectMutation.error.message
           : duplicateProjectMutation.error instanceof Error
             ? duplicateProjectMutation.error.message
+            : importReviewBundleMutation.error instanceof Error
+              ? importReviewBundleMutation.error.message
           : null;
   const apiStatusTone = requiresApiBase
     ? "idle"
@@ -124,17 +138,45 @@ export default function HomePage() {
               placeholder="Name the workbench"
             />
           </label>
-          <button
-            className="primary-button"
-            type="submit"
-            disabled={createProjectMutation.isPending || requiresApiBase}
-          >
-            {createProjectMutation.isPending
-              ? "Creating…"
-              : requiresApiBase
-                ? "Connect API first"
-                : "Open workbench"}
-          </button>
+          <input
+            accept=".zip,application/zip"
+            aria-label="Review bundle zip"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                importReviewBundleMutation.mutate(file);
+              }
+              event.target.value = "";
+            }}
+            ref={bundleInputRef}
+            type="file"
+          />
+          <div className="action-row">
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={
+                createProjectMutation.isPending || importReviewBundleMutation.isPending || requiresApiBase
+              }
+            >
+              {createProjectMutation.isPending
+                ? "Creating…"
+                : requiresApiBase
+                  ? "Connect API first"
+                  : "Open workbench"}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={
+                createProjectMutation.isPending || importReviewBundleMutation.isPending || requiresApiBase
+              }
+              onClick={() => bundleInputRef.current?.click()}
+              type="button"
+            >
+              {importReviewBundleMutation.isPending ? "Importing…" : "Import review bundle"}
+            </button>
+          </div>
         </form>
       </section>
 
@@ -181,7 +223,7 @@ export default function HomePage() {
         !projectListQuery.data?.projects.length ? (
           <div className="empty-state">
             <p>No saved projects yet.</p>
-            <p>Start with an OpenAPI or GraphQL source and the workbench will hold the drafts.</p>
+            <p>Start with a spec-driven workbench or import a portable review bundle.</p>
           </div>
         ) : null}
 
@@ -196,7 +238,11 @@ export default function HomePage() {
               </div>
               <Link className="project-card-link" to={`/projects/${project.id}`}>
                 <h3>{project.name}</h3>
-                <p>{project.source_name ?? "No source loaded yet"}</p>
+                <p>
+                  {project.source_mode === "review_bundle"
+                    ? "Portable review bundle import"
+                    : project.source_name ?? "No source loaded yet"}
+                </p>
               </Link>
               <dl className="project-metrics">
                 <div>
@@ -216,14 +262,16 @@ export default function HomePage() {
                 <Link className="secondary-button" to={`/projects/${project.id}`}>
                   Open
                 </Link>
-                <button
-                  className="ghost-button"
-                  type="button"
-                  onClick={() => duplicateProjectMutation.mutate(project.id)}
-                  disabled={duplicateProjectMutation.isPending || deleteProjectMutation.isPending}
-                >
-                  {duplicateProjectMutation.isPending ? "Duplicating…" : "Duplicate"}
-                </button>
+                {project.source_mode !== "review_bundle" ? (
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    onClick={() => duplicateProjectMutation.mutate(project.id)}
+                    disabled={duplicateProjectMutation.isPending || deleteProjectMutation.isPending}
+                  >
+                    {duplicateProjectMutation.isPending ? "Duplicating…" : "Duplicate"}
+                  </button>
+                ) : null}
                 <button
                   className="ghost-button"
                   type="button"

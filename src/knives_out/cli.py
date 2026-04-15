@@ -18,6 +18,7 @@ from knives_out.promotion import PromotionError
 from knives_out.services import (
     DEFAULT_SUPPRESSIONS_PATH,
     SuppressionRule,
+    bundle_results_from_paths,
     discover_model_paths,
     export_results_from_paths,
     generate_suite_from_path,
@@ -619,6 +620,59 @@ def run(
             f"Recorded {auth_failures} auth failure(s)."
         )
     console.print(f"Wrote results to [bold]{out}[/bold].")
+
+
+@app.command()
+def bundle(
+    results: Path,
+    baseline: Annotated[
+        Path | None,
+        typer.Option(help="Optional baseline results file for regression comparison."),
+    ] = None,
+    suppressions: Annotated[
+        Path | None,
+        typer.Option(
+            help="Optional suppressions file. Defaults to .knives-out-ignore.yml if present."
+        ),
+    ] = None,
+    artifact_dir: Annotated[
+        Path | None,
+        typer.Option(help="Optional artifact directory to include in the bundle."),
+    ] = None,
+    name: Annotated[
+        str | None,
+        typer.Option(help="Project name to seed when the bundle is imported into the workbench."),
+    ] = None,
+    out: Annotated[
+        Path,
+        typer.Option(help="Where to write the portable review bundle zip."),
+    ] = Path("review-bundle.zip"),
+    min_severity: Annotated[
+        SeverityThresholdOption,
+        typer.Option(help="Minimum severity default to seed in the imported review workspace."),
+    ] = SeverityThresholdOption.high,
+    min_confidence: Annotated[
+        ConfidenceThresholdOption,
+        typer.Option(help="Minimum confidence default to seed in the imported review workspace."),
+    ] = ConfidenceThresholdOption.medium,
+) -> None:
+    """Create a portable review bundle zip from results and optional evidence."""
+    try:
+        bundle_result = bundle_results_from_paths(
+            results,
+            out_name=name,
+            baseline_path=baseline,
+            suppressions_path=suppressions,
+            artifact_dir=artifact_dir,
+            min_severity=min_severity.value,
+            min_confidence=min_confidence.value,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    out.write_bytes(bundle_result.content)
+    _print_suppression_summary(bundle_result.suppressions_path, bundle_result.suppressions)
+    console.print(f"Wrote review bundle to [bold]{out}[/bold].")
 
 
 @app.command()
