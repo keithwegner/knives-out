@@ -95,9 +95,7 @@ class ProjectStore:
         current = self.load_project(project_id)
         now = datetime.now(UTC)
         duplicate_name = (
-            name.strip()
-            if name and name.strip()
-            else self._default_duplicate_name(current.name)
+            name.strip() if name and name.strip() else self._default_duplicate_name(current.name)
         )
         duplicated = current.model_copy(
             deep=True,
@@ -106,9 +104,7 @@ class ProjectStore:
                 "name": duplicate_name,
                 "created_at": now,
                 "updated_at": now,
-                "review_draft": current.review_draft.model_copy(
-                    update={"baseline_job_id": None}
-                ),
+                "review_draft": current.review_draft.model_copy(update={"baseline_job_id": None}),
                 "artifacts": current.artifacts.model_copy(update={"last_run_job_id": None}),
             },
         )
