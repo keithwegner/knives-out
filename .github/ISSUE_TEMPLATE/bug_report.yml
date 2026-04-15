@@ -1,0 +1,78 @@
+name: Bug report
+description: Report a defect, regression, or broken workflow in knives-out.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+        Please include enough detail for someone else to reproduce the problem.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: A short description of the bug.
+      placeholder: HTML artifact preview fails to open raw response links
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      description: Which part of the project is impacted?
+      options:
+        - CLI
+        - Local API
+        - Web workbench
+        - CI / GitHub Actions
+        - OpenAPI flow
+        - GraphQL flow
+        - Traffic capture / discovery
+        - Documentation / examples
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current behavior
+      description: What happened?
+      placeholder: Describe the failure, error output, or incorrect result.
+    validations:
+      required: true
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction details
+      description: Share the steps, command, API call, or fixture needed to reproduce the issue.
+      placeholder: |
+        1. Run ...
+        2. Open ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include relevant versions, OS, browser, Python, Node, or deployment context.
+      placeholder: |
+        - OS:
+        - Python:
+        - Node:
+        - knives-out version / commit:
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Logs, screenshots, or artifacts
+      description: Optional. Paste any useful output, screenshots, SARIF excerpts, or report snippets.
+      render: shell

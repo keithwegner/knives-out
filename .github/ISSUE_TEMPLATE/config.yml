@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question or get help
+    url: https://github.com/keithwegner/knives-out/discussions
+    about: Use GitHub Discussions for setup help, usage questions, and early design conversations.
+  - name: Report a security vulnerability
+    url: https://github.com/keithwegner/knives-out/security/policy
+    about: Please review the security policy and avoid filing public issues for vulnerabilities.
