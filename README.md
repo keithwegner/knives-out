@@ -11,6 +11,10 @@
 
 Project wiki: [GitHub Wiki](https://github.com/keithwegner/knives-out/wiki)
 
+Community: [Code of Conduct](CODE_OF_CONDUCT.md) · [Contributing](CONTRIBUTING.md) ·
+[Security Policy](SECURITY.md) ·
+[Discussions](https://github.com/keithwegner/knives-out/discussions)
+
 `knives-out` is a CLI for adversarial API testing from API specs and observed traffic.
 
 It helps developers break their APIs on purpose before someone else does.

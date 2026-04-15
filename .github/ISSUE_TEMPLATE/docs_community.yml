@@ -1,0 +1,46 @@
+name: Docs or community improvement
+description: Suggest a documentation, onboarding, or contributor-process improvement.
+title: "[Docs]: "
+labels:
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for documentation gaps, onboarding pain points, and community-process improvements.
+  - type: textarea
+    id: gap
+    attributes:
+      label: Gap or friction
+      description: What is unclear, missing, or hard to navigate today?
+      placeholder: The review-bundle import flow is documented in README but not easy to find from CI docs.
+    validations:
+      required: true
+  - type: input
+    id: audience
+    attributes:
+      label: Intended audience
+      description: Who is affected by this gap?
+      placeholder: New contributors, CI maintainers, workbench users, API consumers
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_change
+    attributes:
+      label: Proposed change
+      description: What would improve the experience?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected docs or process area
+      options:
+        - README / landing docs
+        - CI docs / examples
+        - Contributor workflow
+        - Issue / PR process
+        - GitHub Discussions / community health
+        - Other
+    validations:
+      required: true
