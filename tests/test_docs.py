@@ -34,6 +34,13 @@ def test_readme_includes_ci_guidance() -> None:
     assert "## Local API" in readme
     assert "knives-out serve --host 127.0.0.1 --port 8787" in readme
     assert "KNIVES_OUT_API_DATA_DIR" in readme
+    assert "## Container deployment" in readme
+    assert "docker build -t knives-out ." in readme
+    assert "docker compose up --build -d" in readme
+    assert "compose.env.example" in readme
+    assert "KNIVES_OUT_BASIC_AUTH_USERNAME" in readme
+    assert "KNIVES_OUT_BASIC_AUTH_PASSWORD" in readme
+    assert "same-origin self-hosted deployment" in readme
     assert "POST /v1/inspect" in readme
     assert "POST /v1/summary" in readme
     assert "POST /v1/export" in readme
@@ -165,6 +172,13 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "POST /v1/jobs/prune" in ci_doc
     assert "GET /v1/jobs/{id}/findings/{attack_id}/evidence" in ci_doc
     assert "KNIVES_OUT_API_DATA_DIR" in ci_doc
+    assert "Dockerfile" in ci_doc
+    assert "compose.yml" in ci_doc
+    assert "compose.env.example" in ci_doc
+    assert "docker build -t knives-out ." in ci_doc
+    assert "docker compose up --build" in ci_doc
+    assert "KNIVES_OUT_BASIC_AUTH_USERNAME" in ci_doc
+    assert "KNIVES_OUT_BASIC_AUTH_PASSWORD" in ci_doc
     assert "knives-out summary results.json --out summary.json" in ci_doc
     assert "knives-out export results.json --format sarif --out results.sarif" in ci_doc
     assert "github/codeql-action/upload-sarif@v4" in ci_doc

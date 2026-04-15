@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import time
 
 import httpx
@@ -331,3 +332,80 @@ def test_create_app_applies_configured_cors_origins(tmp_path, monkeypatch) -> No
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "https://keithwegner.github.io"
+
+
+def test_basic_auth_protects_app_api_and_docs_but_not_healthcheck(tmp_path, monkeypatch) -> None:
+    frontend_dir = tmp_path / "frontend-dist"
+    asset_dir = frontend_dir / "assets"
+    asset_dir.mkdir(parents=True)
+    (frontend_dir / "index.html").write_text(
+        "<!doctype html><div>Workbench</div>", encoding="utf-8"
+    )
+    (asset_dir / "main.js").write_text("console.log('ready')", encoding="utf-8")
+
+    monkeypatch.setenv("KNIVES_OUT_BASIC_AUTH_USERNAME", "demo")
+    monkeypatch.setenv("KNIVES_OUT_BASIC_AUTH_PASSWORD", "s3cret")
+    client = TestClient(create_app(data_dir=tmp_path / "api-data", frontend_dir=frontend_dir))
+    valid_header = {"Authorization": "Basic " + base64.b64encode(b"demo:s3cret").decode("ascii")}
+    invalid_header = {"Authorization": "Basic " + base64.b64encode(b"demo:wrong").decode("ascii")}
+
+    health_response = client.get("/healthz")
+    assert health_response.status_code == 200
+
+    root_response = client.get("/", follow_redirects=False)
+    assert root_response.status_code == 401
+    assert root_response.headers["www-authenticate"] == 'Basic realm="knives-out"'
+
+    app_response = client.get("/app/")
+    assert app_response.status_code == 401
+
+    api_response = client.get("/v1/projects")
+    assert api_response.status_code == 401
+
+    docs_response = client.get("/docs")
+    assert docs_response.status_code == 401
+
+    schema_response = client.get("/openapi.json")
+    assert schema_response.status_code == 401
+
+    invalid_response = client.get("/v1/projects", headers=invalid_header)
+    assert invalid_response.status_code == 401
+    assert invalid_response.headers["www-authenticate"] == 'Basic realm="knives-out"'
+
+    authorized_root = client.get("/", headers=valid_header, follow_redirects=False)
+    assert authorized_root.status_code == 307
+    assert authorized_root.headers["location"] == "/app/"
+
+    authorized_app = client.get("/app/", headers=valid_header)
+    assert authorized_app.status_code == 200
+    assert "Workbench" in authorized_app.text
+
+    authorized_api = client.get("/v1/projects", headers=valid_header)
+    assert authorized_api.status_code == 200
+    assert authorized_api.json() == {"projects": []}
+
+    authorized_docs = client.get("/docs", headers=valid_header)
+    assert authorized_docs.status_code == 200
+    assert "Swagger UI" in authorized_docs.text
+
+    authorized_schema = client.get("/openapi.json", headers=valid_header)
+    assert authorized_schema.status_code == 200
+    assert authorized_schema.json()["info"]["title"] == "knives-out API"
+
+
+def test_basic_auth_allows_unauthenticated_options_requests(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("KNIVES_OUT_BASIC_AUTH_USERNAME", "demo")
+    monkeypatch.setenv("KNIVES_OUT_BASIC_AUTH_PASSWORD", "s3cret")
+    monkeypatch.setenv("KNIVES_OUT_CORS_ALLOW_ORIGINS", "https://example.com")
+    client = TestClient(create_app(data_dir=tmp_path))
+
+    response = client.options(
+        "/v1/projects",
+        headers={
+            "Origin": "https://example.com",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://example.com"
