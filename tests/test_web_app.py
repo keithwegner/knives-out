@@ -346,16 +346,8 @@ def test_basic_auth_protects_app_api_and_docs_but_not_healthcheck(tmp_path, monk
     monkeypatch.setenv("KNIVES_OUT_BASIC_AUTH_USERNAME", "demo")
     monkeypatch.setenv("KNIVES_OUT_BASIC_AUTH_PASSWORD", "s3cret")
     client = TestClient(create_app(data_dir=tmp_path / "api-data", frontend_dir=frontend_dir))
-    valid_header = {
-        "Authorization": (
-            "Basic " + base64.b64encode(b"demo:s3cret").decode("ascii")
-        )
-    }
-    invalid_header = {
-        "Authorization": (
-            "Basic " + base64.b64encode(b"demo:wrong").decode("ascii")
-        )
-    }
+    valid_header = {"Authorization": "Basic " + base64.b64encode(b"demo:s3cret").decode("ascii")}
+    invalid_header = {"Authorization": "Basic " + base64.b64encode(b"demo:wrong").decode("ascii")}
 
     health_response = client.get("/healthz")
     assert health_response.status_code == 200
