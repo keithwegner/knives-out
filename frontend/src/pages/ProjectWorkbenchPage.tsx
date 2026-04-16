@@ -54,10 +54,34 @@ type ReviewTab =
   | "suppressions"
   | "promote";
 
+type ReviewTask = "findings" | "evidence" | "runs" | "policy";
 type RunHistoryFilter = "all" | "active" | "completed" | "failed";
+type StepStatusTone = "blocked" | "ready" | "done" | "running";
+
+interface StepStatus {
+  label: string;
+  detail: string;
+  tone: StepStatusTone;
+}
+
+interface NextAction {
+  eyebrow: string;
+  title: string;
+  description: string;
+  actionLabel: string;
+  disabledReason: string | null;
+  isBusy: boolean;
+  onAction: () => void;
+}
 
 const STEP_ORDER: ProjectStep[] = ["source", "inspect", "generate", "run", "review"];
 const PRUNEABLE_JOB_STATUSES: ApiJobStatus[] = ["completed", "failed"];
+const REVIEW_TASKS: Array<[ReviewTask, string]> = [
+  ["findings", "Findings"],
+  ["evidence", "Evidence"],
+  ["runs", "Runs & Reports"],
+  ["policy", "Policy"],
+];
 
 function defaultSourceForMode(mode: ProjectSourceMode): SourcePayload | null {
   if (mode === "openapi") {
@@ -192,6 +216,22 @@ function matchesRunHistoryFilter(job: JobStatusResponse, filter: RunHistoryFilte
     return job.status === "pending" || job.status === "running";
   }
   return job.status === filter;
+}
+
+function stepLabel(step: ProjectStep): string {
+  if (step === "source") {
+    return "Source";
+  }
+  if (step === "inspect") {
+    return "Inspect";
+  }
+  if (step === "generate") {
+    return "Generate";
+  }
+  if (step === "run") {
+    return "Run";
+  }
+  return "Review";
 }
 
 function ReviewTable({
@@ -484,24 +524,52 @@ function ListField({
 function StepRail({
   activeStep,
   onChange,
+  statuses,
 }: {
   activeStep: ProjectStep;
   onChange: (step: ProjectStep) => void;
+  statuses: Record<ProjectStep, StepStatus>;
 }) {
   return (
     <nav className="step-rail" aria-label="Workbench steps">
       {STEP_ORDER.map((step, index) => (
         <button
-          className={`step-rail-button${step === activeStep ? " step-rail-button-active" : ""}`}
+          aria-current={step === activeStep ? "step" : undefined}
+          className={`step-rail-button step-rail-${statuses[step].tone}${
+            step === activeStep ? " step-rail-button-active" : ""
+          }`}
           key={step}
           onClick={() => onChange(step)}
           type="button"
         >
           <span className="step-rail-index">0{index + 1}</span>
-          <span className="step-rail-name">{step}</span>
+          <span className="step-rail-name">{stepLabel(step)}</span>
+          <span className="step-rail-status">{statuses[step].label}</span>
+          <span className="step-rail-detail">{statuses[step].detail}</span>
         </button>
       ))}
     </nav>
+  );
+}
+
+function NextActionCard({ action }: { action: NextAction }) {
+  return (
+    <section className="next-action-card" aria-label="Next action">
+      <div>
+        <p className="eyebrow">{action.eyebrow}</p>
+        <h2>{action.title}</h2>
+        <p>{action.description}</p>
+        {action.disabledReason ? <p className="next-action-blocker">{action.disabledReason}</p> : null}
+      </div>
+      <button
+        className="primary-button"
+        disabled={Boolean(action.disabledReason) || action.isBusy}
+        onClick={action.onAction}
+        type="button"
+      >
+        {action.isBusy ? "Working…" : action.actionLabel}
+      </button>
+    </section>
   );
 }
 
@@ -524,6 +592,7 @@ export default function ProjectWorkbenchPage() {
   const [baselineError, setBaselineError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activityMessage, setActivityMessage] = useState<string | null>(null);
+  const [reviewTask, setReviewTask] = useState<ReviewTask>("findings");
   const [reviewTab, setReviewTab] = useState<ReviewTab>("overview");
   const [reviewFilter, setReviewFilter] = useState("");
   const [selectedEvidenceAttackId, setSelectedEvidenceAttackId] = useState<string | null>(null);
@@ -658,6 +727,7 @@ export default function ProjectWorkbenchPage() {
     try {
       const review = await refreshProjectReview(project.id, project.review_draft);
       commitDraft(withReviewBundle(project, review));
+      setReviewTask("findings");
       setReviewTab("overview");
       setActivityMessage(
         review.waiting_for_new_run
@@ -928,6 +998,179 @@ export default function ProjectWorkbenchPage() {
     drawerArtifactQuery.error instanceof Error ? drawerArtifactQuery.error.message : null;
   const artifactsTabArtifactError =
     artifactsTabArtifactQuery.error instanceof Error ? artifactsTabArtifactQuery.error.message : null;
+  const sourceDocumentReady = Boolean(draft.source?.content.trim());
+  const suiteReady = Boolean(draft.artifacts.generated_suite?.attacks.length);
+  const targetReady = Boolean(draft.run_draft.base_url.trim());
+  const activeRun = currentJobs.find((job) => job.status === "pending" || job.status === "running");
+  const stepStatuses: Record<ProjectStep, StepStatus> = {
+    source: sourceDocumentReady
+      ? {
+          label: "Done",
+          detail: `${draft.source_mode.replace("_", " ")} source saved`,
+          tone: "done",
+        }
+      : draft.source_mode === "capture_upload" && draft.discover_inputs.length
+        ? {
+            label: "Ready",
+            detail: `${draft.discover_inputs.length} capture file(s) loaded`,
+            tone: "ready",
+          }
+        : {
+            label: "Needs source",
+            detail: "Add schema or captures",
+            tone: "blocked",
+          },
+    inspect: draft.artifacts.inspect_result
+      ? {
+          label: "Done",
+          detail: `${draft.artifacts.inspect_result.operations.length} operation(s)`,
+          tone: "done",
+        }
+      : sourceDocumentReady
+        ? {
+            label: "Ready",
+            detail: "Preflight available",
+            tone: "ready",
+          }
+        : {
+            label: "Needs source",
+            detail: "Inspect waits for source",
+            tone: "blocked",
+          },
+    generate: suiteReady
+      ? {
+          label: "Done",
+          detail: `${draft.artifacts.generated_suite?.attacks.length ?? 0} attack(s)`,
+          tone: "done",
+        }
+      : sourceDocumentReady
+        ? {
+            label: "Ready",
+            detail: "Suite can be generated",
+            tone: "ready",
+          }
+        : {
+            label: "Needs source",
+            detail: "Generate waits for source",
+            tone: "blocked",
+          },
+    run: activeRun
+      ? {
+          label: "Running",
+          detail: shortJobId(activeRun.id),
+          tone: "running",
+        }
+      : currentReviewedJob
+        ? {
+            label: "Done",
+            detail: `${currentReviewedJob.artifact_names.length} artifact(s)`,
+            tone: "done",
+          }
+        : suiteReady
+          ? {
+              label: targetReady ? "Ready" : "Needs target",
+              detail: targetReady ? "Run can start" : "Add a base URL",
+              tone: targetReady ? "ready" : "blocked",
+            }
+          : {
+              label: "Needs suite",
+              detail: "Generate attacks first",
+              tone: "blocked",
+            },
+    review: currentReviewedJob
+      ? {
+          label: "Review ready",
+          detail: `${currentFindings.length} active finding(s)`,
+          tone: "done",
+        }
+      : activeRun
+        ? {
+            label: "Running",
+            detail: "Waiting for results",
+            tone: "running",
+          }
+        : {
+            label: "Needs run",
+            detail: "Run a suite first",
+            tone: "blocked",
+          },
+  };
+  const nextAction: NextAction =
+    draft.active_step === "source"
+      ? draft.source_mode === "capture_upload"
+        ? {
+            eyebrow: "Next action",
+            title: "Discover a source model from captured traffic",
+            description:
+              "Upload HAR or capture NDJSON files, then convert them into a learned model before inspection.",
+            actionLabel: "Discover learned model",
+            disabledReason: draft.discover_inputs.length
+              ? null
+              : "Upload at least one capture file to continue.",
+            isBusy: busyAction === "discover",
+            onAction: () => void handleDiscover(),
+          }
+        : {
+            eyebrow: "Next action",
+            title: "Inspect the source surface",
+            description:
+              "Load or paste the API source, then preflight the operations before choosing attacks.",
+            actionLabel: "Inspect source",
+            disabledReason: sourceDocumentReady ? null : "Paste or upload a source document first.",
+            isBusy: busyAction === "inspect",
+            onAction: () => void handleInspect(),
+          }
+      : draft.active_step === "inspect"
+        ? {
+            eyebrow: "Next action",
+            title: "Refresh operation discovery",
+            description:
+              "Apply the inspect filters and confirm which operations are available for attack generation.",
+            actionLabel: "Inspect source",
+            disabledReason: sourceDocumentReady ? null : "Add a source document before inspecting.",
+            isBusy: busyAction === "inspect",
+            onAction: () => void handleInspect(),
+          }
+        : draft.active_step === "generate"
+          ? {
+              eyebrow: "Next action",
+              title: "Generate an attack suite",
+              description:
+                "Use the selected filters and packs to build the suite that will run against your target.",
+              actionLabel: "Generate suite",
+              disabledReason: sourceDocumentReady ? null : "Add a source document before generating.",
+              isBusy: busyAction === "generate",
+              onAction: () => void handleGenerate(),
+            }
+          : draft.active_step === "run"
+            ? {
+                eyebrow: "Next action",
+                title: "Run the suite against a target",
+                description:
+                  "Set the base URL and optional auth context, then start a project-scoped background run.",
+                actionLabel: "Run suite",
+                disabledReason: !suiteReady
+                  ? "Generate an attack suite before running."
+                  : !targetReady
+                    ? "Add a base URL before starting a run."
+                    : headersError || queryError
+                      ? "Fix JSON errors in the run settings before starting."
+                      : null,
+                isBusy: busyAction === "run",
+                onAction: () => void handleRun(),
+              }
+            : {
+                eyebrow: "Next action",
+                title: "Review the latest completed run",
+                description:
+                  "Refresh analysis to update findings, evidence, reports, policy checks, and comparison state.",
+                actionLabel: "Refresh analysis",
+                disabledReason: completedReviewJobs.length
+                  ? null
+                  : "Complete at least one run before reviewing.",
+                isBusy: busyAction === "refresh-review",
+                onAction: () => void handleRefreshReview(),
+              };
 
   async function resolvePromotionReview(project: ProjectRecord) {
     if (project.review_draft.baseline_mode === "external") {
@@ -947,6 +1190,7 @@ export default function ProjectWorkbenchPage() {
   }
 
   function openFindingEvidence(finding: { attack_id: string }) {
+    setReviewTask("evidence");
     setSelectedEvidenceAttackId(finding.attack_id);
     setSelectedDrawerArtifactName(null);
     setEvidenceNotice(null);
@@ -1178,6 +1422,7 @@ export default function ProjectWorkbenchPage() {
         },
       }));
       setActivityMessage(`Generated ${triaged.added_count} suppression rule(s).`);
+      setReviewTask("policy");
       setReviewTab("suppressions");
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Could not generate suppressions.");
@@ -1209,6 +1454,7 @@ export default function ProjectWorkbenchPage() {
         },
       }));
       setActivityMessage(`Promoted ${promoted.promoted_attack_ids.length} attack(s).`);
+      setReviewTask("policy");
       setReviewTab("promote");
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Promotion failed.");
@@ -1551,10 +1797,14 @@ export default function ProjectWorkbenchPage() {
               active_step: step,
             }))
           }
+          statuses={stepStatuses}
         />
 
         <section className="workbench-main">
-          <div className="panel">
+          <NextActionCard action={nextAction} />
+
+          {draft.active_step === "source" ? (
+          <div className="panel step-panel">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Source</p>
@@ -1709,8 +1959,10 @@ export default function ProjectWorkbenchPage() {
               </div>
             )}
           </div>
+          ) : null}
 
-          <div className="panel">
+          {draft.active_step === "inspect" ? (
+          <div className="panel step-panel">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Inspect</p>
@@ -1780,8 +2032,10 @@ export default function ProjectWorkbenchPage() {
               ])}
             />
           </div>
+          ) : null}
 
-          <div className="panel">
+          {draft.active_step === "generate" ? (
+          <div className="panel step-panel">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Generate</p>
@@ -1900,8 +2154,10 @@ export default function ProjectWorkbenchPage() {
               </button>
             </div>
           </div>
+          ) : null}
 
-          <div className="panel">
+          {draft.active_step === "run" ? (
+          <div className="panel step-panel">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Run</p>
@@ -2099,8 +2355,10 @@ export default function ProjectWorkbenchPage() {
               </button>
             </div>
           </div>
+          ) : null}
 
-          <div className="panel">
+          {draft.active_step === "review" ? (
+          <div className="panel step-panel">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Review</p>
@@ -2176,6 +2434,30 @@ export default function ProjectWorkbenchPage() {
                 </small>
               </article>
             </div>
+
+            <div className="tab-row review-task-row" role="tablist" aria-label="Review task groups">
+              {REVIEW_TASKS.map(([task, label]) => (
+                <button
+                  aria-selected={reviewTask === task}
+                  className={`tab-button${reviewTask === task ? " tab-button-active" : ""}`}
+                  key={task}
+                  onClick={() => setReviewTask(task)}
+                  role="tab"
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {reviewTask === "policy" ? (
+            <div className="stack review-task-panel">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Policy</p>
+                <h3>Set thresholds, baselines, suppressions, and promotion rules.</h3>
+              </div>
+            </div>
             <div className="field-grid field-grid-3">
               <label className="field">
                 <span className="field-label">Minimum severity</span>
@@ -2220,15 +2502,6 @@ export default function ProjectWorkbenchPage() {
                     </option>
                   ))}
                 </select>
-              </label>
-              <label className="field">
-                <span className="field-label">Findings filter</span>
-                <input
-                  className="text-input"
-                  value={reviewFilter}
-                  onChange={(event) => setReviewFilter(event.target.value)}
-                  placeholder="search by attack, kind, issue, path"
-                />
               </label>
             </div>
             <div className="field-grid field-grid-3">
@@ -2331,8 +2604,21 @@ export default function ProjectWorkbenchPage() {
                 value={baselineText}
               />
             </details>
+            </div>
+            ) : null}
 
-            <div className="tab-row" role="tablist" aria-label="Review panels">
+            {reviewTask === "findings" ? (
+            <div className="stack review-task-panel">
+            <label className="field">
+              <span className="field-label">Findings filter</span>
+              <input
+                className="text-input"
+                value={reviewFilter}
+                onChange={(event) => setReviewFilter(event.target.value)}
+                placeholder="search by attack, kind, issue, path"
+              />
+            </label>
+            <div className="tab-row" role="tablist" aria-label="Findings panels">
               {(
                 [
                   ["overview", "Overview"],
@@ -2340,9 +2626,6 @@ export default function ProjectWorkbenchPage() {
                   ["persisting", "Persisting"],
                   ["resolved", "Resolved"],
                   ["deltas", "Deltas"],
-                  ["artifacts", "Artifacts"],
-                  ["suppressions", "Suppressions"],
-                  ["promote", "Promote"],
                 ] as Array<[ReviewTab, string]>
               ).map(([tab, label]) => (
                 <button
@@ -2357,7 +2640,17 @@ export default function ProjectWorkbenchPage() {
                 </button>
               ))}
             </div>
+            </div>
+            ) : null}
 
+            {reviewTask === "evidence" ? (
+            <div className="stack review-task-panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Evidence</p>
+                  <h3>Inspect artifacts, auth events, and finding-level request evidence.</h3>
+                </div>
+              </div>
             {selectedEvidenceAttackId && currentReviewedJob ? (
               <section className="evidence-drawer">
                 <div className="section-heading">
@@ -2489,8 +2782,38 @@ export default function ProjectWorkbenchPage() {
                 <p>{evidenceNotice}</p>
               </div>
             ) : null}
+              {currentReviewedJob ? (
+                <ArtifactViewer
+                  document={artifactsTabArtifactQuery.data}
+                  emptyCopy="No artifacts linked to the current compared run."
+                  error={artifactsTabArtifactError}
+                  isLoading={artifactsTabArtifactQuery.isLoading}
+                  jobId={currentReviewedJob.id}
+                  onSelect={setSelectedArtifactsTabArtifactName}
+                  references={artifactBrowserReferences}
+                  selectedArtifactName={selectedArtifactsTabArtifactName}
+                />
+              ) : (
+                <div className="empty-state">
+                  <p>No current compared run is available for artifact inspection.</p>
+                </div>
+              )}
+              <ReviewTable
+                emptyCopy="No auth events captured."
+                headings={["Profile", "Name", "Strategy", "Phase", "Status", "Error"]}
+                rows={(draft.artifacts.latest_results?.auth_events ?? []).map((event) => [
+                  event.profile ?? "—",
+                  event.name,
+                  event.strategy,
+                  event.phase,
+                  event.status_code ?? (event.success ? "ok" : "failed"),
+                  event.error ?? "—",
+                ])}
+              />
+            </div>
+            ) : null}
 
-            {reviewTab === "overview" ? (
+            {reviewTask === "findings" && reviewTab === "overview" ? (
               <div className="stack">
                 <div className="summary-card-grid">
                   <div className="summary-card">
@@ -2541,7 +2864,7 @@ export default function ProjectWorkbenchPage() {
               </div>
             ) : null}
 
-            {reviewTab === "new" ? (
+            {reviewTask === "findings" && reviewTab === "new" ? (
               <ReviewTable
                 emptyCopy="No new findings match the current filter."
                 headings={["Attack", "Kind", "Issue", "Severity", "Confidence", "Status", "Path"]}
@@ -2557,7 +2880,7 @@ export default function ProjectWorkbenchPage() {
               />
             ) : null}
 
-            {reviewTab === "persisting" ? (
+            {reviewTask === "findings" && reviewTab === "persisting" ? (
               <ReviewTable
                 emptyCopy="No persisting findings match the current filter."
                 headings={["Attack", "Kind", "Issue", "Severity", "Confidence", "Status", "Path"]}
@@ -2573,7 +2896,7 @@ export default function ProjectWorkbenchPage() {
               />
             ) : null}
 
-            {reviewTab === "resolved" ? (
+            {reviewTask === "findings" && reviewTab === "resolved" ? (
               <div className="stack">
                 <p className="field-hint">
                   Resolved findings are baseline-only in this milestone, so current-run artifact evidence is not available.
@@ -2594,7 +2917,7 @@ export default function ProjectWorkbenchPage() {
               </div>
             ) : null}
 
-            {reviewTab === "deltas" ? (
+            {reviewTask === "findings" && reviewTab === "deltas" ? (
               <ReviewTable
                 emptyCopy="No persisting deltas are available for the current comparison."
                 headings={["Attack", "Issue", "Change summary", "Method", "Path"]}
@@ -2612,7 +2935,7 @@ export default function ProjectWorkbenchPage() {
               />
             ) : null}
 
-            {reviewTab === "artifacts" ? (
+            {reviewTask === "runs" ? (
               <div className="stack">
                 <div className="comparison-panel">
                   <div className="section-heading">
@@ -2771,39 +3094,17 @@ export default function ProjectWorkbenchPage() {
                     <pre>{draft.artifacts.latest_html_report ?? "No HTML report yet."}</pre>
                   </article>
                 </div>
-                <ReviewTable
-                  emptyCopy="No auth events captured."
-                  headings={["Profile", "Name", "Strategy", "Phase", "Status", "Error"]}
-                  rows={(draft.artifacts.latest_results?.auth_events ?? []).map((event) => [
-                    event.profile ?? "—",
-                    event.name,
-                    event.strategy,
-                    event.phase,
-                    event.status_code ?? (event.success ? "ok" : "failed"),
-                    event.error ?? "—",
-                  ])}
-                />
-                {currentReviewedJob ? (
-                  <ArtifactViewer
-                    document={artifactsTabArtifactQuery.data}
-                    emptyCopy="No artifacts linked to the current compared run."
-                    error={artifactsTabArtifactError}
-                    isLoading={artifactsTabArtifactQuery.isLoading}
-                    jobId={currentReviewedJob.id}
-                    onSelect={setSelectedArtifactsTabArtifactName}
-                    references={artifactBrowserReferences}
-                    selectedArtifactName={selectedArtifactsTabArtifactName}
-                  />
-                ) : (
-                  <div className="empty-state">
-                    <p>No current compared run is available for artifact inspection.</p>
-                  </div>
-                )}
               </div>
             ) : null}
 
-            {reviewTab === "suppressions" ? (
-              <div className="stack">
+            {reviewTask === "policy" ? (
+              <div className="stack review-task-panel">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">Suppressions</p>
+                    <h3>Keep accepted findings out of active review noise.</h3>
+                  </div>
+                </div>
                 <CodeEditor
                   error={null}
                   height={260}
@@ -2825,8 +3126,14 @@ export default function ProjectWorkbenchPage() {
               </div>
             ) : null}
 
-            {reviewTab === "promote" ? (
-              <div className="stack">
+            {reviewTask === "policy" ? (
+              <div className="stack review-task-panel">
+                <div className="section-heading">
+                  <div>
+                    <p className="eyebrow">Promotion</p>
+                    <h3>Promote qualifying findings into a regression suite.</h3>
+                  </div>
+                </div>
                 <div className="summary-card-grid">
                   <div className="summary-card">
                     <span>Promoted attacks</span>
@@ -2845,6 +3152,7 @@ export default function ProjectWorkbenchPage() {
               </div>
             ) : null}
           </div>
+          ) : null}
         </section>
 
         <aside className="workbench-sidebar">

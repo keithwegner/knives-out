@@ -523,6 +523,22 @@ function renderWorkbench() {
   );
 }
 
+function getStepButton(stepName: string) {
+  return within(screen.getByRole("navigation", { name: "Workbench steps" })).getByRole("button", {
+    name: new RegExp(stepName, "i"),
+  });
+}
+
+function clickReviewTask(taskName: string | RegExp) {
+  const reviewTasks = screen.getByRole("tablist", { name: "Review task groups" });
+  fireEvent.click(within(reviewTasks).getByRole("tab", { name: taskName }));
+}
+
+function clickFindingsTab(tabName: string | RegExp) {
+  const findingsTabs = screen.getByRole("tablist", { name: "Findings panels" });
+  fireEvent.click(within(findingsTabs).getByRole("tab", { name: tabName }));
+}
+
 describe("ProjectWorkbenchPage", () => {
   beforeEach(() => {
     let projectPayload = clone(baseProjectPayload);
@@ -681,24 +697,43 @@ describe("ProjectWorkbenchPage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders the fixed step rail and disables runs without a generated suite", async () => {
+  it("renders guided step status and keeps one active step panel visible", async () => {
     renderWorkbench();
 
     expect(await screen.findByRole("heading", { name: "Workbench demo" })).toBeInTheDocument();
     const stepRail = screen.getByRole("navigation", { name: "Workbench steps" });
-    for (const stepName of ["source", "inspect", "generate", "run", "review"]) {
+    for (const stepName of ["Source", "Inspect", "Generate", "Run", "Review"]) {
       expect(
         within(stepRail).getByRole("button", { name: new RegExp(stepName, "i") }),
       ).toBeInTheDocument();
     }
-    expect(screen.getByRole("button", { name: "Run suite" })).toBeDisabled();
+    expect(getStepButton("Review")).toHaveAttribute("aria-current", "step");
+    expect(within(stepRail).getByText("Review ready")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Baseline-aware review workspace" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Choose how this project begins" })).not.toBeInTheDocument();
+
+    fireEvent.click(getStepButton("Source"));
+    expect(
+      await screen.findByRole("heading", { name: "Choose how this project begins" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Baseline-aware review workspace" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Inspect the source surface" })).toBeInTheDocument();
+
+    fireEvent.click(getStepButton("Run"));
+    expect(await screen.findByRole("heading", { name: "Execute against a live target" })).toBeInTheDocument();
+    const nextAction = screen.getByRole("region", { name: "Next action" });
+    expect(
+      within(nextAction).getByRole("heading", { name: "Run the suite against a target" }),
+    ).toBeInTheDocument();
+    expect(within(nextAction).getByRole("button", { name: "Run suite" })).toBeDisabled();
+    expect(screen.getByText("Generate an attack suite before running.")).toBeInTheDocument();
   });
 
   it("filters new findings inside the diff-first review tabs", async () => {
     renderWorkbench();
 
     await screen.findByRole("heading", { name: "Workbench demo" });
-    fireEvent.click(screen.getByRole("tab", { name: "New" }));
+    clickFindingsTab("New");
 
     const table = screen
       .getAllByRole("table")
@@ -938,18 +973,23 @@ describe("ProjectWorkbenchPage", () => {
     renderWorkbench();
 
     await screen.findByRole("heading", { name: "Workbench demo" });
-    fireEvent.change(screen.getByLabelText("Pinned baseline run"), {
+    clickReviewTask("Policy");
+    expect(
+      await screen.findByText("Set thresholds, baselines, suppressions, and promotion rules."),
+    ).toBeInTheDocument();
+    fireEvent.change(await screen.findByLabelText("Pinned baseline run"), {
       target: { value: "job-1" },
     });
 
     expect(await screen.findByText("Diffs ready")).toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getByLabelText("Pinned baseline run")).toHaveValue("job-1"),
-    );
+    clickReviewTask("Policy");
+    const baselineSelect = await screen.findByLabelText("Pinned baseline run");
+    await waitFor(() => expect(baselineSelect).toHaveValue("job-1"));
 
     fireEvent.click(screen.getByRole("button", { name: "Pin latest run as baseline" }));
 
     expect(await screen.findByText("Waiting for next run")).toBeInTheDocument();
+    clickReviewTask("Policy");
     await waitFor(() =>
       expect(screen.getByLabelText("Pinned baseline run")).toHaveValue("job-2"),
     );
@@ -959,12 +999,24 @@ describe("ProjectWorkbenchPage", () => {
     renderWorkbench();
 
     await screen.findByRole("heading", { name: "Workbench demo" });
+    clickReviewTask("Policy");
+    expect(
+      await screen.findByText("Set thresholds, baselines, suppressions, and promotion rules."),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "External JSON" }));
+    expect(await screen.findByText(/Review workspace switched to external baseline mode/)).toBeInTheDocument();
+    clickReviewTask("Policy");
+    expect(
+      await screen.findByText("Set thresholds, baselines, suppressions, and promotion rules."),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByText("External baseline JSON"));
 
     const editors = screen.getAllByTestId("code-editor");
-    fireEvent.change(editors.at(-1)!, { target: { value: "{" } });
-    const refreshButton = await screen.findByRole("button", { name: /Refresh/ });
+    fireEvent.change(editors.at(0)!, { target: { value: "{" } });
+    const refreshButton = screen.getAllByRole("button", { name: /Refresh/ }).at(0);
+    if (!refreshButton) {
+      throw new Error("Expected the refresh button to render.");
+    }
     fireEvent.click(refreshButton);
 
     expect(
@@ -976,7 +1028,7 @@ describe("ProjectWorkbenchPage", () => {
     renderWorkbench();
 
     await screen.findByRole("heading", { name: "Workbench demo" });
-    fireEvent.click(screen.getByRole("tab", { name: "New" }));
+    clickFindingsTab("New");
     fireEvent.click(screen.getByRole("button", { name: "Login failure" }));
 
     expect(await screen.findByText("Current-run evidence")).toBeInTheDocument();
@@ -984,19 +1036,24 @@ describe("ProjectWorkbenchPage", () => {
     expect(await screen.findByText("Create session")).toBeInTheDocument();
     expect((await screen.findAllByText("member-login")).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/https:\/\/example.com\/login/)).length).toBeGreaterThan(0);
-    expect(await screen.findByText(/server exploded/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/server exploded/)).length).toBeGreaterThan(0);
   });
 
   it("keeps resolved findings summary-only and reuses the artifact viewer in the artifacts tab", async () => {
     renderWorkbench();
 
     await screen.findByRole("heading", { name: "Workbench demo" });
-    fireEvent.change(screen.getByLabelText("Pinned baseline run"), {
+    clickReviewTask("Policy");
+    expect(
+      await screen.findByText("Set thresholds, baselines, suppressions, and promotion rules."),
+    ).toBeInTheDocument();
+    fireEvent.change(await screen.findByLabelText("Pinned baseline run"), {
       target: { value: "job-1" },
     });
 
     expect(await screen.findByText("Diffs ready")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Resolved" }));
+    clickReviewTask("Findings");
+    clickFindingsTab("Resolved");
 
     expect(
       await screen.findByText(
@@ -1005,7 +1062,7 @@ describe("ProjectWorkbenchPage", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Order mismatch" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Artifacts" }));
+    clickReviewTask("Evidence");
     expect(await screen.findByRole("button", { name: "atk-login.json" })).toBeInTheDocument();
     expect((await screen.findAllByText(/Authorization/)).length).toBeGreaterThan(0);
     expect(await screen.findByText(/server exploded/)).toBeInTheDocument();
@@ -1015,16 +1072,27 @@ describe("ProjectWorkbenchPage", () => {
     renderWorkbench();
 
     await screen.findByRole("heading", { name: "Workbench demo" });
-    fireEvent.change(screen.getByLabelText("Pinned baseline run"), {
+    clickReviewTask("Policy");
+    expect(
+      await screen.findByText("Set thresholds, baselines, suppressions, and promotion rules."),
+    ).toBeInTheDocument();
+    fireEvent.change(await screen.findByLabelText("Pinned baseline run"), {
       target: { value: "job-1" },
     });
     expect(await screen.findByText("Diffs ready")).toBeInTheDocument();
 
+    clickReviewTask("Findings");
     fireEvent.click(screen.getByRole("button", { name: "Login failure" }));
     expect(await screen.findByText("Current-run evidence")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh analysis" }));
+    const refreshButton = screen.getAllByRole("button", { name: "Refresh analysis" }).at(0);
+    if (!refreshButton) {
+      throw new Error("Expected refresh analysis to render.");
+    }
+    fireEvent.click(refreshButton);
 
+    expect(await screen.findByText(/Review workspace refreshed/)).toBeInTheDocument();
+    clickReviewTask("Evidence");
     expect(
       await screen.findByText(
         "Evidence changed with the latest run. Reopen a finding from the refreshed comparison.",
@@ -1065,13 +1133,23 @@ describe("ProjectWorkbenchPage", () => {
         return Response.json({ project_id: "project-1", jobs });
       }
       if (url.endsWith("/v1/projects/project-1/review") && method === "POST") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        const baselineJobId = body.baseline_job_id ?? null;
+        projectState = {
+          ...projectState,
+          review_draft: {
+            ...projectState.review_draft,
+            baseline_job_id: baselineJobId,
+            baseline: body.baseline ?? null,
+          },
+        };
         return Response.json({
           ...createReviewResponse({
-            baselineJobId: projectState.review_draft.baseline_job_id ?? null,
+            baselineJobId,
             waitingForNewRun: false,
-            baselineUsed: projectState.review_draft.baseline_job_id === "job-1",
+            baselineUsed: baselineJobId === "job-1",
           }),
-          baseline_job_id: projectState.review_draft.baseline_job_id,
+          baseline_job_id: baselineJobId,
         });
       }
       if (url.endsWith("/v1/projects/project-1/jobs/job-1") && method === "DELETE") {
@@ -1175,18 +1253,19 @@ describe("ProjectWorkbenchPage", () => {
     renderWorkbench();
 
     await screen.findAllByText("Workbench demo");
-    const reviewPanels = screen.getAllByRole("tablist", { name: "Review panels" }).at(-1);
-    if (!reviewPanels) {
-      throw new Error("Expected the review tab list to render.");
-    }
-    fireEvent.click(within(reviewPanels).getByRole("tab", { name: /Artifacts/ }));
+    clickReviewTask("Runs & Reports");
 
     fireEvent.click(screen.getByRole("button", { name: "Delete run job-1" }));
 
-    const baselineSelect = screen.getByLabelText("Pinned baseline run");
+    expect(await screen.findByText(/Deleted run job-1 from this project/)).toBeInTheDocument();
+    clickReviewTask("Policy");
+    expect(
+      await screen.findByText("Set thresholds, baselines, suppressions, and promotion rules."),
+    ).toBeInTheDocument();
+    const baselineSelect = await screen.findByLabelText("Pinned baseline run");
     await waitFor(() => expect(baselineSelect).toHaveValue(""));
 
-    fireEvent.click(screen.getByRole("tab", { name: /Artifacts/ }));
+    clickReviewTask("Runs & Reports");
     fireEvent.click(screen.getByRole("button", { name: "Preview matches" }));
 
     await waitFor(() =>
@@ -1203,6 +1282,7 @@ describe("ProjectWorkbenchPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete matched runs" }));
 
     expect(await screen.findByText("No jobs for this project yet.")).toBeInTheDocument();
+    clickReviewTask("Evidence");
     expect(
       screen.getByText("No current compared run is available for artifact inspection."),
     ).toBeInTheDocument();
