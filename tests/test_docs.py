@@ -253,6 +253,8 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "## v0.14 — smoke-test integration coverage" in roadmap
     assert "deterministic fixture apps and checked-in inputs only" in roadmap
     assert "#58: CLI happy path against a local API fixture" in roadmap
+    assert "tests/test_api_integration.py" in roadmap
+    assert "real FastAPI app with uvicorn" in roadmap
     assert "LLM application and tool-misuse testing" in roadmap
 
     assert "capture.py" in architecture

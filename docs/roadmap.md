@@ -75,6 +75,11 @@ Initial issue-backed scenarios:
 - #61: built-in auth acquisition against a fake local token endpoint
 - #62: Shadow Twin capture -> discover -> generate smoke coverage
 
+The integration baseline now has two layers. `tests/test_integration_smoke.py` protects
+CLI/runner flows against local fixture services, while `tests/test_api_integration.py` starts
+the real FastAPI app with uvicorn and exercises workbench-critical HTTP behavior over localhost
+with `httpx`.
+
 ## Still deferred
 
 These remain interesting, but they should not displace the next planning pass:
