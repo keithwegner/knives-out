@@ -1159,6 +1159,19 @@ def test_report_verify_promote_and_triage_endpoints(tmp_path) -> None:
     assert export_payload["content"]["version"] == "2.1.0"
     assert export_payload["content"]["runs"][0]["results"][0]["ruleId"] == "knives-out/server_error"
 
+    junit_response = client.post(
+        "/v1/export",
+        json={
+            "results": results.model_dump(mode="json"),
+            "format": "junit",
+        },
+    )
+    assert junit_response.status_code == 200
+    junit_payload = junit_response.json()
+    assert junit_payload["format"] == "junit"
+    assert "<testsuite" in junit_payload["content"]
+    assert 'failures="1"' in junit_payload["content"]
+
     summary_response = client.post(
         "/v1/summary",
         json={"results": results.model_dump(mode="json"), "top_limit": 5},

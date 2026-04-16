@@ -17,7 +17,7 @@ from knives_out.auth_config import (
     select_auth_configs,
 )
 from knives_out.auth_plugins import LoadedAuthPlugin, load_auth_plugins
-from knives_out.exporting import render_sarif_export
+from knives_out.exporting import render_junit_export, render_sarif_export
 from knives_out.filtering import filter_attack_suite, filter_operations
 from knives_out.generator import generate_attack_suite
 from knives_out.learned_discovery import discover_learned_model
@@ -105,7 +105,7 @@ class SummaryServiceResult:
 
 @dataclass(frozen=True)
 class ExportServiceResult:
-    content: dict[str, Any]
+    content: dict[str, Any] | str
     suppressions_path: Path | None
     suppressions: list[SuppressionRule]
 
@@ -694,9 +694,15 @@ def export_results(
     baseline: AttackResults | None = None,
     suppressions: list[SuppressionRule] | None = None,
     format: str = "sarif",
-) -> dict[str, Any]:
+) -> dict[str, Any] | str:
     if format == "sarif":
         return render_sarif_export(
+            results,
+            baseline=baseline,
+            suppressions=suppressions,
+        )
+    if format == "junit":
+        return render_junit_export(
             results,
             baseline=baseline,
             suppressions=suppressions,
@@ -736,7 +742,7 @@ def export_results_from_models(
     baseline: AttackResults | None = None,
     suppressions_yaml: str | None = None,
     format: str = "sarif",
-) -> dict[str, Any]:
+) -> dict[str, Any] | str:
     return export_results(
         results,
         baseline=baseline,

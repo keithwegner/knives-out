@@ -62,6 +62,7 @@ class ReportFormatOption(StrEnum):
 
 class ExportFormatOption(StrEnum):
     sarif = "sarif"
+    junit = "junit"
 
 
 class InspectFormatOption(StrEnum):
@@ -654,12 +655,16 @@ def export(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    rendered = json.dumps(export_result.content, indent=2)
+    rendered = (
+        export_result.content
+        if isinstance(export_result.content, str)
+        else json.dumps(export_result.content, indent=2)
+    )
     if out is None:
         typer.echo(rendered)
         return
 
-    out.write_text(rendered + "\n", encoding="utf-8")
+    out.write_text(rendered.rstrip("\n") + "\n", encoding="utf-8")
     _print_suppression_summary(export_result.suppressions_path, export_result.suppressions)
     console.print(f"Wrote {format.value} export to [bold]{out}[/bold].")
 

@@ -25,6 +25,7 @@ def test_readme_includes_ci_guidance() -> None:
     assert "`knives-out run` currently exits with status `0`" in readme
     assert "knives-out verify results.json" in readme
     assert "knives-out export results.json --format sarif --out results.sarif" in readme
+    assert "knives-out export results.json --format junit --out results.xml" in readme
     assert "status, severity, confidence, or schema outcome drifted" in readme
     assert "knives-out promote results.json" in readme
     assert "knives-out triage results.json" in readme
@@ -181,6 +182,9 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "KNIVES_OUT_BASIC_AUTH_PASSWORD" in ci_doc
     assert "knives-out summary results.json --out summary.json" in ci_doc
     assert "knives-out export results.json --format sarif --out results.sarif" in ci_doc
+    assert "Optional: JUnit export for test reports" in ci_doc
+    assert "--format junit" in ci_doc
+    assert "results.xml" in ci_doc
     assert "github/codeql-action/upload-sarif@v4" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc
     assert "--tag orders" in ci_doc

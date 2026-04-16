@@ -28,6 +28,7 @@ class ApiReportFormat(StrEnum):
 
 class ApiExportFormat(StrEnum):
     sarif = "sarif"
+    junit = "junit"
 
 
 class ApiJobStatus(StrEnum):
@@ -219,7 +220,7 @@ class ExportRequest(BaseModel):
 
 class ExportResponse(BaseModel):
     format: ApiExportFormat
-    content: dict[str, Any]
+    content: dict[str, Any] | str
 
 
 class SummaryResponse(ResultsSummary):

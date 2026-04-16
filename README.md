@@ -65,7 +65,7 @@ Given an OpenAPI spec, GraphQL schema, or learned traffic model, `knives-out` ca
 - run those attacks against a live base URL
 - produce a Markdown report that highlights suspicious outcomes
 - produce an HTML report with linked request and response artifacts
-- export SARIF findings for CI-native code-scanning review
+- export SARIF or JUnit findings for CI-native review
 - verify findings for CI gating
 - promote qualifying findings back into a reusable regression suite
 - suppress or triage known findings so CI stays focused on active risk
@@ -237,10 +237,11 @@ Generate a machine-readable summary for dashboards or CI annotations:
 knives-out summary results.json --out summary.json
 ```
 
-Export active findings as SARIF for CI-native code scanning:
+Export active findings as SARIF for CI-native code scanning, or JUnit XML for CI test reports:
 
 ```bash
 knives-out export results.json --format sarif --out results.sarif
+knives-out export results.json --format junit --out results.xml
 ```
 
 Promote qualifying findings back into a reusable regression suite:
@@ -492,6 +493,10 @@ findings as structured JSON.
 When you want code-scanning or PR-native triage inside CI, `knives-out export results.json --format sarif --out results.sarif`
 emits SARIF 2.1.0 from the same active unsuppressed findings, with optional baseline change
 metadata when you also pass `--baseline previous-results.json`.
+When your CI system presents JUnit test reports more naturally than SARIF, use
+`knives-out export results.json --format junit --out results.xml` to emit one test case per
+executed attack result, with active findings marked as failures and suppressed findings marked as
+skipped.
 When you want stateful coverage, generate with `--auto-workflows` first, then add
 `--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py` or your own custom pack as
 you move from generic coverage to app-specific journeys. For protected APIs, keep simple static
@@ -705,20 +710,21 @@ Renders a machine-readable CI export from a results JSON file.
 
 ```bash
 knives-out export results.json --format sarif --out results.sarif
+knives-out export results.json --format junit --out results.xml
 ```
 
 You can include a prior `results.json` as a baseline to attach `new` vs `persisting` metadata and
-persisting delta details to the exported SARIF findings:
+persisting delta details to the exported SARIF findings or JUnit failure metadata:
 
 ```bash
 knives-out export results.json \
-  --format sarif \
+  --format junit \
   --baseline previous-results.json \
-  --out results.sarif
+  --out results.xml
 ```
 
 `export` auto-loads `.knives-out-ignore.yml` when present and excludes suppressed findings by
-default, so CI-facing SARIF stays aligned with the rest of the review flow.
+default, so CI-facing SARIF and JUnit reports stay aligned with the rest of the review flow.
 
 ### `verify`
 

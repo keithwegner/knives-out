@@ -7,11 +7,11 @@
 3. run that suite against a dev or staging deployment
 4. render a Markdown report for review
 5. optionally render an HTML report with linked artifacts
-6. optionally export SARIF for code scanning or PR-native review
+6. optionally export SARIF or JUnit for CI-native review
 7. verify the results against a CI policy
 8. optionally promote qualifying findings into a smaller regression suite
 9. optionally maintain a checked-in suppressions file for accepted findings
-10. publish the JSON results, reports, SARIF export, regression suite, and per-attack artifacts
+10. publish the JSON results, reports, SARIF or JUnit export, regression suite, and per-attack artifacts
 
 The repository includes a ready-to-adapt GitHub Actions example at
 `.github/workflows/dev-environment-example.yml`.
@@ -146,6 +146,23 @@ permissions:
   with:
     sarif_file: results.sarif
 ```
+
+## Optional: JUnit export for test reports
+
+Use this when your CI system has first-class test-report UI but not SARIF code scanning. The JUnit
+export emits one test case per executed attack result. Active unsuppressed findings become
+failures, while suppressed findings are marked as skipped so accepted risk remains visible.
+
+```yaml
+- name: Export JUnit findings
+  if: always()
+  run: |
+    knives-out export results.json \
+      --format junit \
+      --out results.xml
+```
+
+Upload `results.xml` with your CI system's normal JUnit test-report publisher.
 
 ## Optional: checked-in suppressions
 

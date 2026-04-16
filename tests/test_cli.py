@@ -2,6 +2,7 @@ import json
 import re
 from pathlib import Path
 from textwrap import dedent
+from xml.etree import ElementTree as ET
 
 from fastapi import FastAPI
 from typer.testing import CliRunner
@@ -577,6 +578,51 @@ def test_export_command_writes_sarif_to_file(tmp_path: Path) -> None:
     export_payload = json.loads(export_path.read_text(encoding="utf-8"))
     assert export_payload["version"] == "2.1.0"
     assert export_payload["runs"][0]["results"][0]["ruleId"] == "knives-out/server_error"
+
+
+def test_export_command_writes_junit_to_file(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    export_path = tmp_path / "results.xml"
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_server",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                path="/pets",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "export",
+            str(results_path),
+            "--format",
+            "junit",
+            "--out",
+            str(export_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    root = ET.fromstring(export_path.read_text(encoding="utf-8"))
+    assert root.tag == "testsuite"
+    assert root.attrib["tests"] == "1"
+    assert root.attrib["failures"] == "1"
+    failure = root.find("testcase/failure")
+    assert failure is not None
+    assert failure.attrib["type"] == "server_error"
 
 
 def test_export_command_prints_sarif_with_baseline_changes_to_stdout(tmp_path: Path) -> None:
