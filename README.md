@@ -237,6 +237,12 @@ Generate a machine-readable summary for dashboards or CI annotations:
 knives-out summary results.json --out summary.json
 ```
 
+Publish a compact Markdown summary in GitHub Actions:
+
+```bash
+knives-out summary results.json --format markdown >> "$GITHUB_STEP_SUMMARY"
+```
+
 Export active findings as SARIF for CI-native code scanning:
 
 ```bash
@@ -488,7 +494,8 @@ With a baseline, both `verify` and baseline-aware `report` also summarize persis
 status, severity, confidence, or schema outcome drifted between runs.
 When you want a compact machine-readable artifact for dashboards, annotations, or follow-on
 automation, `knives-out summary results.json --out summary.json` emits the same counts and top
-findings as structured JSON.
+findings as structured JSON. For a smaller human-readable CI note, append
+`knives-out summary results.json --format markdown` output to `$GITHUB_STEP_SUMMARY`.
 When you want code-scanning or PR-native triage inside CI, `knives-out export results.json --format sarif --out results.sarif`
 emits SARIF 2.1.0 from the same active unsuppressed findings, with optional baseline change
 metadata when you also pass `--baseline previous-results.json`.

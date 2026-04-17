@@ -286,6 +286,14 @@ HTML, render a summary file after execution:
   run: knives-out summary results.json --out summary.json
 ```
 
+When GitHub Actions reviewers need a smaller human-readable note in the job UI, render the same
+summary as Markdown and append it to the step summary:
+
+```yaml
+- name: Publish knives-out job summary
+  run: knives-out summary results.json --format markdown >> "$GITHUB_STEP_SUMMARY"
+```
+
 ## Optional: Shadow Twin learned models
 
 Shadow Twin adds a capture/discover front end for real-behavior API learning when the checked-in
