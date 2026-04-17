@@ -17,6 +17,7 @@ import type {
   ProjectReviewResponse,
   ProjectRecord,
   ProjectReviewDraft,
+  ProjectSourceMode,
   PromoteResponse,
   ReportResponse,
   ResultsSummary,
@@ -122,10 +123,18 @@ export function listProjects() {
   return request<ProjectListResponse>("/v1/projects");
 }
 
-export function createProject(name: string) {
+export function createProject(
+  input:
+    | string
+    | {
+        name: string;
+        source_mode?: ProjectSourceMode;
+      },
+) {
+  const payload = typeof input === "string" ? { name: input } : input;
   return request<ProjectRecord>("/v1/projects", {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(payload),
   });
 }
 

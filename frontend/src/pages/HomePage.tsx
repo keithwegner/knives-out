@@ -10,11 +10,32 @@ import {
 } from "../api";
 import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../apiConfig";
 import ApiConnectionPanel from "../components/ApiConnectionPanel";
+import type { ProjectSourceMode } from "../types";
+
+const SOURCE_MODE_OPTIONS: Array<{ mode: ProjectSourceMode; label: string; description: string }> = [
+  {
+    mode: "openapi",
+    label: "OpenAPI",
+    description: "Start from a REST schema.",
+  },
+  {
+    mode: "graphql",
+    label: "GraphQL",
+    description: "Start from SDL or introspection.",
+  },
+  {
+    mode: "capture_upload",
+    label: "Captured traffic",
+    description: "Infer a learned model from HAR or NDJSON.",
+  },
+];
 
 export default function HomePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [newProjectName, setNewProjectName] = useState("Security workbench");
+  const [newProjectSourceMode, setNewProjectSourceMode] =
+    useState<ProjectSourceMode>("openapi");
   const [apiBaseUrl, setApiBaseUrl] = useState(() => getApiBaseUrl());
   const requiresApiBase = needsConfiguredApiBase(apiBaseUrl);
 
@@ -112,7 +133,10 @@ export default function HomePage() {
             if (requiresApiBase || !newProjectName.trim()) {
               return;
             }
-            createProjectMutation.mutate(newProjectName.trim());
+            createProjectMutation.mutate({
+              name: newProjectName.trim(),
+              source_mode: newProjectSourceMode,
+            });
           }}
         >
           <label className="field">
@@ -124,6 +148,26 @@ export default function HomePage() {
               placeholder="Name the workbench"
             />
           </label>
+          <div className="field">
+            <span className="field-label">Source type</span>
+            <div className="source-choice-grid" role="radiogroup" aria-label="New project source type">
+              {SOURCE_MODE_OPTIONS.map((option) => (
+                <button
+                  aria-checked={newProjectSourceMode === option.mode}
+                  className={`source-choice-card${
+                    newProjectSourceMode === option.mode ? " source-choice-card-active" : ""
+                  }`}
+                  key={option.mode}
+                  onClick={() => setNewProjectSourceMode(option.mode)}
+                  role="radio"
+                  type="button"
+                >
+                  <strong>{option.label}</strong>
+                  <span>{option.description}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <button
             className="primary-button"
             type="submit"
@@ -189,7 +233,7 @@ export default function HomePage() {
           {projectListQuery.data?.projects.map((project) => (
             <article className="project-card" key={project.id}>
               <div className="project-card-top">
-                <p className="project-mode">{project.source_mode.replace('_', ' ')}</p>
+                <p className="project-mode">{project.source_mode.replace("_", " ")}</p>
                 <div className={`status-chip status-${project.last_run_status ?? "idle"}`}>
                   {project.last_run_status ?? "draft"}
                 </div>
@@ -200,18 +244,22 @@ export default function HomePage() {
               </Link>
               <dl className="project-metrics">
                 <div>
-                  <dt>Step</dt>
+                  <dt>Resume at</dt>
                   <dd>{project.active_step}</dd>
                 </div>
                 <div>
-                  <dt>Jobs</dt>
-                  <dd>{project.job_count}</dd>
+                  <dt>Latest run</dt>
+                  <dd>{project.last_run_status ?? "draft"}</dd>
                 </div>
                 <div>
                   <dt>Findings</dt>
                   <dd>{project.active_flagged_count ?? "—"}</dd>
                 </div>
               </dl>
+              <p className="project-card-summary">
+                {project.job_count} saved run{project.job_count === 1 ? "" : "s"}
+                {project.last_run_at ? ` • last activity ${new Date(project.last_run_at).toLocaleString()}` : ""}
+              </p>
               <div className="project-card-actions">
                 <Link className="secondary-button" to={`/projects/${project.id}`}>
                   Open
