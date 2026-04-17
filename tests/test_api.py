@@ -327,6 +327,10 @@ def test_inspect_endpoint_supports_inline_graphql_schema(tmp_path) -> None:
         "updateBook",
     }
     assert payload["learned_workflow_count"] == 0
+    assert payload["summary"]["operation_count"] == 2
+    assert payload["summary"]["method_counts"] == {"POST": 2}
+    assert payload["summary"]["warning_count"] == 0
+    assert payload["summary"]["learned_workflow_count"] == 0
 
 
 def test_generate_endpoint_supports_inline_openapi_source(tmp_path) -> None:

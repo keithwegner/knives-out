@@ -12,6 +12,7 @@ from knives_out.models import (
     AttackResults,
     AttackSuite,
     AuthEvent,
+    InspectSummary,
     LearnedModel,
     OperationSpec,
     PreflightWarning,
@@ -84,6 +85,7 @@ class InspectResponse(BaseModel):
     operations: list[OperationSpec]
     warnings: list[PreflightWarning] = Field(default_factory=list)
     learned_workflow_count: int = 0
+    summary: InspectSummary = Field(default_factory=InspectSummary)
 
 
 class GenerateRequest(BaseModel):

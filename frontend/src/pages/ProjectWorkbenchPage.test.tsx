@@ -74,6 +74,43 @@ const baseProjectPayload: ProjectRecord = {
     min_confidence: "medium",
   },
   artifacts: {
+    inspect_result: {
+      source_kind: "openapi",
+      operations: [
+        {
+          operation_id: "listOrders",
+          method: "GET",
+          path: "/orders",
+          protocol: "openapi",
+          tags: ["orders"],
+          auth_required: false,
+          request_body_required: false,
+        },
+        {
+          operation_id: "createOrder",
+          method: "POST",
+          path: "/orders",
+          protocol: "openapi",
+          tags: ["orders", "write"],
+          auth_required: true,
+          request_body_required: true,
+        },
+      ],
+      warnings: [],
+      learned_workflow_count: 0,
+      summary: {
+        operation_count: 2,
+        auth_required_count: 1,
+        request_body_count: 1,
+        required_request_body_count: 1,
+        parameter_count: 3,
+        untagged_operation_count: 0,
+        warning_count: 0,
+        learned_workflow_count: 0,
+        method_counts: { GET: 1, POST: 1 },
+        tag_counts: { orders: 2, write: 1 },
+      },
+    },
     latest_summary: {
       source: "unit",
       base_url: "https://example.com",
@@ -692,6 +729,15 @@ describe("ProjectWorkbenchPage", () => {
       ).toBeInTheDocument();
     }
     expect(screen.getByRole("button", { name: "Run suite" })).toBeDisabled();
+  });
+
+  it("renders inspect summary aggregates", async () => {
+    renderWorkbench();
+
+    expect(await screen.findByRole("heading", { name: "Workbench demo" })).toBeInTheDocument();
+    expect(screen.getByText("GET: 1, POST: 1")).toBeInTheDocument();
+    expect(screen.getByText("orders: 2, write: 1")).toBeInTheDocument();
+    expect(screen.getByText("createOrder")).toBeInTheDocument();
   });
 
   it("filters new findings inside the diff-first review tabs", async () => {

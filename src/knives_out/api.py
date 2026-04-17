@@ -902,6 +902,7 @@ def create_app(
             learned_workflow_count=len(result.loaded.learned_model.workflows)
             if result.loaded.learned_model is not None
             else 0,
+            summary=result.summary,
         )
 
     @app.post("/v1/generate", response_model=GenerateResponse)

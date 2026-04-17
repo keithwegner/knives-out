@@ -83,6 +83,17 @@ function formatList(values: string[]): string {
   return values.join(", ");
 }
 
+function formatCountMap(counts: Record<string, number> | undefined): string {
+  if (!counts) {
+    return "-";
+  }
+  const entries = Object.entries(counts);
+  if (!entries.length) {
+    return "-";
+  }
+  return entries.map(([name, count]) => `${name}: ${count}`).join(", ");
+}
+
 function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
@@ -869,6 +880,7 @@ export default function ProjectWorkbenchPage() {
     ? currentJobs.find((job) => job.id === draft.review_draft.baseline_job_id) ?? null
     : null;
   const verification = draft.artifacts.latest_verification;
+  const inspectSummary = draft.artifacts.inspect_result?.summary;
   const currentFindings = verification?.current_findings ?? [];
   const newFindingIds = new Set(verification?.new_findings.map((finding) => finding.attack_id) ?? []);
   const persistingFindingIds = new Set(
@@ -1717,7 +1729,9 @@ export default function ProjectWorkbenchPage() {
                 <h2>Preflight the operation surface</h2>
               </div>
               <div className="meta-pill">
-                {draft.artifacts.inspect_result?.operations.length ?? 0}
+                {inspectSummary?.operation_count ??
+                  draft.artifacts.inspect_result?.operations.length ??
+                  0}
                 <span>ops</span>
               </div>
             </div>
@@ -1767,6 +1781,38 @@ export default function ProjectWorkbenchPage() {
                 value={draft.inspect_draft.exclude_path}
               />
             </div>
+            {inspectSummary ? (
+              <dl className="inspect-summary-grid">
+                <div>
+                  <dt>Methods</dt>
+                  <dd>{formatCountMap(inspectSummary.method_counts)}</dd>
+                </div>
+                <div>
+                  <dt>Tags</dt>
+                  <dd>{formatCountMap(inspectSummary.tag_counts)}</dd>
+                </div>
+                <div>
+                  <dt>Auth required</dt>
+                  <dd>{inspectSummary.auth_required_count}</dd>
+                </div>
+                <div>
+                  <dt>Request bodies</dt>
+                  <dd>{inspectSummary.request_body_count}</dd>
+                </div>
+                <div>
+                  <dt>Parameters</dt>
+                  <dd>{inspectSummary.parameter_count}</dd>
+                </div>
+                <div>
+                  <dt>Warnings</dt>
+                  <dd>{inspectSummary.warning_count}</dd>
+                </div>
+                <div>
+                  <dt>Workflows</dt>
+                  <dd>{inspectSummary.learned_workflow_count}</dd>
+                </div>
+              </dl>
+            ) : null}
             <ReviewTable
               emptyCopy="Run inspect to see discovered operations."
               headings={["Operation", "Method", "Path", "Protocol", "Tags", "Auth"]}

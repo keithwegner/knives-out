@@ -66,6 +66,8 @@ def test_inspect_command_runs() -> None:
 
     assert result.exit_code == 0
     assert "Found 3 operations." in result.stdout
+    assert "Inspection summary" in result.stdout
+    assert "Auth required" in result.stdout
 
 
 def test_inspect_command_shows_preflight_warnings(monkeypatch) -> None:
@@ -209,6 +211,18 @@ def test_inspect_command_supports_json_output(monkeypatch) -> None:
     assert payload["operation_count"] == 1
     assert payload["warning_count"] == 1
     assert payload["learned_workflow_count"] == 1
+    assert payload["summary"] == {
+        "operation_count": 1,
+        "auth_required_count": 1,
+        "request_body_count": 1,
+        "required_request_body_count": 0,
+        "parameter_count": 0,
+        "untagged_operation_count": 0,
+        "warning_count": 1,
+        "learned_workflow_count": 1,
+        "method_counts": {"POST": 1},
+        "tag_counts": {"pets": 1, "write": 1},
+    }
     assert [operation["operation_id"] for operation in payload["operations"]] == ["createPet"]
     assert payload["warnings"][0]["code"] == "missing_request_schema"
 

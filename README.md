@@ -354,6 +354,9 @@ The synchronous endpoints mirror the short CLI flows:
 - `POST /v1/promote`
 - `POST /v1/triage`
 
+`POST /v1/inspect` returns the operation rows plus the same aggregate `summary` object exposed by
+CLI JSON output.
+
 Longer execution runs use a job resource instead:
 
 - `POST /v1/runs`
@@ -539,6 +542,9 @@ knives-out inspect examples/graphql/library.graphql --graphql-endpoint /graphql
 
 `inspect` surfaces preflight warnings for spec gaps such as missing request schemas, vague
 security declarations, broken `$ref` pointers, and low-confidence learned inferences.
+It also prints an aggregate inspection summary with method/tag mix, auth coverage, request-body
+coverage, parameter totals, warning counts, and learned workflow counts so large specs can be
+preflighted without scanning every row.
 
 Learned-model inputs work with the same command:
 
@@ -559,6 +565,8 @@ For machine-readable inspection output:
 ```bash
 knives-out inspect examples/openapi/storefront.yaml --format json
 ```
+
+The JSON payload includes a stable `summary` object with the same aggregate counts.
 
 ### `generate`
 

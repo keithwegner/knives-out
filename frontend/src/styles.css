@@ -131,6 +131,7 @@ pre {
 .meta-pill span,
 .field-hint,
 .summary-card span,
+.inspect-summary-grid dt,
 .status-chip,
 .label {
   text-transform: uppercase;
@@ -304,6 +305,33 @@ pre {
 
 .project-metrics dd {
   margin: 4px 0 0;
+  font-weight: 700;
+}
+
+.inspect-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 1px;
+  margin: 18px 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--line);
+}
+
+.inspect-summary-grid div {
+  min-width: 0;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.inspect-summary-grid dt {
+  color: var(--muted);
+}
+
+.inspect-summary-grid dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
   font-weight: 700;
 }
 

@@ -155,6 +155,19 @@ class LoadedOperations(BaseModel):
     learned_model: LearnedModel | None = None
 
 
+class InspectSummary(BaseModel):
+    operation_count: int = 0
+    auth_required_count: int = 0
+    request_body_count: int = 0
+    required_request_body_count: int = 0
+    parameter_count: int = 0
+    untagged_operation_count: int = 0
+    warning_count: int = 0
+    learned_workflow_count: int = 0
+    method_counts: dict[str, int] = Field(default_factory=dict)
+    tag_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class AuthProfile(BaseModel):
     name: str
     level: int = 0

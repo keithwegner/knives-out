@@ -13,7 +13,7 @@ from rich.table import Table
 from knives_out.api import create_app
 from knives_out.auth_plugins import PluginRuntimeError
 from knives_out.capture import serve_capture_proxy
-from knives_out.models import AttackResults, PreflightWarning
+from knives_out.models import AttackResults, InspectSummary, PreflightWarning
 from knives_out.promotion import PromotionError
 from knives_out.services import (
     DEFAULT_SUPPRESSIONS_PATH,
@@ -101,6 +101,7 @@ def _inspect_payload(
     operations: list[Any],
     warnings: list[PreflightWarning],
     learned_workflow_count: int,
+    summary: InspectSummary,
 ) -> dict[str, Any]:
     return {
         "source": str(spec),
@@ -110,7 +111,33 @@ def _inspect_payload(
         "warning_count": len(warnings),
         "warnings": [warning.model_dump(mode="json") for warning in warnings],
         "learned_workflow_count": learned_workflow_count,
+        "summary": summary.model_dump(mode="json"),
     }
+
+
+def _format_count_map(counts: dict[str, int]) -> str:
+    if not counts:
+        return "-"
+    return ", ".join(f"{key}: {value}" for key, value in counts.items())
+
+
+def _print_inspect_summary(summary: InspectSummary) -> None:
+    table = Table(title="Inspection summary")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Operations", str(summary.operation_count))
+    table.add_row("Methods", _format_count_map(summary.method_counts))
+    table.add_row("Tags", _format_count_map(summary.tag_counts))
+    table.add_row("Auth required", str(summary.auth_required_count))
+    table.add_row("Request bodies", str(summary.request_body_count))
+    table.add_row("Required request bodies", str(summary.required_request_body_count))
+    table.add_row("Parameters", str(summary.parameter_count))
+    table.add_row("Untagged operations", str(summary.untagged_operation_count))
+    table.add_row("Preflight warnings", str(summary.warning_count))
+    if summary.learned_workflow_count:
+        table.add_row("Learned workflows", str(summary.learned_workflow_count))
+    console.print("")
+    console.print(table)
 
 
 def _load_attack_results_or_error(path: Path, *, label: str) -> AttackResults:
@@ -320,6 +347,7 @@ def inspect(
             operations=operations,
             warnings=loaded.warnings,
             learned_workflow_count=learned_workflow_count,
+            summary=inspected.summary,
         )
         typer.echo(json.dumps(payload, indent=2))
         return
@@ -353,6 +381,7 @@ def inspect(
         table.add_row(*row)
 
     console.print(table)
+    _print_inspect_summary(inspected.summary)
     console.print(f"\nFound {len(operations)} operations.")
     if loaded.learned_model is not None:
         console.print(f"Learned workflows: {learned_workflow_count}.")

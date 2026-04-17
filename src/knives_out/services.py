@@ -25,6 +25,7 @@ from knives_out.models import (
     AttackResults,
     AttackSuite,
     AuthProfile,
+    InspectSummary,
     LearnedModel,
     LoadedOperations,
     OperationSpec,
@@ -68,6 +69,7 @@ class InlineInput:
 class InspectServiceResult:
     loaded: LoadedOperations
     operations: list[OperationSpec]
+    summary: InspectSummary
 
 
 @dataclass(frozen=True)
@@ -266,6 +268,37 @@ def _load_auth_configs_from_text(
         return _load_auth_configs_from_path(path, include_names=include_names)
 
 
+def _count_map(values: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _summarize_inspection(
+    loaded: LoadedOperations,
+    operations: list[OperationSpec],
+) -> InspectSummary:
+    tags = [tag for operation in operations for tag in operation.tags]
+    learned_workflow_count = (
+        len(loaded.learned_model.workflows) if loaded.learned_model is not None else 0
+    )
+    return InspectSummary(
+        operation_count=len(operations),
+        auth_required_count=sum(1 for operation in operations if operation.auth_required),
+        request_body_count=sum(1 for operation in operations if operation.request_body_schema),
+        required_request_body_count=sum(
+            1 for operation in operations if operation.request_body_required
+        ),
+        parameter_count=sum(len(operation.parameters) for operation in operations),
+        untagged_operation_count=sum(1 for operation in operations if not operation.tags),
+        warning_count=len(loaded.warnings),
+        learned_workflow_count=learned_workflow_count,
+        method_counts=_count_map([operation.method for operation in operations]),
+        tag_counts=_count_map(tags),
+    )
+
+
 def inspect_source_path(
     spec: Path,
     *,
@@ -283,7 +316,11 @@ def inspect_source_path(
         include_tags=tag,
         exclude_tags=exclude_tag,
     )
-    return InspectServiceResult(loaded=loaded, operations=operations)
+    return InspectServiceResult(
+        loaded=loaded,
+        operations=operations,
+        summary=_summarize_inspection(loaded, operations),
+    )
 
 
 def inspect_source_inline(
@@ -303,7 +340,11 @@ def inspect_source_inline(
         include_tags=tag,
         exclude_tags=exclude_tag,
     )
-    return InspectServiceResult(loaded=loaded, operations=operations)
+    return InspectServiceResult(
+        loaded=loaded,
+        operations=operations,
+        summary=_summarize_inspection(loaded, operations),
+    )
 
 
 def discover_model_paths(inputs: list[Path]) -> LearnedModel:

@@ -35,11 +35,25 @@ export interface OperationSpec {
   learned_confidence?: number | null;
 }
 
+export interface InspectSummary {
+  operation_count: number;
+  auth_required_count: number;
+  request_body_count: number;
+  required_request_body_count: number;
+  parameter_count: number;
+  untagged_operation_count: number;
+  warning_count: number;
+  learned_workflow_count: number;
+  method_counts: Record<string, number>;
+  tag_counts: Record<string, number>;
+}
+
 export interface InspectResponse {
   source_kind: string;
   operations: OperationSpec[];
   warnings: PreflightWarning[];
   learned_workflow_count: number;
+  summary?: InspectSummary;
 }
 
 export interface AttackCase {

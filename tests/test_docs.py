@@ -64,6 +64,8 @@ def test_readme_includes_ci_guidance() -> None:
     assert "--kind missing_auth" in readme
     assert "--exclude-kind malformed_json_body" in readme
     assert "--format json" in readme
+    assert "aggregate inspection summary" in readme
+    assert "stable `summary` object" in readme
     assert "knives-out report results.json --format html" in readme
     assert "--artifact-root artifacts" in readme
     assert "report.html" in readme
