@@ -29,8 +29,10 @@ It helps developers break their APIs on purpose before someone else does.
   - [GitHub Pages](#github-pages)
 - [Local API](#local-api)
 - [Container deployment](#container-deployment)
+- [Pro and commercial packaging](#pro-and-commercial-packaging)
 - [CI usage](#ci-usage)
 - [CLI](#cli)
+  - [`edition`](#edition)
   - [`inspect`](#inspect)
   - [`generate`](#generate)
   - [`run`](#run)
@@ -265,6 +267,8 @@ knives-out triage results.json --out .knives-out-ignore.yml
 
 `knives-out` also includes a local-first web workbench for saved projects, guided attack
 generation, background runs, and native review panels.
+The workbench shows the active Free or Pro edition reported by the API, so self-hosted installs can
+surface licensed capabilities without changing the MIT core behavior.
 
 The review step is now baseline-first: it treats the latest completed run in a saved project as the
 current comparison target, lets you pin an older completed project run as the baseline, and keeps
@@ -359,6 +363,11 @@ The synchronous endpoints mirror the short CLI flows:
 - `POST /v1/verify`
 - `POST /v1/promote`
 - `POST /v1/triage`
+- `GET /v1/edition`
+
+`GET /v1/edition` reports the active Free or Pro edition, license state, enabled capabilities,
+locked capabilities, and upgrade URL. Without an extension installed, the API reports the MIT Free
+edition with Pro CI ReviewOps locked.
 
 Longer execution runs use a job resource instead:
 
@@ -458,6 +467,19 @@ The same-origin container deployment is the recommended exposed setup in v1. It 
 single-user and not a multi-tenant service, and TLS is expected to be terminated outside the app
 when you move beyond localhost.
 
+## Pro and commercial packaging
+
+The MIT package exposes a small open-core extension surface for a private self-hosted Pro add-on.
+The free core remains the CLI, local API, workbench, Docker image, reports, SARIF export,
+verification, promotion, and suppressions. A private `knives-out-pro` package can register extra
+FastAPI routes and Typer commands through the `knives_out.extensions` entry point group.
+
+The first planned paid bundle is CI ReviewOps for developer teams: imported CI runs, GitHub pull
+request comments, branch/main baselines, shared evidence links, and repository-level run history.
+`docs/pro.md` describes the Free vs Pro split, offline license model, suggested launch pricing,
+and private package contract. `Dockerfile.pro.example` shows how a private Pro image can layer the
+proprietary wheel on top of the public image.
+
 ## CI usage
 
 `knives-out` works well in CI when you follow the same generate/run/report flow and add a final
@@ -529,6 +551,15 @@ you can also run one suite across `anonymous`, `user`, and `admin` profiles with
 `--profile-file examples/auth_profiles/anonymous-user-admin.yml`.
 
 ## CLI
+
+### `edition`
+
+Shows whether the running package is the MIT Free edition or a Pro extension has registered
+licensed capabilities.
+
+```bash
+knives-out edition --format json
+```
 
 ### `inspect`
 

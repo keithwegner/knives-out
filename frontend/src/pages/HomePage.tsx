@@ -5,6 +5,7 @@ import {
   createProject,
   deleteProject,
   duplicateProject,
+  getEditionStatus,
   getHealthStatus,
   listProjects,
 } from "../api";
@@ -49,6 +50,13 @@ export default function HomePage() {
   const healthQuery = useQuery({
     queryKey: ["health", apiBaseUrl],
     queryFn: getHealthStatus,
+    enabled: !requiresApiBase,
+    retry: false,
+  });
+
+  const editionQuery = useQuery({
+    queryKey: ["edition", apiBaseUrl],
+    queryFn: getEditionStatus,
     enabled: !requiresApiBase,
     retry: false,
   });
@@ -114,6 +122,9 @@ export default function HomePage() {
       : apiBaseUrl
         ? "The configured API endpoint is not responding yet. Make sure the deployed backend is reachable and allows cross-origin requests."
         : "This static frontend needs a reachable knives-out API when it is not served by `knives-out serve` on the same origin.";
+  const edition = editionQuery.data;
+  const editionLabel = edition ? `${edition.plan} edition` : "Free edition";
+  const licenseLabel = edition?.edition === "pro" ? edition.license_state : "upgrade available";
 
   return (
     <main className="shell">
@@ -125,6 +136,15 @@ export default function HomePage() {
             Inspect specs, generate attacks, run suites, and triage findings without leaving the
             flow. Everything stays local-first and project-scoped.
           </p>
+          <div className={`edition-badge edition-badge-${edition?.edition ?? "free"}`}>
+            <span>{editionLabel}</span>
+            <strong>{licenseLabel}</strong>
+            {edition?.edition === "pro" ? null : (
+              <a href={edition?.upgrade_url ?? "https://github.com/keithwegner/knives-out/blob/main/docs/pro.md"}>
+                Get Pro
+              </a>
+            )}
+          </div>
         </div>
         <form
           className="hero-create"

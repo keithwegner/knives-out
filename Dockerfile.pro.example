@@ -1,0 +1,12 @@
+# Example only: the private Pro image is built from the public image plus a private wheel.
+# Build the public image first:
+#   docker build -t knives-out:base .
+# Then place the private wheel at dist/knives_out_pro-*.whl and adapt this file for release.
+
+FROM knives-out:base
+
+COPY dist/knives_out_pro-*.whl /tmp/
+RUN python -m pip install --no-cache-dir /tmp/knives_out_pro-*.whl \
+    && rm -f /tmp/knives_out_pro-*.whl
+
+ENV KNIVES_OUT_LICENSE_PATH=/run/secrets/knives_out_license.json

@@ -62,6 +62,17 @@ def _normalized_output(output: str) -> str:
     return re.sub(r"\s+", " ", output).strip()
 
 
+def test_edition_command_prints_free_status() -> None:
+    result = runner.invoke(app, ["edition", "--format", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["edition"] == "free"
+    assert payload["license_state"] == "missing"
+    assert payload["enabled_capabilities"] == []
+    assert "ci_reviewops" in payload["locked_capabilities"]
+
+
 def test_inspect_command_runs() -> None:
     result = runner.invoke(app, ["inspect", str(EXAMPLE_SPEC)])
 
