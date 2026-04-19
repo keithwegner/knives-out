@@ -1,4 +1,9 @@
-export type ProjectSourceMode = "openapi" | "graphql" | "learned" | "capture_upload";
+export type ProjectSourceMode =
+  | "openapi"
+  | "graphql"
+  | "learned"
+  | "capture_upload"
+  | "review_bundle";
 export type ProjectStep = "source" | "inspect" | "generate" | "run" | "review";
 export type ApiJobStatus = "pending" | "running" | "completed" | "failed";
 export type ApiReportFormat = "markdown" | "html";

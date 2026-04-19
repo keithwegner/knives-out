@@ -116,6 +116,28 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
   return await response.text();
 }
 
+async function requestFormData<T>(path: string, init: RequestInit): Promise<T> {
+  if (needsConfiguredApiBase()) {
+    throw new Error("Set the API base URL before using the GitHub Pages workbench.");
+  }
+
+  const requestUrl = buildApiUrl(path);
+  const response = await fetch(requestUrl, init);
+
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, requestUrl));
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `Request to ${requestUrl} succeeded but returned ${contentType || "non-JSON content"} instead of JSON.`,
+    );
+  }
+
+  return (await response.json()) as T;
+}
+
 export function getHealthStatus() {
   return request<{ status: string }>("/healthz");
 }
@@ -140,6 +162,15 @@ export function createProject(
   return request<ProjectRecord>("/v1/projects", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function importReviewBundle(bundle: File) {
+  const formData = new FormData();
+  formData.append("bundle", bundle);
+  return requestFormData<ProjectRecord>("/v1/projects/import-review-bundle", {
+    method: "POST",
+    body: formData,
   });
 }
 
@@ -284,12 +315,21 @@ export function getJobFindingEvidence(jobId: string, attackId: string) {
   );
 }
 
-export async function getJobArtifact(jobId: string, artifactName: string): Promise<JobArtifactDocument> {
+export function buildJobArtifactUrl(jobId: string, artifactName: string) {
   const encodedName = artifactName
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
-  const text = await requestText(`/v1/jobs/${encodeURIComponent(jobId)}/artifacts/${encodedName}`);
+  return buildApiUrl(`/v1/jobs/${encodeURIComponent(jobId)}/artifacts/${encodedName}`);
+}
+
+export async function getJobArtifact(jobId: string, artifactName: string): Promise<JobArtifactDocument> {
+  const text = await requestText(
+    `/v1/jobs/${encodeURIComponent(jobId)}/artifacts/${artifactName
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/")}`,
+  );
   try {
     return {
       artifact_name: artifactName,

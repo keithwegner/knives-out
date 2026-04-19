@@ -12,7 +12,7 @@ from secrets import compare_digest
 from typing import Annotated
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 
@@ -49,6 +49,7 @@ from knives_out.api_models import (
     ProjectReviewRequest,
     ProjectReviewResponse,
     ProjectSourceMode,
+    ProjectStep,
     ProjectSummaryResponse,
     ProjectUpdateRequest,
     PromoteRequest,
@@ -70,6 +71,7 @@ from knives_out.api_store import ActiveJobDeletionError, DeletedJob, JobNotFound
 from knives_out.extensions import edition_status_for_extensions, register_api_extensions
 from knives_out.models import AttackResult, AttackResults, ResultsSummary
 from knives_out.project_store import ProjectNotFoundError, ProjectStore
+from knives_out.review_bundles import load_review_bundle, write_review_bundle_artifacts
 from knives_out.services import (
     InlineInput,
     discover_model_inline,
@@ -479,6 +481,101 @@ def _project_baseline_job(job_store: JobStore, project_id: str, baseline_job_id:
     return record
 
 
+def _project_review_response(
+    job_store: JobStore,
+    *,
+    project_id: str,
+    review_draft: ProjectReviewDraft,
+) -> ProjectReviewResponse:
+    current_job = _latest_completed_project_job(job_store, project_id)
+    if current_job is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No completed project run with stored results is available for review.",
+        )
+
+    waiting_for_new_run = False
+    baseline_results = None
+    if review_draft.baseline_mode == ProjectReviewBaselineMode.job:
+        if review_draft.baseline_job_id:
+            baseline_job = _project_baseline_job(
+                job_store,
+                project_id,
+                review_draft.baseline_job_id,
+            )
+            if baseline_job.id == current_job.id:
+                waiting_for_new_run = True
+            else:
+                baseline_results = job_store.load_result(baseline_job.id)
+    elif review_draft.baseline is not None:
+        baseline_results = review_draft.baseline
+
+    results = job_store.load_result(current_job.id)
+    summary = summarize_results_from_models(
+        results,
+        baseline=baseline_results,
+        suppressions_yaml=review_draft.suppressions_yaml,
+        top_limit=PROJECT_REVIEW_TOP_LIMIT,
+    )
+    verification = verify_results_from_models(
+        results,
+        baseline=baseline_results,
+        suppressions_yaml=review_draft.suppressions_yaml,
+        min_severity=review_draft.min_severity,
+        min_confidence=review_draft.min_confidence,
+    )
+    markdown_report = render_report_from_models(
+        results,
+        baseline=baseline_results,
+        suppressions_yaml=review_draft.suppressions_yaml,
+        format="markdown",
+    )
+    html_report = render_report_from_models(
+        results,
+        baseline=baseline_results,
+        suppressions_yaml=review_draft.suppressions_yaml,
+        format="html",
+    )
+    return ProjectReviewResponse(
+        project_id=project_id,
+        current_job_id=current_job.id,
+        baseline_mode=review_draft.baseline_mode,
+        baseline_job_id=review_draft.baseline_job_id,
+        baseline_used=summary.baseline_used,
+        waiting_for_new_run=waiting_for_new_run,
+        results=results,
+        summary=SummaryResponse(**summary.model_dump(mode="python")),
+        verification=_verify_response(verification),
+        markdown_report=markdown_report,
+        html_report=html_report,
+    )
+
+
+def _project_with_review_refresh(
+    project: ProjectRecord,
+    review: ProjectReviewResponse,
+    *,
+    review_draft: ProjectReviewDraft | None = None,
+) -> ProjectRecord:
+    return project.model_copy(
+        update={
+            "updated_at": datetime.now(UTC),
+            "active_step": ProjectStep.review,
+            "review_draft": review_draft or project.review_draft,
+            "artifacts": project.artifacts.model_copy(
+                update={
+                    "last_run_job_id": review.current_job_id,
+                    "latest_results": review.results,
+                    "latest_summary": review.summary,
+                    "latest_verification": review.verification,
+                    "latest_markdown_report": review.markdown_report,
+                    "latest_html_report": review.html_report,
+                }
+            ),
+        }
+    )
+
+
 def _frontend_missing_response(frontend_root: Path) -> HTMLResponse:
     return HTMLResponse(
         (
@@ -653,6 +750,64 @@ def create_app(
         )
         return project_store.create_project(record)
 
+    @app.post("/v1/projects/import-review-bundle", response_model=ProjectRecord)
+    async def import_review_bundle(
+        bundle: Annotated[UploadFile, File(description="Portable review bundle zip.")],
+    ) -> ProjectRecord:
+        project_store: ProjectStore = app.state.project_store
+        job_store: JobStore = app.state.job_store
+
+        try:
+            imported = load_review_bundle(await bundle.read())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        executed_at = imported.current_results.executed_at
+        review_draft = ProjectReviewDraft(
+            baseline_mode=(
+                ProjectReviewBaselineMode.external
+                if imported.baseline_results is not None
+                else ProjectReviewBaselineMode.job
+            ),
+            baseline=imported.baseline_results,
+            suppressions_yaml=imported.suppressions_yaml,
+            min_severity=imported.manifest.min_severity,
+            min_confidence=imported.manifest.min_confidence,
+        )
+        project = project_store.create_project(
+            ProjectRecord(
+                name=imported.manifest.name,
+                source_mode=ProjectSourceMode.review_bundle,
+                active_step="review",
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+                review_draft=review_draft,
+            )
+        )
+        record = job_store.create_job(
+            JobRecord(
+                kind="import",
+                status=ApiJobStatus.completed,
+                created_at=executed_at,
+                started_at=executed_at,
+                completed_at=executed_at,
+                base_url=imported.current_results.base_url,
+                attack_count=len(imported.current_results.results),
+                project_id=project.id,
+            )
+        )
+        job_store.write_result(record.id, imported.current_results)
+        write_review_bundle_artifacts(imported, job_store.artifact_dir(record.id))
+
+        review = _project_review_response(
+            job_store,
+            project_id=project.id,
+            review_draft=project.review_draft,
+        )
+        return project_store.update_project(
+            _project_with_review_refresh(project, review, review_draft=review_draft)
+        )
+
     @app.post("/v1/projects/{project_id}/duplicate", response_model=ProjectRecord)
     def duplicate_project(
         project_id: str,
@@ -757,67 +912,10 @@ def create_app(
             raise HTTPException(status_code=404, detail="Project not found.") from exc
 
         review_draft = _effective_project_review_draft(project, request)
-        current_job = _latest_completed_project_job(job_store, project_id)
-        if current_job is None:
-            raise HTTPException(
-                status_code=409,
-                detail="No completed project run with stored results is available for review.",
-            )
-
-        waiting_for_new_run = False
-        baseline_results = None
-        if review_draft.baseline_mode == ProjectReviewBaselineMode.job:
-            if review_draft.baseline_job_id:
-                baseline_job = _project_baseline_job(
-                    job_store,
-                    project_id,
-                    review_draft.baseline_job_id,
-                )
-                if baseline_job.id == current_job.id:
-                    waiting_for_new_run = True
-                else:
-                    baseline_results = job_store.load_result(baseline_job.id)
-        elif review_draft.baseline is not None:
-            baseline_results = review_draft.baseline
-
-        results = job_store.load_result(current_job.id)
-        summary = summarize_results_from_models(
-            results,
-            baseline=baseline_results,
-            suppressions_yaml=review_draft.suppressions_yaml,
-            top_limit=PROJECT_REVIEW_TOP_LIMIT,
-        )
-        verification = verify_results_from_models(
-            results,
-            baseline=baseline_results,
-            suppressions_yaml=review_draft.suppressions_yaml,
-            min_severity=review_draft.min_severity,
-            min_confidence=review_draft.min_confidence,
-        )
-        markdown_report = render_report_from_models(
-            results,
-            baseline=baseline_results,
-            suppressions_yaml=review_draft.suppressions_yaml,
-            format="markdown",
-        )
-        html_report = render_report_from_models(
-            results,
-            baseline=baseline_results,
-            suppressions_yaml=review_draft.suppressions_yaml,
-            format="html",
-        )
-        return ProjectReviewResponse(
+        return _project_review_response(
+            job_store,
             project_id=project_id,
-            current_job_id=current_job.id,
-            baseline_mode=review_draft.baseline_mode,
-            baseline_job_id=review_draft.baseline_job_id,
-            baseline_used=summary.baseline_used,
-            waiting_for_new_run=waiting_for_new_run,
-            results=results,
-            summary=SummaryResponse(**summary.model_dump(mode="python")),
-            verification=_verify_response(verification),
-            markdown_report=markdown_report,
-            html_report=html_report,
+            review_draft=review_draft,
         )
 
     @app.post("/v1/projects/{project_id}/jobs/prune", response_model=PruneJobsResponse)

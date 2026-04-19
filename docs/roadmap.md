@@ -1,16 +1,16 @@
 # Roadmap
 
-`knives-out` now ships the milestone stack that used to define the near-term roadmap:
+`knives-out` now ships the original bootstrap stack plus the first real review and portability
+passes:
 
-- replayable REST request attacks
-- workflow attacks with shared state and extracted values
-- response-schema validation, CI verification, suppressions, and regression-suite promotion
+- replayable REST request attacks and workflow attacks with extracted shared state
+- response-schema validation, CI verification, suppressions, regression-suite promotion, and SARIF export
 - auth/session plugins, multi-profile authorization comparisons, and built-in auth acquisition
-- HTML reporting with linked artifacts
-- GraphQL SDL and introspection loading with replayable variable-coercion attacks
+- HTML reporting with linked artifacts plus a local-first HTTP API and saved-project workbench
+- GraphQL SDL and introspection loading with nested, fragment-aware contract generation
+- review-only portable bundle handoff from CI into the local workbench
 
-That means the next roadmap should keep following real usage instead of the original bootstrap
-guesswork.
+That means the roadmap now needs to follow usage patterns instead of the old bootstrap sequence.
 
 ## Recently completed
 
@@ -37,43 +37,31 @@ guesswork.
 - v0.18: fragment-aware GraphQL contracts
   - ships nested object/interface/union GraphQL contract generation with parity across emitted
     documents, output-shape validation, and response-schema metadata
+- v0.19: CI-native SARIF export
+  - ships `knives-out export`, `POST /v1/export`, and GitHub code-scanning upload guidance
+- v0.20: portable review bundles
+  - ships `knives-out bundle`, `POST /v1/projects/import-review-bundle`, review-only imported
+    projects, and bundle round-trip coverage
 
-## v0.12 — local-first HTTP API
+## v0.21 — full snapshot portability
 
-The next likely milestone is an API expansion on top of the shared load/generate/run/report
-pipeline we now have. The strongest targets are:
+The next portability step is to move beyond review-only handoff and allow rerunnable project
+snapshots:
 
-- a local-only FastAPI server that mirrors the current CLI surface
-- synchronous endpoints for inspect, generate, discover, report, verify, promote, and triage
-- background run jobs with polling and artifact retrieval
-- a shared service layer so the CLI and API do not drift apart
+- export and import full saved-project snapshots instead of only review evidence
+- preserve source documents, learned inputs, inspect/generate/run drafts, and reusable suites
+- keep imported snapshots runnable after they land in the workbench
+- support safe duplication and promotion on imported snapshots because the suite is present
 
-## v0.13 — richer CI and triage ergonomics
+## v0.22 — CI and workbench sync ergonomics
 
-After the API pass, the next best leverage point is day-to-day review ergonomics:
+Once snapshot portability exists, the next leverage point is tighter sync between CI and local
+review loops:
 
-- stronger artifact navigation for large suites
-- machine-readable summary exports for CI annotations and dashboards
-- better suppression and baseline review flows
-- clearer auth diagnostic summaries in HTML and Markdown reports
-- smaller, higher-signal CI summaries for long-lived regression programs
-
-## v0.14 — smoke-test integration coverage
-
-Before we grow a broad end-to-end matrix, the better next step is a tiny local-only smoke-test
-layer aimed at product-critical flows. The goal is confidence, not exhaustive scenario coverage:
-
-- deterministic fixture apps and checked-in inputs only
-- no external services, sleeps, or timing-sensitive assertions
-- a few high-signal scenarios that protect the main user journeys
-
-Initial issue-backed scenarios:
-
-- #58: CLI happy path against a local API fixture
-- #59: workflow attack execution against a local stateful API
-- #60: multi-profile authorization comparison with anonymous/user/admin behavior
-- #61: built-in auth acquisition against a fake local token endpoint
-- #62: Shadow Twin capture -> discover -> generate smoke coverage
+- smoother baseline handoff across bundle generations
+- richer imported-run history and evidence metadata
+- easier bundle production and retrieval in GitHub Actions or other CI systems
+- smaller, higher-signal review summaries for long-lived regression programs
 
 The integration baseline now has two layers. `tests/test_integration_smoke.py` protects
 CLI/runner flows against local fixture services, while `tests/test_api_integration.py` starts
@@ -82,7 +70,7 @@ with `httpx`.
 
 ## Still deferred
 
-These remain interesting, but they should not displace the next planning pass:
+These remain interesting, but they should not displace the portability pass:
 
 - browser-assisted login and redirect-driven OAuth auth-code flows
 - gRPC support

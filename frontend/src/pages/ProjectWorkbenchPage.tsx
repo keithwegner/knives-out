@@ -12,6 +12,7 @@ import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../api
 import ApiConnectionPanel from "../components/ApiConnectionPanel";
 import CodeEditor from "../components/CodeEditor";
 import {
+  buildJobArtifactUrl,
   createRun,
   deleteProjectJob,
   discoverModel,
@@ -305,11 +306,7 @@ function artifactKindLabel(kind: ArtifactReferenceResponse["kind"]) {
 }
 
 function artifactPath(jobId: string, artifactName: string) {
-  const encodedName = artifactName
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-  return `/v1/jobs/${jobId}/artifacts/${encodedName}`;
+  return buildJobArtifactUrl(jobId, artifactName);
 }
 
 function ArtifactDocumentPreview({
@@ -523,13 +520,16 @@ function ListField({
 
 function StepRail({
   activeStep,
+  disabledSteps = [],
   onChange,
   statuses,
 }: {
   activeStep: ProjectStep;
+  disabledSteps?: ProjectStep[];
   onChange: (step: ProjectStep) => void;
   statuses: Record<ProjectStep, StepStatus>;
 }) {
+  const disabled = new Set(disabledSteps);
   return (
     <nav className="step-rail" aria-label="Workbench steps">
       {STEP_ORDER.map((step, index) => (
@@ -538,6 +538,7 @@ function StepRail({
           className={`step-rail-button step-rail-${statuses[step].tone}${
             step === activeStep ? " step-rail-button-active" : ""
           }`}
+          disabled={disabled.has(step)}
           key={step}
           onClick={() => onChange(step)}
           type="button"
@@ -853,6 +854,12 @@ export default function ProjectWorkbenchPage() {
     setPrunePreview(null);
   }, [pruneCompletedBefore, pruneLimit, pruneStatuses]);
 
+  useEffect(() => {
+    if (draft?.source_mode === "review_bundle" && reviewTab === "promote") {
+      setReviewTab("overview");
+    }
+  }, [draft?.source_mode, reviewTab]);
+
   if (!projectId) {
     return (
       <main className="shell">
@@ -932,6 +939,10 @@ export default function ProjectWorkbenchPage() {
     );
   }
 
+  const isReviewBundleProject = draft.source_mode === "review_bundle";
+  const disabledSteps = isReviewBundleProject
+    ? STEP_ORDER.filter((step) => step !== "review")
+    : [];
   const runHistoryJobs = currentJobs.filter((job) => matchesRunHistoryFilter(job, runHistoryFilter));
   const pruneableJobCount = currentJobs.filter((job) => isPruneableJobStatus(job.status)).length;
   const latestJob = currentJobs[0];
@@ -1433,6 +1444,10 @@ export default function ProjectWorkbenchPage() {
 
   async function handlePromote() {
     const project = getLoadedProject();
+    if (project.source_mode === "review_bundle") {
+      setActionError("Imported review bundles are review-only in this milestone.");
+      return;
+    }
     if (!project.artifacts.latest_results || !project.artifacts.generated_suite) {
       setActionError("Both run results and the generated suite are required for promotion.");
       return;
@@ -1738,6 +1753,10 @@ export default function ProjectWorkbenchPage() {
 
   async function handleDuplicateProject() {
     let project = getLoadedProject();
+    if (project.source_mode === "review_bundle") {
+      setActionError("Imported review bundles cannot be duplicated in this milestone.");
+      return;
+    }
     setBusyAction("duplicate-project");
     setActionError(null);
     try {
@@ -1769,14 +1788,16 @@ export default function ProjectWorkbenchPage() {
           </p>
         </div>
         <div className="header-actions">
-          <button
-            className="secondary-button"
-            onClick={() => void handleDuplicateProject()}
-            type="button"
-            disabled={busyAction === "duplicate-project" || saveProjectMutation.isPending}
-          >
-            {busyAction === "duplicate-project" ? "Duplicating…" : "Duplicate project"}
-          </button>
+          {!isReviewBundleProject ? (
+            <button
+              className="secondary-button"
+              onClick={() => void handleDuplicateProject()}
+              type="button"
+              disabled={busyAction === "duplicate-project" || saveProjectMutation.isPending}
+            >
+              {busyAction === "duplicate-project" ? "Duplicating…" : "Duplicate project"}
+            </button>
+          ) : null}
           <Link className="ghost-button" to="/">
             Back to projects
           </Link>
@@ -1791,6 +1812,7 @@ export default function ProjectWorkbenchPage() {
       <div className="workbench-layout">
         <StepRail
           activeStep={draft.active_step}
+          disabledSteps={disabledSteps}
           onChange={(step) =>
             applyDraftUpdate((current) => ({
               ...current,
@@ -1801,10 +1823,24 @@ export default function ProjectWorkbenchPage() {
         />
 
         <section className="workbench-main">
-          <NextActionCard action={nextAction} />
+          {isReviewBundleProject ? (
+            <div className="panel stack">
+              <div>
+                <p className="eyebrow">Imported review bundle</p>
+                <h2>Review-only workspace</h2>
+                <p className="hero-body">
+                  This project was imported from a portable review bundle. Source editing, inspect,
+                  generate, run, promote, and project duplication stay disabled because v1 imports
+                  review evidence only.
+                </p>
+              </div>
+            </div>
+          ) : null}
 
-          {draft.active_step === "source" ? (
-          <div className="panel step-panel">
+          {!isReviewBundleProject ? <NextActionCard action={nextAction} /> : null}
+
+          {!isReviewBundleProject && draft.active_step === "source" ? (
+            <div className="panel step-panel">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Source</p>
@@ -1958,11 +1994,11 @@ export default function ProjectWorkbenchPage() {
                 </div>
               </div>
             )}
-          </div>
+            </div>
           ) : null}
 
-          {draft.active_step === "inspect" ? (
-          <div className="panel step-panel">
+          {!isReviewBundleProject && draft.active_step === "inspect" ? (
+            <div className="panel step-panel">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Inspect</p>
@@ -2031,11 +2067,11 @@ export default function ProjectWorkbenchPage() {
                 operation.auth_required ? "yes" : "no",
               ])}
             />
-          </div>
+            </div>
           ) : null}
 
-          {draft.active_step === "generate" ? (
-          <div className="panel step-panel">
+          {!isReviewBundleProject && draft.active_step === "generate" ? (
+            <div className="panel step-panel">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Generate</p>
@@ -2153,11 +2189,11 @@ export default function ProjectWorkbenchPage() {
                 {busyAction === "generate" ? "Generating…" : "Generate suite"}
               </button>
             </div>
-          </div>
+            </div>
           ) : null}
 
-          {draft.active_step === "run" ? (
-          <div className="panel step-panel">
+          {!isReviewBundleProject && draft.active_step === "run" ? (
+            <div className="panel step-panel">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Run</p>
@@ -2354,7 +2390,7 @@ export default function ProjectWorkbenchPage() {
                 {busyAction === "run" ? "Starting…" : "Run suite"}
               </button>
             </div>
-          </div>
+            </div>
           ) : null}
 
           {draft.active_step === "review" ? (
@@ -2362,7 +2398,11 @@ export default function ProjectWorkbenchPage() {
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Review</p>
-                <h2>Baseline-aware review workspace</h2>
+                <h2>
+                  {isReviewBundleProject
+                    ? "Imported baseline-aware review workspace"
+                    : "Baseline-aware review workspace"}
+                </h2>
               </div>
               <div className="action-row">
                 <button
@@ -2381,14 +2421,16 @@ export default function ProjectWorkbenchPage() {
                 >
                   {busyAction === "suppressions" ? "Generating…" : "Seed suppressions"}
                 </button>
-                <button
-                  className="secondary-button"
-                  disabled={busyAction === "promote" || !draft.artifacts.latest_results}
-                  onClick={() => void handlePromote()}
-                  type="button"
-                >
-                  {busyAction === "promote" ? "Promoting…" : "Promote findings"}
-                </button>
+                {!isReviewBundleProject ? (
+                  <button
+                    className="secondary-button"
+                    disabled={busyAction === "promote" || !draft.artifacts.latest_results}
+                    onClick={() => void handlePromote()}
+                    type="button"
+                  >
+                    {busyAction === "promote" ? "Promoting…" : "Promote findings"}
+                  </button>
+                ) : null}
               </div>
             </div>
             <div className="compare-banner">
@@ -2398,7 +2440,9 @@ export default function ProjectWorkbenchPage() {
                 <small>
                   {currentReviewedJob
                     ? `${summarizeJob(currentReviewedJob)} • ${currentReviewedJob.base_url}`
-                    : "Run a suite to create the current comparison target."}
+                    : isReviewBundleProject
+                      ? "Import a bundle with results to create the current comparison target."
+                      : "Run a suite to create the current comparison target."}
                 </small>
               </article>
               <article className="compare-card">
@@ -3222,7 +3266,11 @@ export default function ProjectWorkbenchPage() {
               </li>
               <li>
                 <strong>Suite</strong>
-                <span>{draft.artifacts.generated_suite?.attacks.length ?? 0} attacks</span>
+                <span>
+                  {isReviewBundleProject
+                    ? "Not bundled"
+                    : `${draft.artifacts.generated_suite?.attacks.length ?? 0} attacks`}
+                </span>
               </li>
               <li>
                 <strong>Latest results</strong>
