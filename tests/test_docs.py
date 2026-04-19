@@ -121,9 +121,9 @@ def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     workflow = DEV_WORKFLOW.read_text(encoding="utf-8")
 
     assert "workflow_dispatch:" in workflow
-    assert "actions/checkout@v5" in workflow
+    assert "actions/checkout@v6" in workflow
     assert "actions/setup-python@v6" in workflow
-    assert "actions/upload-artifact@v6" in workflow
+    assert "actions/upload-artifact@v7" in workflow
     assert "SPEC_PATH: examples/openapi/storefront.yaml" in workflow
     assert 'knives-out generate "$SPEC_PATH" --tag orders --out attacks.json' in workflow
     assert "--path /draft-orders/{draftId}" in workflow
@@ -244,8 +244,8 @@ def test_main_maintenance_workflow_checks_docs_links_and_coverage_regressions() 
     assert "workflow_dispatch:" in workflow
     assert "branches:" in workflow
     assert "- main" in workflow
-    assert "actions/upload-artifact@v6" in workflow
-    assert "actions/github-script@v7" in workflow
+    assert "actions/upload-artifact@v7" in workflow
+    assert "actions/github-script@v9" in workflow
     assert "contents: write" in workflow
     assert "ruff check ." in workflow
     assert "ruff format --check ." in workflow
