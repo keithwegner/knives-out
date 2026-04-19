@@ -4,6 +4,7 @@ import json
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -25,7 +26,12 @@ from knives_out.models import (
     WorkflowStep,
     WorkflowStepResult,
 )
-from knives_out.reporting import render_html_report, render_markdown_report, summarize_results
+from knives_out.reporting import (
+    render_html_report,
+    render_markdown_report,
+    render_markdown_summary,
+    summarize_results,
+)
 from knives_out.runner import (
     _graphql_subscription_payload,
     _graphql_subscription_url,
@@ -2505,6 +2511,29 @@ def test_render_markdown_report_shows_workflow_sections() -> None:
     assert "List pets" in report
 
 
+def test_render_markdown_summary_shows_empty_baseline_and_profiles() -> None:
+    current = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        profiles=["user|team"],
+        results=[],
+    )
+    baseline = AttackResults(
+        source="baseline",
+        base_url="https://example.com",
+        results=[],
+    )
+
+    report = render_markdown_summary(summarize_results(current, baseline=baseline))
+
+    assert "- Baseline used: **yes**" in report
+    assert "- Baseline executed at:" in report
+    assert "- Profiles: `user\\|team`" in report
+    assert "No protocol counts recorded." in report
+    assert "No active findings in the current summary." in report
+    assert "No auth diagnostics recorded." in report
+
+
 def test_render_html_report_shows_artifact_index_and_profile_outcomes(tmp_path: Path) -> None:
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
@@ -2513,6 +2542,7 @@ def test_render_html_report_shows_artifact_index_and_profile_outcomes(tmp_path: 
     profile_root = artifact_root / "anonymous"
     profile_root.mkdir()
     (profile_root / "wf_lookup.json").write_text("{}", encoding="utf-8")
+    (profile_root / "wf_lookup-step-01.json").write_text("{}", encoding="utf-8")
 
     results = AttackResults(
         source="unit",
@@ -2543,6 +2573,15 @@ def test_render_html_report_shows_artifact_index_and_profile_outcomes(tmp_path: 
                         issue="server_error",
                         severity="high",
                         confidence="high",
+                        workflow_steps=[
+                            WorkflowStepResult(
+                                name="List pets",
+                                operation_id="listPets",
+                                method="GET",
+                                url="https://example.com/pets",
+                                status_code=200,
+                            )
+                        ],
                     )
                 ],
                 workflow_steps=[
@@ -2565,6 +2604,90 @@ def test_render_html_report_shows_artifact_index_and_profile_outcomes(tmp_path: 
     assert "wf_lookup-step-01.json" in report
     assert "<h4>Profile outcomes</h4>" in report
     assert "anonymous (anonymous)" in report
+    assert "anonymous step 1" in report
+
+
+def test_render_html_report_links_workflow_step_artifacts_without_profiles(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    (artifact_root / "wf_lookup-step-01.json").write_text("{}", encoding="utf-8")
+
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                type="workflow",
+                attack_id="wf_lookup",
+                operation_id="getPet",
+                kind="wrong_type_param",
+                name="Workflow lookup",
+                method="GET",
+                url="https://example.com/pets/42",
+                workflow_steps=[
+                    WorkflowStepResult(
+                        name="List pets",
+                        operation_id="listPets",
+                        method="GET",
+                        url="https://example.com/pets",
+                        status_code=200,
+                    )
+                ],
+            )
+        ],
+    )
+
+    report = render_html_report(results, artifact_root=artifact_root)
+
+    assert "step 1" in report
+    assert "wf_lookup-step-01.json" in report
+
+
+def test_render_html_report_shows_error_graphql_details_and_suppression_expiry() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        results=[
+            AttackResult(
+                attack_id="atk_graphql",
+                operation_id="book",
+                kind="wrong_type_variable",
+                name="GraphQL mismatch",
+                protocol="graphql",
+                method="POST",
+                path="/graphql",
+                url="https://example.com/graphql",
+                status_code=200,
+                flagged=True,
+                issue="graphql_response_shape_mismatch",
+                severity="medium",
+                confidence="high",
+                error="GraphQL response validation failed.",
+                graphql_response_error="$.data.book.title: expected String, got integer",
+                graphql_response_hint="Schema appears federated.",
+            )
+        ],
+    )
+
+    report = render_html_report(
+        results,
+        suppressions=[
+            SuppressionRule(
+                attack_id="atk_graphql",
+                issue="graphql_response_shape_mismatch",
+                reason="known schema drift",
+                owner="api-team",
+                expires_on=date(2099, 1, 1),
+            )
+        ],
+    )
+
+    assert "GraphQL response validation failed." in report
+    assert "<h4>GraphQL validation</h4>" in report
+    assert "$.data.book.title: expected String, got integer" in report
+    assert "Schema appears federated." in report
+    assert "known schema drift" in report
+    assert "2099-01-01" in report
 
 
 def test_render_html_report_shows_persisting_deltas() -> None:
