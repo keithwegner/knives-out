@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import HomePage from "./HomePage";
@@ -38,6 +38,21 @@ describe("HomePage", () => {
         if (url.endsWith("/healthz")) {
           return Response.json({ status: "ok" });
         }
+        if (url.endsWith("/v1/edition")) {
+          return Response.json({
+            edition: "free",
+            plan: "Free",
+            license_state: "missing",
+            enabled_capabilities: [],
+            locked_capabilities: ["ci_reviewops"],
+            customer: null,
+            expires_at: null,
+            grace_expires_at: null,
+            upgrade_url: "https://github.com/keithwegner/knives-out/blob/main/docs/pro.md",
+            message: "Running the MIT Free edition.",
+            extension_errors: [],
+          });
+        }
         if (url.endsWith("/v1/projects")) {
           return Response.json({
             projects: [
@@ -73,9 +88,114 @@ describe("HomePage", () => {
 
     expect(await screen.findByText("Storefront triage")).toBeInTheDocument();
     expect(screen.getByText("connected")).toBeInTheDocument();
+    expect(screen.getByText("Free edition")).toBeInTheDocument();
+    expect(screen.getByText("Get Pro")).toBeInTheDocument();
     expect(screen.getByText("storefront.yaml")).toBeInTheDocument();
-    expect(screen.getByText("completed")).toBeInTheDocument();
+    expect(screen.getByText("Resume at")).toBeInTheDocument();
+    expect(screen.getByText("review")).toBeInTheDocument();
+    expect(screen.getByText("Latest run")).toBeInTheDocument();
+    expect(screen.getAllByText("completed").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Findings")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText(/2 saved runs/)).toBeInTheDocument();
     expect(screen.getByText("Open")).toBeInTheDocument();
+  });
+
+  it("creates a project with the selected source mode", async () => {
+    let createBody: unknown = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/healthz")) {
+          return Response.json({ status: "ok" });
+        }
+        if (url.endsWith("/v1/projects") && method === "GET") {
+          return Response.json({ projects: [] });
+        }
+        if (url.endsWith("/v1/projects") && method === "POST") {
+          createBody = JSON.parse(String(init?.body ?? "{}"));
+          return Response.json({
+            id: "project-new",
+            name: "GraphQL review",
+            source_mode: "graphql",
+            active_step: "source",
+            created_at: "2026-04-13T20:00:00Z",
+            updated_at: "2026-04-13T20:00:00Z",
+            graphql_endpoint: "/graphql",
+            source: null,
+            discover_inputs: [],
+            inspect_draft: { tag: [], exclude_tag: [], path: [], exclude_path: [] },
+            generate_draft: {
+              operation: [],
+              exclude_operation: [],
+              method: [],
+              exclude_method: [],
+              kind: [],
+              exclude_kind: [],
+              tag: [],
+              exclude_tag: [],
+              path: [],
+              exclude_path: [],
+              pack_names: [],
+              auto_workflows: false,
+              workflow_pack_names: [],
+            },
+            run_draft: {
+              base_url: "",
+              headers: {},
+              query: {},
+              timeout: 10,
+              store_artifacts: true,
+              auth_plugin_names: [],
+              auth_config_yaml: null,
+              auth_profile_names: [],
+              profile_file_yaml: null,
+              profile_names: [],
+              operation: [],
+              exclude_operation: [],
+              method: [],
+              exclude_method: [],
+              kind: [],
+              exclude_kind: [],
+              tag: [],
+              exclude_tag: [],
+              path: [],
+              exclude_path: [],
+            },
+            review_draft: {
+              baseline_mode: "job",
+              baseline_job_id: null,
+              baseline: null,
+              suppressions_yaml: null,
+              min_severity: "high",
+              min_confidence: "medium",
+            },
+            artifacts: {},
+          });
+        }
+        throw new Error(`Unhandled fetch for ${method} ${url}`);
+      }),
+    );
+
+    renderHomePage();
+
+    await screen.findByText("No saved projects yet.");
+    expect(screen.getByRole("radio", { name: /OpenAPI/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: /GraphQL/ }));
+    fireEvent.change(screen.getByLabelText("New project"), {
+      target: { value: "GraphQL review" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open workbench" }));
+
+    await waitFor(() =>
+      expect(createBody).toEqual({ name: "GraphQL review", source_mode: "graphql" }),
+    );
   });
 
   it("duplicates a saved project from the dashboard", async () => {
@@ -87,6 +207,21 @@ describe("HomePage", () => {
         const method = init?.method ?? "GET";
         if (url.endsWith("/healthz")) {
           return Response.json({ status: "ok" });
+        }
+        if (url.endsWith("/v1/edition")) {
+          return Response.json({
+            edition: "free",
+            plan: "Free",
+            license_state: "missing",
+            enabled_capabilities: [],
+            locked_capabilities: ["ci_reviewops"],
+            customer: null,
+            expires_at: null,
+            grace_expires_at: null,
+            upgrade_url: "https://github.com/keithwegner/knives-out/blob/main/docs/pro.md",
+            message: "Running the MIT Free edition.",
+            extension_errors: [],
+          });
         }
         if (url.endsWith("/v1/projects") && method === "GET") {
           return Response.json({

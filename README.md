@@ -11,6 +11,10 @@
 
 Project wiki: [GitHub Wiki](https://github.com/keithwegner/knives-out/wiki)
 
+Community: [Code of Conduct](CODE_OF_CONDUCT.md) · [Contributing](CONTRIBUTING.md) ·
+[Security Policy](SECURITY.md) ·
+[Discussions](https://github.com/keithwegner/knives-out/discussions)
+
 `knives-out` is a CLI for adversarial API testing from API specs and observed traffic.
 
 It helps developers break their APIs on purpose before someone else does.
@@ -24,8 +28,11 @@ It helps developers break their APIs on purpose before someone else does.
 - [Web workbench](#web-workbench)
   - [GitHub Pages](#github-pages)
 - [Local API](#local-api)
+- [Container deployment](#container-deployment)
+- [Pro and commercial packaging](#pro-and-commercial-packaging)
 - [CI usage](#ci-usage)
 - [CLI](#cli)
+  - [`edition`](#edition)
   - [`inspect`](#inspect)
   - [`generate`](#generate)
   - [`run`](#run)
@@ -233,6 +240,12 @@ Generate a machine-readable summary for dashboards or CI annotations:
 knives-out summary results.json --out summary.json
 ```
 
+Publish a compact Markdown summary in GitHub Actions:
+
+```bash
+knives-out summary results.json --format markdown >> "$GITHUB_STEP_SUMMARY"
+```
+
 Export active findings as SARIF for CI-native code scanning:
 
 ```bash
@@ -255,6 +268,8 @@ knives-out triage results.json --out .knives-out-ignore.yml
 
 `knives-out` also includes a local-first web workbench for saved projects, guided attack
 generation, background runs, and native review panels.
+The workbench shows the active Free or Pro edition reported by the API, so self-hosted installs can
+surface licensed capabilities without changing the MIT core behavior.
 
 The review step is now baseline-first: it treats the latest completed run in a saved project as the
 current comparison target, lets you pin an older completed project run as the baseline, and keeps
@@ -296,8 +311,10 @@ npm run dev -- --host 127.0.0.1
 Then open [http://127.0.0.1:4173/app/](http://127.0.0.1:4173/app/). The Vite dev server proxies
 `/v1` and `/healthz` to the API on `127.0.0.1:8787`.
 
-The workbench is intentionally local-only and single-user in v1. Saved project drafts, jobs, and
-artifacts all live under `.knives-out-api/` unless you override `KNIVES_OUT_API_DATA_DIR`.
+The workbench is still single-user and self-hosted in v1. You can run it directly on localhost or
+inside a small same-origin Docker deployment, but it is not intended as a multi-tenant service.
+Saved project drafts, jobs, and artifacts all live under `.knives-out-api/` unless you override
+`KNIVES_OUT_API_DATA_DIR`.
 
 ### GitHub Pages
 
@@ -352,6 +369,11 @@ The synchronous endpoints mirror the short CLI flows:
 - `POST /v1/verify`
 - `POST /v1/promote`
 - `POST /v1/triage`
+- `GET /v1/edition`
+
+`GET /v1/edition` reports the active Free or Pro edition, license state, enabled capabilities,
+locked capabilities, and upgrade URL. Without an extension installed, the API reports the MIT Free
+edition with Pro CI ReviewOps locked.
 
 Longer execution runs use a job resource instead:
 
@@ -395,6 +417,76 @@ The API accepts uploaded source content and JSON artifacts in the request body. 
 arbitrary server-side file reads. FastAPI also publishes the schema at `/openapi.json` and the
 interactive docs at `/docs`.
 
+## Container deployment
+
+The repository now includes a first-party `Dockerfile`, `compose.yml`, and `compose.env.example`
+for a same-origin self-hosted deployment. That path avoids the GitHub Pages CORS and API-base
+setup dance because the frontend shell and `/v1/*` API live behind one origin.
+
+Build the image:
+
+```bash
+docker build -t knives-out .
+```
+
+Run it directly with a persistent volume:
+
+```bash
+docker run --rm \
+  -p 127.0.0.1:8787:8787 \
+  -v knives-out-data:/var/lib/knives-out \
+  knives-out
+```
+
+Then open [http://127.0.0.1:8787/app/](http://127.0.0.1:8787/app/).
+
+If you want a lightweight exposure guard for an end user, set both
+`KNIVES_OUT_BASIC_AUTH_USERNAME` and `KNIVES_OUT_BASIC_AUTH_PASSWORD`:
+
+```bash
+docker run --rm \
+  -p 127.0.0.1:8787:8787 \
+  -v knives-out-data:/var/lib/knives-out \
+  -e KNIVES_OUT_BASIC_AUTH_USERNAME=demo \
+  -e KNIVES_OUT_BASIC_AUTH_PASSWORD=change-me \
+  knives-out
+```
+
+That enables HTTP Basic auth for `/`, `/app/*`, `/v1/*`, `/docs`, and `/openapi.json`, while
+keeping `/healthz` unauthenticated for container and load-balancer health checks.
+
+For the default self-hosted path, use Compose:
+
+```bash
+cp compose.env.example .env
+# edit .env before exposing the service
+docker compose up --build -d
+```
+
+The example env file documents:
+
+- bind host and published port
+- the persistent data directory inside the container
+- optional basic-auth credentials
+- optional `KNIVES_OUT_CORS_ALLOW_ORIGINS` for advanced split-origin deployments
+
+The same-origin container deployment is the recommended exposed setup in v1. It is still
+single-user and not a multi-tenant service, and TLS is expected to be terminated outside the app
+when you move beyond localhost.
+
+## Pro and commercial packaging
+
+The MIT package exposes a small open-core extension surface for a private self-hosted Pro add-on.
+The free core remains the CLI, local API, workbench, Docker image, reports, SARIF export,
+verification, promotion, and suppressions. A private `knives-out-pro` package can register extra
+FastAPI routes and Typer commands through the `knives_out.extensions` entry point group.
+
+The first planned paid bundle is CI ReviewOps for developer teams: imported CI runs, GitHub pull
+request comments, branch/main baselines, shared evidence links, and repository-level run history.
+`docs/pro.md` describes the Free vs Pro split, offline license model, suggested launch pricing,
+and private package contract. `Dockerfile.pro.example` shows how a private Pro image can layer the
+proprietary wheel on top of the public image.
+
 ## CI usage
 
 `knives-out` works well in CI when you follow the same generate/run/report flow and add a final
@@ -431,7 +523,8 @@ With a baseline, both `verify` and baseline-aware `report` also summarize persis
 status, severity, confidence, or schema outcome drifted between runs.
 When you want a compact machine-readable artifact for dashboards, annotations, or follow-on
 automation, `knives-out summary results.json --out summary.json` emits the same counts and top
-findings as structured JSON.
+findings as structured JSON. For a smaller human-readable CI note, append
+`knives-out summary results.json --format markdown` output to `$GITHUB_STEP_SUMMARY`.
 When you want code-scanning or PR-native triage inside CI, `knives-out export results.json --format sarif --out results.sarif`
 emits SARIF 2.1.0 from the same active unsuppressed findings, with optional baseline change
 metadata when you also pass `--baseline previous-results.json`.
@@ -469,6 +562,15 @@ you can also run one suite across `anonymous`, `user`, and `admin` profiles with
 `--profile-file examples/auth_profiles/anonymous-user-admin.yml`.
 
 ## CLI
+
+### `edition`
+
+Shows whether the running package is the MIT Free edition or a Pro extension has registered
+licensed capabilities.
+
+```bash
+knives-out edition --format json
+```
 
 ### `inspect`
 

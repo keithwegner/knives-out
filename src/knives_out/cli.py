@@ -13,8 +13,14 @@ from rich.table import Table
 from knives_out.api import create_app
 from knives_out.auth_plugins import PluginRuntimeError
 from knives_out.capture import serve_capture_proxy
+from knives_out.extensions import (
+    ExtensionLoadResult,
+    edition_status_for_extensions,
+    register_cli_extensions,
+)
 from knives_out.models import AttackResults, PreflightWarning
 from knives_out.promotion import PromotionError
+from knives_out.reporting import render_markdown_summary
 from knives_out.services import (
     DEFAULT_SUPPRESSIONS_PATH,
     SuppressionRule,
@@ -65,9 +71,17 @@ class ExportFormatOption(StrEnum):
     sarif = "sarif"
 
 
+class SummaryFormatOption(StrEnum):
+    json = "json"
+    markdown = "markdown"
+
+
 class InspectFormatOption(StrEnum):
     text = "text"
     json = "json"
+
+
+CLI_EXTENSIONS = ExtensionLoadResult(extensions=[], errors=[])
 
 
 def _warning_target(warning: PreflightWarning) -> str:
@@ -112,6 +126,13 @@ def _inspect_payload(
         "warnings": [warning.model_dump(mode="json") for warning in warnings],
         "learned_workflow_count": learned_workflow_count,
     }
+
+
+def _current_edition_status():
+    return edition_status_for_extensions(
+        CLI_EXTENSIONS.extensions,
+        extension_errors=CLI_EXTENSIONS.errors,
+    )
 
 
 def _load_attack_results_or_error(path: Path, *, label: str) -> AttackResults:
@@ -195,6 +216,37 @@ def _print_persisting_delta_findings(findings: list[ComparedFinding]) -> None:
     console.print(table)
     for finding in delta_findings:
         console.print(f"- {finding.result.name}: {finding.delta_summary}")
+
+
+@app.command()
+def edition(
+    format: Annotated[
+        InspectFormatOption,
+        typer.Option(help="Output format for edition status."),
+    ] = InspectFormatOption.text,
+) -> None:
+    """Show the active knives-out edition and enabled capabilities."""
+    status = _current_edition_status()
+    if format == InspectFormatOption.json:
+        typer.echo(json.dumps(status.model_dump(mode="json", exclude_none=True), indent=2))
+        return
+
+    table = Table(title="knives-out edition")
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("Edition", status.edition.value)
+    table.add_row("Plan", status.plan)
+    table.add_row("License", status.license_state.value)
+    table.add_row("Enabled capabilities", ", ".join(status.enabled_capabilities) or "-")
+    table.add_row("Locked capabilities", ", ".join(status.locked_capabilities) or "-")
+    if status.customer:
+        table.add_row("Customer", status.customer)
+    if status.expires_at:
+        table.add_row("Expires", status.expires_at.isoformat())
+    if status.grace_expires_at:
+        table.add_row("Grace expires", status.grace_expires_at.isoformat())
+    console.print(table)
+    console.print(status.message)
 
 
 @app.command()
@@ -787,8 +839,12 @@ def summary(
         int,
         typer.Option(help="How many top active findings to include in the summary."),
     ] = 10,
+    format: Annotated[
+        SummaryFormatOption,
+        typer.Option(help="Summary output format."),
+    ] = SummaryFormatOption.json,
 ) -> None:
-    """Render a machine-readable JSON summary from a results file."""
+    """Render a compact summary from a results file."""
     try:
         summary_result = summarize_results_from_paths(
             results,
@@ -799,17 +855,23 @@ def summary(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    rendered = json.dumps(
-        summary_result.summary.model_dump(mode="json", exclude_none=True),
-        indent=2,
-    )
+    if format == SummaryFormatOption.markdown:
+        rendered = render_markdown_summary(summary_result.summary)
+        format_label = "Markdown"
+    else:
+        rendered = json.dumps(
+            summary_result.summary.model_dump(mode="json", exclude_none=True),
+            indent=2,
+        )
+        format_label = "JSON"
+
     if out is None:
-        typer.echo(rendered)
+        typer.echo(rendered, nl=not rendered.endswith("\n"))
         return
 
-    out.write_text(rendered + "\n", encoding="utf-8")
+    out.write_text(rendered if rendered.endswith("\n") else rendered + "\n", encoding="utf-8")
     _print_suppression_summary(summary_result.suppressions_path, summary_result.suppressions)
-    console.print(f"Wrote summary JSON to [bold]{out}[/bold].")
+    console.print(f"Wrote summary {format_label} to [bold]{out}[/bold].")
 
 
 @app.command()
@@ -1008,6 +1070,9 @@ def serve(
 
 def main() -> None:
     app()
+
+
+CLI_EXTENSIONS = register_cli_extensions(app)
 
 
 if __name__ == "__main__":

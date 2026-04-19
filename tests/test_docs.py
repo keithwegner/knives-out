@@ -5,6 +5,7 @@ README = ROOT / "README.md"
 CI_DOC = ROOT / "docs" / "ci.md"
 ARCHITECTURE_DOC = ROOT / "docs" / "architecture.md"
 ROADMAP_DOC = ROOT / "docs" / "roadmap.md"
+PRO_DOC = ROOT / "docs" / "pro.md"
 DEV_WORKFLOW = ROOT / ".github" / "workflows" / "dev-environment-example.yml"
 SYNC_WIKI_WORKFLOW = ROOT / ".github" / "workflows" / "sync-wiki.yml"
 MAIN_MAINTENANCE_WORKFLOW = ROOT / ".github" / "workflows" / "main-maintenance.yml"
@@ -34,12 +35,26 @@ def test_readme_includes_ci_guidance() -> None:
     assert "knives-out promote results.json" in readme
     assert "knives-out triage results.json" in readme
     assert "knives-out summary results.json --out summary.json" in readme
+    assert "knives-out summary results.json --format markdown" in readme
+    assert "GITHUB_STEP_SUMMARY" in readme
+    assert "knives-out edition --format json" in readme
     assert "summary.json" in readme
     assert ".knives-out-ignore.yml" in readme
     assert "## Local API" in readme
     assert "knives-out serve --host 127.0.0.1 --port 8787" in readme
     assert "KNIVES_OUT_API_DATA_DIR" in readme
+    assert "## Container deployment" in readme
+    assert "docker build -t knives-out ." in readme
+    assert "docker compose up --build -d" in readme
+    assert "compose.env.example" in readme
+    assert "KNIVES_OUT_BASIC_AUTH_USERNAME" in readme
+    assert "KNIVES_OUT_BASIC_AUTH_PASSWORD" in readme
+    assert "same-origin self-hosted deployment" in readme
+    assert "## Pro and commercial packaging" in readme
+    assert "docs/pro.md" in readme
+    assert "Dockerfile.pro.example" in readme
     assert "POST /v1/inspect" in readme
+    assert "GET /v1/edition" in readme
     assert "POST /v1/summary" in readme
     assert "POST /v1/export" in readme
     assert "POST /v1/runs" in readme
@@ -87,13 +102,33 @@ def test_readme_includes_ci_guidance() -> None:
     assert "**v0.22:** richer CI/workbench syncing" in readme
 
 
+def test_pro_doc_describes_self_hosted_commercial_surface() -> None:
+    pro_doc = PRO_DOC.read_text(encoding="utf-8")
+    dockerfile = (ROOT / "Dockerfile.pro.example").read_text(encoding="utf-8")
+
+    assert "Knives-Out Pro" in pro_doc
+    assert "CI ReviewOps" in pro_doc
+    assert "knives-out-pro" in pro_doc
+    assert "offline signed license" in pro_doc
+    assert "KNIVES_OUT_LICENSE" in pro_doc
+    assert "KNIVES_OUT_LICENSE_PATH" in pro_doc
+    assert "Ed25519" in pro_doc
+    assert "knives_out.extensions" in pro_doc
+    assert "GET /v1/edition" in pro_doc
+    assert "Pro Team" in pro_doc
+    assert "$299/month" in pro_doc
+    assert "Pro Business" in pro_doc
+    assert "$999/month" in pro_doc
+    assert "knives_out_pro" in dockerfile
+
+
 def test_dev_environment_workflow_matches_current_cli_surface() -> None:
     workflow = DEV_WORKFLOW.read_text(encoding="utf-8")
 
     assert "workflow_dispatch:" in workflow
-    assert "actions/checkout@v5" in workflow
+    assert "actions/checkout@v6" in workflow
     assert "actions/setup-python@v6" in workflow
-    assert "actions/upload-artifact@v6" in workflow
+    assert "actions/upload-artifact@v7" in workflow
     assert "SPEC_PATH: examples/openapi/storefront.yaml" in workflow
     assert 'knives-out generate "$SPEC_PATH" --tag orders --out attacks.json' in workflow
     assert "--path /draft-orders/{draftId}" in workflow
@@ -172,7 +207,16 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "POST /v1/jobs/prune" in ci_doc
     assert "GET /v1/jobs/{id}/findings/{attack_id}/evidence" in ci_doc
     assert "KNIVES_OUT_API_DATA_DIR" in ci_doc
+    assert "Dockerfile" in ci_doc
+    assert "compose.yml" in ci_doc
+    assert "compose.env.example" in ci_doc
+    assert "docker build -t knives-out ." in ci_doc
+    assert "docker compose up --build" in ci_doc
+    assert "KNIVES_OUT_BASIC_AUTH_USERNAME" in ci_doc
+    assert "KNIVES_OUT_BASIC_AUTH_PASSWORD" in ci_doc
     assert "knives-out summary results.json --out summary.json" in ci_doc
+    assert "knives-out summary results.json --format markdown" in ci_doc
+    assert "GITHUB_STEP_SUMMARY" in ci_doc
     assert "knives-out export results.json --format sarif --out results.sarif" in ci_doc
     assert "knives-out bundle results.json" in ci_doc
     assert "github/codeql-action/upload-sarif@v4" in ci_doc
@@ -208,8 +252,8 @@ def test_main_maintenance_workflow_checks_docs_links_and_coverage_regressions() 
     assert "workflow_dispatch:" in workflow
     assert "branches:" in workflow
     assert "- main" in workflow
-    assert "actions/upload-artifact@v6" in workflow
-    assert "actions/github-script@v7" in workflow
+    assert "actions/upload-artifact@v7" in workflow
+    assert "actions/github-script@v9" in workflow
     assert "contents: write" in workflow
     assert "ruff check ." in workflow
     assert "ruff format --check ." in workflow
@@ -249,6 +293,8 @@ def test_roadmap_and_architecture_describe_next_milestones() -> None:
     assert "## v0.21 — full snapshot portability" in roadmap
     assert "## v0.22 — CI and workbench sync ergonomics" in roadmap
     assert "review-only portable bundle handoff" in roadmap
+    assert "tests/test_api_integration.py" in roadmap
+    assert "real FastAPI app with uvicorn" in roadmap
     assert "LLM application and tool-misuse testing" in roadmap
 
     assert "capture.py" in architecture

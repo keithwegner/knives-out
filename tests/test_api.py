@@ -292,6 +292,76 @@ def test_create_app_uses_env_data_dir_and_healthz_endpoint(tmp_path, monkeypatch
     assert app.state.job_store.root == configured
 
 
+def test_edition_endpoint_defaults_to_free_without_extensions(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path))
+
+    response = client.get("/v1/edition")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["edition"] == "free"
+    assert payload["plan"] == "Free"
+    assert payload["license_state"] == "missing"
+    assert payload["enabled_capabilities"] == []
+    assert "ci_reviewops" in payload["locked_capabilities"]
+
+
+def test_api_extension_can_register_routes_and_edition_status(tmp_path, monkeypatch) -> None:
+    class FakeExtension:
+        name = "fake-pro"
+
+        def edition_status(self):
+            return {
+                "edition": "pro",
+                "plan": "Team",
+                "license_state": "valid",
+                "enabled_capabilities": ["ci_reviewops"],
+                "locked_capabilities": [],
+                "customer": "Example Co",
+                "message": "Pro enabled.",
+            }
+
+        def register_api(self, app):
+            @app.get("/v1/pro/ping")
+            def ping():
+                return {"status": "pro"}
+
+    class FakeEntryPoint:
+        name = "fake-pro"
+
+        def load(self):
+            return FakeExtension
+
+    monkeypatch.setattr(
+        "knives_out.extensions._iter_extension_entry_points",
+        lambda: [FakeEntryPoint()],
+    )
+    client = TestClient(create_app(data_dir=tmp_path))
+
+    edition_response = client.get("/v1/edition")
+    pro_response = client.get("/v1/pro/ping")
+
+    assert edition_response.status_code == 200
+    assert edition_response.json()["edition"] == "pro"
+    assert edition_response.json()["enabled_capabilities"] == ["ci_reviewops"]
+    assert pro_response.status_code == 200
+    assert pro_response.json() == {"status": "pro"}
+
+
+def test_create_app_requires_complete_basic_auth_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("KNIVES_OUT_BASIC_AUTH_USERNAME", "demo")
+    monkeypatch.delenv("KNIVES_OUT_BASIC_AUTH_PASSWORD", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Set both KNIVES_OUT_BASIC_AUTH_USERNAME and "
+            "KNIVES_OUT_BASIC_AUTH_PASSWORD or leave both unset."
+        ),
+    ):
+        create_app()
+
+
 def test_inspect_endpoint_supports_inline_graphql_schema(tmp_path) -> None:
     client = TestClient(create_app(data_dir=tmp_path))
 

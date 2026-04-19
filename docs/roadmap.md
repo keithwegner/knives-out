@@ -63,6 +63,11 @@ review loops:
 - easier bundle production and retrieval in GitHub Actions or other CI systems
 - smaller, higher-signal review summaries for long-lived regression programs
 
+The integration baseline now has two layers. `tests/test_integration_smoke.py` protects
+CLI/runner flows against local fixture services, while `tests/test_api_integration.py` starts
+the real FastAPI app with uvicorn and exercises workbench-critical HTTP behavior over localhost
+with `httpx`.
+
 ## Still deferred
 
 These remain interesting, but they should not displace the portability pass:

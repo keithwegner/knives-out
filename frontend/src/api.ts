@@ -4,6 +4,7 @@ import type {
   AttackSuite,
   DeleteJobResponse,
   DiscoverResponse,
+  EditionStatus,
   GenerateResponse,
   InspectResponse,
   JobArtifactDocument,
@@ -17,6 +18,7 @@ import type {
   ProjectReviewResponse,
   ProjectRecord,
   ProjectReviewDraft,
+  ProjectSourceMode,
   PromoteResponse,
   ReportResponse,
   ResultsSummary,
@@ -140,14 +142,26 @@ export function getHealthStatus() {
   return request<{ status: string }>("/healthz");
 }
 
+export function getEditionStatus() {
+  return request<EditionStatus>("/v1/edition");
+}
+
 export function listProjects() {
   return request<ProjectListResponse>("/v1/projects");
 }
 
-export function createProject(name: string) {
+export function createProject(
+  input:
+    | string
+    | {
+        name: string;
+        source_mode?: ProjectSourceMode;
+      },
+) {
+  const payload = typeof input === "string" ? { name: input } : input;
   return request<ProjectRecord>("/v1/projects", {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(payload),
   });
 }
 

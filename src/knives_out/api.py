@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import re
 import threading
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
+from secrets import compare_digest
 from typing import Annotated
 
 import yaml
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 
 from knives_out import __version__
 from knives_out.api_models import (
@@ -23,6 +26,7 @@ from knives_out.api_models import (
     DeltaChangeResponse,
     DiscoverRequest,
     DiscoverResponse,
+    EditionStatus,
     ExportRequest,
     ExportResponse,
     FindingSummaryResponse,
@@ -64,6 +68,7 @@ from knives_out.api_models import (
     VerifyResponse,
 )
 from knives_out.api_store import ActiveJobDeletionError, DeletedJob, JobNotFoundError, JobStore
+from knives_out.extensions import edition_status_for_extensions, register_api_extensions
 from knives_out.models import AttackResult, AttackResults, ResultsSummary
 from knives_out.project_store import ProjectNotFoundError, ProjectStore
 from knives_out.review_bundles import load_review_bundle, write_review_bundle_artifacts
@@ -85,6 +90,7 @@ PRUNEABLE_JOB_STATUSES = frozenset({ApiJobStatus.completed, ApiJobStatus.failed}
 JOB_SUMMARY_TOP_LIMIT = 3
 PROJECT_REVIEW_TOP_LIMIT = 50
 _PROFILE_ARTIFACT_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_BASIC_AUTH_REALM = 'Basic realm="knives-out"'
 
 
 def _finding_summary(finding) -> FindingSummaryResponse:
@@ -237,6 +243,60 @@ def _default_frontend_dir() -> Path:
 def _cors_allowed_origins() -> list[str]:
     configured = os.environ.get("KNIVES_OUT_CORS_ALLOW_ORIGINS", "")
     return [origin.strip() for origin in configured.split(",") if origin.strip()]
+
+
+def _basic_auth_credentials() -> tuple[str, str] | None:
+    username = os.environ.get("KNIVES_OUT_BASIC_AUTH_USERNAME", "")
+    password = os.environ.get("KNIVES_OUT_BASIC_AUTH_PASSWORD", "")
+    if bool(username) != bool(password):
+        raise ValueError(
+            "Set both KNIVES_OUT_BASIC_AUTH_USERNAME and KNIVES_OUT_BASIC_AUTH_PASSWORD "
+            "or leave both unset."
+        )
+    if not username:
+        return None
+    return username, password
+
+
+def _is_protected_path(path: str) -> bool:
+    if path == "/" or path == "/docs" or path == "/openapi.json" or path == "/redoc":
+        return True
+    if path.startswith("/app/") or path == "/app":
+        return True
+    if path.startswith("/v1/") or path == "/v1":
+        return True
+    return False
+
+
+def _has_valid_basic_auth(
+    authorization: str | None,
+    *,
+    expected_username: str,
+    expected_password: str,
+) -> bool:
+    if authorization is None:
+        return False
+    scheme, _, encoded = authorization.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return False
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    provided_username, separator, provided_password = decoded.partition(":")
+    if not separator:
+        return False
+    return compare_digest(provided_username, expected_username) and compare_digest(
+        provided_password, expected_password
+    )
+
+
+def _basic_auth_required_response() -> PlainTextResponse:
+    return PlainTextResponse(
+        "Authentication required.",
+        status_code=401,
+        headers={"WWW-Authenticate": _BASIC_AUTH_REALM},
+    )
 
 
 def _default_source_for_mode(source_mode: ProjectSourceMode) -> SourcePayload | None:
@@ -608,6 +668,7 @@ def create_app(
         description="Local-first API for adversarial API testing from specs and observed traffic.",
     )
     allowed_origins = _cors_allowed_origins()
+    basic_auth = _basic_auth_credentials()
     if allowed_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -620,10 +681,33 @@ def create_app(
     app.state.job_store = JobStore(root)
     app.state.project_store = ProjectStore(root)
     app.state.frontend_dir = frontend_dir or _default_frontend_dir()
+    register_api_extensions(app)
+
+    if basic_auth is not None:
+        expected_username, expected_password = basic_auth
+
+        @app.middleware("http")
+        async def require_basic_auth(request: Request, call_next):
+            if request.method == "OPTIONS" or not _is_protected_path(request.url.path):
+                return await call_next(request)
+            if not _has_valid_basic_auth(
+                request.headers.get("authorization"),
+                expected_username=expected_username,
+                expected_password=expected_password,
+            ):
+                return _basic_auth_required_response()
+            return await call_next(request)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/edition", response_model=EditionStatus)
+    def edition() -> EditionStatus:
+        return edition_status_for_extensions(
+            app.state.knives_out_extensions,
+            extension_errors=app.state.knives_out_extension_errors,
+        )
 
     @app.get("/", include_in_schema=False)
     def root():

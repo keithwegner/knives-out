@@ -36,13 +36,13 @@ from knives_out.profiles import (
     select_auth_profiles,
 )
 from knives_out.promotion import PromotionError, PromotionResult, promote_attack_suite
-from knives_out.review_bundles import render_review_bundle
 from knives_out.reporting import (
     load_attack_results,
     render_html_report,
     render_markdown_report,
     summarize_results,
 )
+from knives_out.review_bundles import render_review_bundle
 from knives_out.runner import execute_attack_suite, execute_attack_suite_profiles, load_attack_suite
 from knives_out.spec_loader import load_operations_with_warnings
 from knives_out.suppressions import (

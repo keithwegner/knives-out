@@ -37,6 +37,33 @@ class ApiJobStatus(StrEnum):
     failed = "failed"
 
 
+class EditionKind(StrEnum):
+    free = "free"
+    pro = "pro"
+
+
+class LicenseState(StrEnum):
+    missing = "missing"
+    valid = "valid"
+    grace = "grace"
+    expired = "expired"
+    invalid = "invalid"
+
+
+class EditionStatus(BaseModel):
+    edition: EditionKind = EditionKind.free
+    plan: str = "Free"
+    license_state: LicenseState = LicenseState.missing
+    enabled_capabilities: list[str] = Field(default_factory=list)
+    locked_capabilities: list[str] = Field(default_factory=lambda: ["ci_reviewops"])
+    customer: str | None = None
+    expires_at: datetime | None = None
+    grace_expires_at: datetime | None = None
+    upgrade_url: str = "https://github.com/keithwegner/knives-out/blob/main/docs/pro.md"
+    message: str = "Running the MIT Free edition."
+    extension_errors: list[str] = Field(default_factory=list)
+
+
 class ProjectSourceMode(StrEnum):
     openapi = "openapi"
     graphql = "graphql"

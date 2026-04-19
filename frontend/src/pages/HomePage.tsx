@@ -5,17 +5,39 @@ import {
   createProject,
   deleteProject,
   duplicateProject,
+  getEditionStatus,
   getHealthStatus,
   importReviewBundle,
   listProjects,
 } from "../api";
 import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../apiConfig";
 import ApiConnectionPanel from "../components/ApiConnectionPanel";
+import type { ProjectSourceMode } from "../types";
+
+const SOURCE_MODE_OPTIONS: Array<{ mode: ProjectSourceMode; label: string; description: string }> = [
+  {
+    mode: "openapi",
+    label: "OpenAPI",
+    description: "Start from a REST schema.",
+  },
+  {
+    mode: "graphql",
+    label: "GraphQL",
+    description: "Start from SDL or introspection.",
+  },
+  {
+    mode: "capture_upload",
+    label: "Captured traffic",
+    description: "Infer a learned model from HAR or NDJSON.",
+  },
+];
 
 export default function HomePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [newProjectName, setNewProjectName] = useState("Security workbench");
+  const [newProjectSourceMode, setNewProjectSourceMode] =
+    useState<ProjectSourceMode>("openapi");
   const [apiBaseUrl, setApiBaseUrl] = useState(() => getApiBaseUrl());
   const bundleInputRef = useRef<HTMLInputElement | null>(null);
   const requiresApiBase = needsConfiguredApiBase(apiBaseUrl);
@@ -30,6 +52,13 @@ export default function HomePage() {
   const healthQuery = useQuery({
     queryKey: ["health", apiBaseUrl],
     queryFn: getHealthStatus,
+    enabled: !requiresApiBase,
+    retry: false,
+  });
+
+  const editionQuery = useQuery({
+    queryKey: ["edition", apiBaseUrl],
+    queryFn: getEditionStatus,
     enabled: !requiresApiBase,
     retry: false,
   });
@@ -85,7 +114,7 @@ export default function HomePage() {
             ? duplicateProjectMutation.error.message
             : importReviewBundleMutation.error instanceof Error
               ? importReviewBundleMutation.error.message
-          : null;
+              : null;
   const apiStatusTone = requiresApiBase
     ? "idle"
     : healthQuery.isLoading
@@ -107,6 +136,9 @@ export default function HomePage() {
       : apiBaseUrl
         ? "The configured API endpoint is not responding yet. Make sure the deployed backend is reachable and allows cross-origin requests."
         : "This static frontend needs a reachable knives-out API when it is not served by `knives-out serve` on the same origin.";
+  const edition = editionQuery.data;
+  const editionLabel = edition ? `${edition.plan} edition` : "Free edition";
+  const licenseLabel = edition?.edition === "pro" ? edition.license_state : "upgrade available";
 
   return (
     <main className="shell">
@@ -118,6 +150,15 @@ export default function HomePage() {
             Inspect specs, generate attacks, run suites, and triage findings without leaving the
             flow. Everything stays local-first and project-scoped.
           </p>
+          <div className={`edition-badge edition-badge-${edition?.edition ?? "free"}`}>
+            <span>{editionLabel}</span>
+            <strong>{licenseLabel}</strong>
+            {edition?.edition === "pro" ? null : (
+              <a href={edition?.upgrade_url ?? "https://github.com/keithwegner/knives-out/blob/main/docs/pro.md"}>
+                Get Pro
+              </a>
+            )}
+          </div>
         </div>
         <form
           className="hero-create"
@@ -126,7 +167,10 @@ export default function HomePage() {
             if (requiresApiBase || !newProjectName.trim()) {
               return;
             }
-            createProjectMutation.mutate(newProjectName.trim());
+            createProjectMutation.mutate({
+              name: newProjectName.trim(),
+              source_mode: newProjectSourceMode,
+            });
           }}
         >
           <label className="field">
@@ -152,6 +196,26 @@ export default function HomePage() {
             ref={bundleInputRef}
             type="file"
           />
+          <div className="field">
+            <span className="field-label">Source type</span>
+            <div className="source-choice-grid" role="radiogroup" aria-label="New project source type">
+              {SOURCE_MODE_OPTIONS.map((option) => (
+                <button
+                  aria-checked={newProjectSourceMode === option.mode}
+                  className={`source-choice-card${
+                    newProjectSourceMode === option.mode ? " source-choice-card-active" : ""
+                  }`}
+                  key={option.mode}
+                  onClick={() => setNewProjectSourceMode(option.mode)}
+                  role="radio"
+                  type="button"
+                >
+                  <strong>{option.label}</strong>
+                  <span>{option.description}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="action-row">
             <button
               className="primary-button"
@@ -231,7 +295,7 @@ export default function HomePage() {
           {projectListQuery.data?.projects.map((project) => (
             <article className="project-card" key={project.id}>
               <div className="project-card-top">
-                <p className="project-mode">{project.source_mode.replace('_', ' ')}</p>
+                <p className="project-mode">{project.source_mode.replace("_", " ")}</p>
                 <div className={`status-chip status-${project.last_run_status ?? "idle"}`}>
                   {project.last_run_status ?? "draft"}
                 </div>
@@ -246,18 +310,22 @@ export default function HomePage() {
               </Link>
               <dl className="project-metrics">
                 <div>
-                  <dt>Step</dt>
+                  <dt>Resume at</dt>
                   <dd>{project.active_step}</dd>
                 </div>
                 <div>
-                  <dt>Jobs</dt>
-                  <dd>{project.job_count}</dd>
+                  <dt>Latest run</dt>
+                  <dd>{project.last_run_status ?? "draft"}</dd>
                 </div>
                 <div>
                   <dt>Findings</dt>
                   <dd>{project.active_flagged_count ?? "—"}</dd>
                 </div>
               </dl>
+              <p className="project-card-summary">
+                {project.job_count} saved run{project.job_count === 1 ? "" : "s"}
+                {project.last_run_at ? ` • last activity ${new Date(project.last_run_at).toLocaleString()}` : ""}
+              </p>
               <div className="project-card-actions">
                 <Link className="secondary-button" to={`/projects/${project.id}`}>
                   Open

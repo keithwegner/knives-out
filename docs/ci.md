@@ -307,6 +307,12 @@ When local tools need cleanup, use `DELETE /v1/jobs/{id}` for a specific complet
 `POST /v1/jobs/prune` to remove older completed/failed jobs in batch.
 Use `KNIVES_OUT_API_DATA_DIR` when you want the job store somewhere other than `.knives-out-api/`.
 
+For a small same-origin self-hosted deployment, the repo also ships a `Dockerfile`, `compose.yml`,
+and `compose.env.example`. Build the image with `docker build -t knives-out .`, run it with
+`docker run`, or copy the env example to `.env` and use `docker compose up --build`. When you set
+both `KNIVES_OUT_BASIC_AUTH_USERNAME` and `KNIVES_OUT_BASIC_AUTH_PASSWORD`, the app protects the
+workbench and `/v1/*` API with HTTP Basic auth while leaving `/healthz` open for probes.
+
 ## Optional: machine-readable summary export
 
 When CI, chatops, or downstream dashboards need a compact JSON artifact instead of full Markdown or
@@ -315,6 +321,14 @@ HTML, render a summary file after execution:
 ```yaml
 - name: Build machine-readable summary
   run: knives-out summary results.json --out summary.json
+```
+
+When GitHub Actions reviewers need a smaller human-readable note in the job UI, render the same
+summary as Markdown and append it to the step summary:
+
+```yaml
+- name: Publish knives-out job summary
+  run: knives-out summary results.json --format markdown >> "$GITHUB_STEP_SUMMARY"
 ```
 
 ## Optional: Shadow Twin learned models
