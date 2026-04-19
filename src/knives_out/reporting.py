@@ -279,6 +279,128 @@ def summarize_results(
     )
 
 
+def _markdown_cell(value: object | None) -> str:
+    text = "-" if value is None else str(value)
+    return text.replace("\n", " ").replace("|", r"\|").strip() or "-"
+
+
+def _append_counter_section(
+    lines: list[str],
+    *,
+    title: str,
+    counts: dict[str, int],
+    empty_message: str,
+) -> None:
+    lines.append(f"## {title}")
+    lines.append("")
+    if not counts:
+        lines.append(empty_message)
+        lines.append("")
+        return
+
+    lines.append("| Value | Count |")
+    lines.append("| --- | ---: |")
+    for value, count in sorted(counts.items()):
+        lines.append(f"| {_markdown_cell(value)} | {count} |")
+    lines.append("")
+
+
+def render_markdown_summary(summary: ResultsSummary) -> str:
+    """Render a compact Markdown summary for CI job summaries and chatops."""
+
+    lines: list[str] = [
+        "# knives-out summary",
+        "",
+        f"- Source: `{_markdown_cell(summary.source)}`",
+        f"- Base URL: `{_markdown_cell(summary.base_url)}`",
+        f"- Executed at: `{summary.executed_at.isoformat()}`",
+        f"- Baseline used: **{'yes' if summary.baseline_used else 'no'}**",
+    ]
+    if summary.baseline_executed_at is not None:
+        lines.append(f"- Baseline executed at: `{summary.baseline_executed_at.isoformat()}`")
+    if summary.profile_names:
+        lines.append(f"- Profiles: `{_markdown_cell(', '.join(summary.profile_names))}`")
+    lines.append("")
+
+    lines.extend(
+        [
+            "## Key counts",
+            "",
+            "| Metric | Count |",
+            "| --- | ---: |",
+            f"| Total results | {summary.total_results} |",
+            f"| Active flagged | {summary.active_flagged_count} |",
+            f"| Suppressed flagged | {summary.suppressed_flagged_count} |",
+            f"| New findings | {summary.new_findings_count} |",
+            f"| Resolved findings | {summary.resolved_findings_count} |",
+            f"| Persisting findings | {summary.persisting_findings_count} |",
+            f"| Persisting with deltas | {summary.persisting_deltas_count} |",
+            f"| Profiles | {summary.profile_count} |",
+            f"| Auth failures | {summary.auth_failures} |",
+            f"| Refresh attempts | {summary.refresh_attempts} |",
+            f"| Response schema mismatches | {summary.response_schema_mismatches} |",
+            f"| GraphQL response-shape mismatches | {summary.graphql_shape_mismatches} |",
+            "",
+        ]
+    )
+
+    _append_counter_section(
+        lines,
+        title="Protocol counts",
+        counts=summary.protocol_counts,
+        empty_message="No protocol counts recorded.",
+    )
+    _append_counter_section(
+        lines,
+        title="Issue counts",
+        counts=summary.issue_counts,
+        empty_message="No issue counts recorded.",
+    )
+    _append_counter_section(
+        lines,
+        title="Finding severity counts",
+        counts=summary.finding_severity_counts,
+        empty_message="No active finding severities recorded.",
+    )
+
+    lines.append("## Top active findings")
+    lines.append("")
+    if summary.top_findings:
+        lines.append(
+            "| Attack | Protocol | Kind | Issue | Severity | Confidence | Status | Schema | URL |"
+        )
+        lines.append("| --- | --- | --- | --- | --- | --- | ---: | --- | --- |")
+        for finding in summary.top_findings:
+            status = finding.status_code if finding.status_code is not None else "-"
+            lines.append(
+                f"| {_markdown_cell(finding.name)} | {_markdown_cell(finding.protocol)} | "
+                f"{_markdown_cell(finding.kind)} | {_markdown_cell(finding.issue or '-')} | "
+                f"{finding.severity} | {finding.confidence} | {status} | "
+                f"{_markdown_cell(finding.schema_status)} | `{_markdown_cell(finding.url)}` |"
+            )
+    else:
+        lines.append("No active findings in the current summary.")
+    lines.append("")
+
+    lines.append("## Auth summary")
+    lines.append("")
+    if summary.auth_summary:
+        lines.append("| Profile | Name | Strategy | Acquire | Refresh | Failures | Triggers |")
+        lines.append("| --- | --- | --- | ---: | ---: | ---: | --- |")
+        for entry in summary.auth_summary:
+            triggers = ", ".join(entry.triggers) or "-"
+            lines.append(
+                f"| {_markdown_cell(entry.profile)} | {_markdown_cell(entry.name)} | "
+                f"{_markdown_cell(entry.strategy)} | {entry.acquire} | {entry.refresh} | "
+                f"{entry.failures} | {_markdown_cell(triggers)} |"
+            )
+    else:
+        lines.append("No auth diagnostics recorded.")
+    lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def render_markdown_report(
     results: AttackResults,
     *,

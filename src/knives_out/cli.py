@@ -15,6 +15,7 @@ from knives_out.auth_plugins import PluginRuntimeError
 from knives_out.capture import serve_capture_proxy
 from knives_out.models import AttackResults, PreflightWarning
 from knives_out.promotion import PromotionError
+from knives_out.reporting import render_markdown_summary
 from knives_out.services import (
     DEFAULT_SUPPRESSIONS_PATH,
     SuppressionRule,
@@ -62,6 +63,11 @@ class ReportFormatOption(StrEnum):
 
 class ExportFormatOption(StrEnum):
     sarif = "sarif"
+
+
+class SummaryFormatOption(StrEnum):
+    json = "json"
+    markdown = "markdown"
 
 
 class InspectFormatOption(StrEnum):
@@ -733,8 +739,12 @@ def summary(
         int,
         typer.Option(help="How many top active findings to include in the summary."),
     ] = 10,
+    format: Annotated[
+        SummaryFormatOption,
+        typer.Option(help="Summary output format."),
+    ] = SummaryFormatOption.json,
 ) -> None:
-    """Render a machine-readable JSON summary from a results file."""
+    """Render a compact summary from a results file."""
     try:
         summary_result = summarize_results_from_paths(
             results,
@@ -745,17 +755,23 @@ def summary(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    rendered = json.dumps(
-        summary_result.summary.model_dump(mode="json", exclude_none=True),
-        indent=2,
-    )
+    if format == SummaryFormatOption.markdown:
+        rendered = render_markdown_summary(summary_result.summary)
+        format_label = "Markdown"
+    else:
+        rendered = json.dumps(
+            summary_result.summary.model_dump(mode="json", exclude_none=True),
+            indent=2,
+        )
+        format_label = "JSON"
+
     if out is None:
-        typer.echo(rendered)
+        typer.echo(rendered, nl=not rendered.endswith("\n"))
         return
 
-    out.write_text(rendered + "\n", encoding="utf-8")
+    out.write_text(rendered if rendered.endswith("\n") else rendered + "\n", encoding="utf-8")
     _print_suppression_summary(summary_result.suppressions_path, summary_result.suppressions)
-    console.print(f"Wrote summary JSON to [bold]{out}[/bold].")
+    console.print(f"Wrote summary {format_label} to [bold]{out}[/bold].")
 
 
 @app.command()

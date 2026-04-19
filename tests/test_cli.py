@@ -13,6 +13,7 @@ from knives_out.models import (
     AttackResult,
     AttackResults,
     AttackSuite,
+    AuthEvent,
     LoadedOperations,
     PreflightWarning,
 )
@@ -536,6 +537,69 @@ def test_summary_command_prints_json_to_stdout(tmp_path: Path) -> None:
     assert summary["protocol_counts"]["graphql"] == 1
     assert summary["graphql_shape_mismatches"] == 1
     assert summary["top_findings"][0]["schema_status"] == "graphql-mismatch"
+
+
+def test_summary_command_writes_markdown_summary(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    summary_path = tmp_path / "summary.md"
+    _write_results(
+        results_path,
+        AttackResults(
+            source="unit",
+            base_url="https://example.com",
+            auth_events=[
+                AuthEvent(
+                    profile="user",
+                    name="token",
+                    strategy="client_credentials",
+                    phase="acquire",
+                    trigger="suite",
+                    status_code=401,
+                    success=False,
+                    error="bad credentials",
+                )
+            ],
+            results=[
+                AttackResult(
+                    attack_id="atk_server",
+                    operation_id="createPet",
+                    kind="missing_request_body",
+                    name="Server failure",
+                    method="POST",
+                    url="https://example.com/pets",
+                    status_code=500,
+                    flagged=True,
+                    issue="server_error",
+                    severity="high",
+                    confidence="high",
+                )
+            ],
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "summary",
+            str(results_path),
+            "--format",
+            "markdown",
+            "--out",
+            str(summary_path),
+            "--top",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "# knives-out summary" in summary
+    assert "| Active flagged | 1 |" in summary
+    assert "## Top active findings" in summary
+    assert "Server failure" in summary
+    assert "| server_error | 1 |" in summary
+    assert "## Auth summary" in summary
+    assert "| user | token | client_credentials | 1 | 0 | 1 | suite |" in summary
 
 
 def test_export_command_writes_sarif_to_file(tmp_path: Path) -> None:
