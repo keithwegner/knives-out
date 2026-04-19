@@ -13,6 +13,11 @@ from rich.table import Table
 from knives_out.api import create_app
 from knives_out.auth_plugins import PluginRuntimeError
 from knives_out.capture import serve_capture_proxy
+from knives_out.extensions import (
+    ExtensionLoadResult,
+    edition_status_for_extensions,
+    register_cli_extensions,
+)
 from knives_out.models import AttackResults, PreflightWarning
 from knives_out.promotion import PromotionError
 from knives_out.reporting import render_markdown_summary
@@ -75,6 +80,9 @@ class InspectFormatOption(StrEnum):
     json = "json"
 
 
+CLI_EXTENSIONS = ExtensionLoadResult(extensions=[], errors=[])
+
+
 def _warning_target(warning: PreflightWarning) -> str:
     if warning.operation_id:
         return f"{warning.operation_id} ({warning.method} {warning.path})"
@@ -117,6 +125,13 @@ def _inspect_payload(
         "warnings": [warning.model_dump(mode="json") for warning in warnings],
         "learned_workflow_count": learned_workflow_count,
     }
+
+
+def _current_edition_status():
+    return edition_status_for_extensions(
+        CLI_EXTENSIONS.extensions,
+        extension_errors=CLI_EXTENSIONS.errors,
+    )
 
 
 def _load_attack_results_or_error(path: Path, *, label: str) -> AttackResults:
@@ -200,6 +215,37 @@ def _print_persisting_delta_findings(findings: list[ComparedFinding]) -> None:
     console.print(table)
     for finding in delta_findings:
         console.print(f"- {finding.result.name}: {finding.delta_summary}")
+
+
+@app.command()
+def edition(
+    format: Annotated[
+        InspectFormatOption,
+        typer.Option(help="Output format for edition status."),
+    ] = InspectFormatOption.text,
+) -> None:
+    """Show the active knives-out edition and enabled capabilities."""
+    status = _current_edition_status()
+    if format == InspectFormatOption.json:
+        typer.echo(json.dumps(status.model_dump(mode="json", exclude_none=True), indent=2))
+        return
+
+    table = Table(title="knives-out edition")
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("Edition", status.edition.value)
+    table.add_row("Plan", status.plan)
+    table.add_row("License", status.license_state.value)
+    table.add_row("Enabled capabilities", ", ".join(status.enabled_capabilities) or "-")
+    table.add_row("Locked capabilities", ", ".join(status.locked_capabilities) or "-")
+    if status.customer:
+        table.add_row("Customer", status.customer)
+    if status.expires_at:
+        table.add_row("Expires", status.expires_at.isoformat())
+    if status.grace_expires_at:
+        table.add_row("Grace expires", status.grace_expires_at.isoformat())
+    console.print(table)
+    console.print(status.message)
 
 
 @app.command()
@@ -970,6 +1016,9 @@ def serve(
 
 def main() -> None:
     app()
+
+
+CLI_EXTENSIONS = register_cli_extensions(app)
 
 
 if __name__ == "__main__":

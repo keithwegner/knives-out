@@ -4,6 +4,7 @@ import type {
   AttackSuite,
   DeleteJobResponse,
   DiscoverResponse,
+  EditionStatus,
   GenerateResponse,
   InspectResponse,
   JobArtifactDocument,
@@ -117,6 +118,10 @@ async function requestText(path: string, init?: RequestInit): Promise<string> {
 
 export function getHealthStatus() {
   return request<{ status: string }>("/healthz");
+}
+
+export function getEditionStatus() {
+  return request<EditionStatus>("/v1/edition");
 }
 
 export function listProjects() {

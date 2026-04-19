@@ -26,6 +26,7 @@ from knives_out.api_models import (
     DeltaChangeResponse,
     DiscoverRequest,
     DiscoverResponse,
+    EditionStatus,
     ExportRequest,
     ExportResponse,
     FindingSummaryResponse,
@@ -66,6 +67,7 @@ from knives_out.api_models import (
     VerifyResponse,
 )
 from knives_out.api_store import ActiveJobDeletionError, DeletedJob, JobNotFoundError, JobStore
+from knives_out.extensions import edition_status_for_extensions, register_api_extensions
 from knives_out.models import AttackResult, AttackResults, ResultsSummary
 from knives_out.project_store import ProjectNotFoundError, ProjectStore
 from knives_out.services import (
@@ -582,6 +584,7 @@ def create_app(
     app.state.job_store = JobStore(root)
     app.state.project_store = ProjectStore(root)
     app.state.frontend_dir = frontend_dir or _default_frontend_dir()
+    register_api_extensions(app)
 
     if basic_auth is not None:
         expected_username, expected_password = basic_auth
@@ -601,6 +604,13 @@ def create_app(
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/edition", response_model=EditionStatus)
+    def edition() -> EditionStatus:
+        return edition_status_for_extensions(
+            app.state.knives_out_extensions,
+            extension_errors=app.state.knives_out_extension_errors,
+        )
 
     @app.get("/", include_in_schema=False)
     def root():

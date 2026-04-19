@@ -3,6 +3,8 @@ export type ProjectStep = "source" | "inspect" | "generate" | "run" | "review";
 export type ApiJobStatus = "pending" | "running" | "completed" | "failed";
 export type ApiReportFormat = "markdown" | "html";
 export type ProjectReviewBaselineMode = "job" | "external";
+export type EditionKind = "free" | "pro";
+export type LicenseState = "missing" | "valid" | "grace" | "expired" | "invalid";
 export type ArtifactReferenceKind =
   | "request"
   | "workflow_terminal"
@@ -13,6 +15,20 @@ export type ArtifactReferenceKind =
 export interface SourcePayload {
   name: string;
   content: string;
+}
+
+export interface EditionStatus {
+  edition: EditionKind;
+  plan: string;
+  license_state: LicenseState;
+  enabled_capabilities: string[];
+  locked_capabilities: string[];
+  customer?: string | null;
+  expires_at?: string | null;
+  grace_expires_at?: string | null;
+  upgrade_url: string;
+  message: string;
+  extension_errors: string[];
 }
 
 export interface PreflightWarning {

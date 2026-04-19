@@ -30,6 +30,21 @@ describe("HomePage", () => {
         if (url.endsWith("/healthz")) {
           return Response.json({ status: "ok" });
         }
+        if (url.endsWith("/v1/edition")) {
+          return Response.json({
+            edition: "free",
+            plan: "Free",
+            license_state: "missing",
+            enabled_capabilities: [],
+            locked_capabilities: ["ci_reviewops"],
+            customer: null,
+            expires_at: null,
+            grace_expires_at: null,
+            upgrade_url: "https://github.com/keithwegner/knives-out/blob/main/docs/pro.md",
+            message: "Running the MIT Free edition.",
+            extension_errors: [],
+          });
+        }
         if (url.endsWith("/v1/projects")) {
           return Response.json({
             projects: [
@@ -65,6 +80,8 @@ describe("HomePage", () => {
 
     expect(await screen.findByText("Storefront triage")).toBeInTheDocument();
     expect(screen.getByText("connected")).toBeInTheDocument();
+    expect(screen.getByText("Free edition")).toBeInTheDocument();
+    expect(screen.getByText("Get Pro")).toBeInTheDocument();
     expect(screen.getByText("storefront.yaml")).toBeInTheDocument();
     expect(screen.getByText("Resume at")).toBeInTheDocument();
     expect(screen.getByText("review")).toBeInTheDocument();
@@ -182,6 +199,21 @@ describe("HomePage", () => {
         const method = init?.method ?? "GET";
         if (url.endsWith("/healthz")) {
           return Response.json({ status: "ok" });
+        }
+        if (url.endsWith("/v1/edition")) {
+          return Response.json({
+            edition: "free",
+            plan: "Free",
+            license_state: "missing",
+            enabled_capabilities: [],
+            locked_capabilities: ["ci_reviewops"],
+            customer: null,
+            expires_at: null,
+            grace_expires_at: null,
+            upgrade_url: "https://github.com/keithwegner/knives-out/blob/main/docs/pro.md",
+            message: "Running the MIT Free edition.",
+            extension_errors: [],
+          });
         }
         if (url.endsWith("/v1/projects") && method === "GET") {
           return Response.json({
