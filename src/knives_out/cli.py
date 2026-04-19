@@ -33,7 +33,7 @@ from knives_out.services import (
     triage_results_from_path,
     verify_results_from_paths,
 )
-from knives_out.verification import ComparedFinding
+from knives_out.verification import ComparedFinding, verification_report_payload
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -779,6 +779,10 @@ def verify(
         ConfidenceThresholdOption,
         typer.Option(help="Minimum confidence that should fail verification."),
     ] = ConfidenceThresholdOption.medium,
+    out: Annotated[
+        Path | None,
+        typer.Option(help="Optional JSON verification report output file."),
+    ] = None,
 ) -> None:
     """Verify results against CI policy, optionally compared to a baseline."""
     try:
@@ -793,6 +797,15 @@ def verify(
         raise typer.BadParameter(str(exc)) from exc
     verification = verify_result.verification
     comparison = verification.comparison
+    if out is not None:
+        payload = verification_report_payload(verification)
+        payload["suppressions"] = {
+            "path": str(verify_result.suppressions_path)
+            if verify_result.suppressions_path is not None
+            else None,
+            "rule_count": len(verify_result.suppressions),
+        }
+        out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     console.print(
         "Verification policy: "
@@ -832,9 +845,13 @@ def verify(
         )
 
     if verification.passed:
+        if out is not None:
+            console.print(f"Wrote verification JSON to [bold]{out}[/bold].")
         console.print("Verification passed.")
         return
 
+    if out is not None:
+        console.print(f"Wrote verification JSON to [bold]{out}[/bold].")
     console.print("Verification failed.")
     raise typer.Exit(code=1)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from knives_out.models import AttackResult, AttackResults
 from knives_out.suppressions import SuppressedFinding, SuppressionRule
@@ -304,3 +304,78 @@ def evaluate_verification(
         min_confidence=min_confidence,
         failing_findings=failing_findings,
     )
+
+
+def _finding_payload(finding: ComparedFinding) -> dict[str, Any]:
+    result = finding.result
+    payload: dict[str, Any] = {
+        "change": finding.change,
+        "attack_id": result.attack_id,
+        "operation_id": result.operation_id,
+        "name": result.name,
+        "type": result.type,
+        "protocol": "rest" if result.protocol == "openapi" else result.protocol,
+        "kind": result.kind,
+        "method": result.method,
+        "path": result.path,
+        "tags": list(result.tags),
+        "issue": result.issue,
+        "severity": result.severity,
+        "confidence": result.confidence,
+        "status_code": result.status_code,
+        "url": result.url,
+    }
+    if result.response_schema_status is not None:
+        payload["response_schema_status"] = result.response_schema_status
+    if result.response_schema_valid is not None:
+        payload["response_schema_valid"] = result.response_schema_valid
+    if result.response_schema_error is not None:
+        payload["response_schema_error"] = result.response_schema_error
+    if finding.delta is not None and finding.delta.changed:
+        payload["delta_changes"] = [
+            {
+                "field": change.field,
+                "baseline": change.baseline,
+                "current": change.current,
+            }
+            for change in finding.delta.changes
+        ]
+    return payload
+
+
+def verification_report_payload(verification: VerificationResult) -> dict[str, Any]:
+    comparison = verification.comparison
+    persisting_deltas = [
+        finding
+        for finding in comparison.persisting_findings
+        if finding.delta is not None and finding.delta.changed
+    ]
+    return {
+        "passed": verification.passed,
+        "baseline_used": verification.baseline_used,
+        "policy": {
+            "min_severity": verification.min_severity,
+            "min_confidence": verification.min_confidence,
+        },
+        "counts": {
+            "current_findings": len(comparison.current_findings),
+            "baseline_findings": len(comparison.baseline_findings),
+            "new_findings": len(comparison.new_findings),
+            "resolved_findings": len(comparison.resolved_findings),
+            "persisting_findings": len(comparison.persisting_findings),
+            "persisting_findings_with_deltas": len(persisting_deltas),
+            "suppressed_current_findings": len(comparison.suppressed_current_findings),
+            "suppressed_baseline_findings": len(comparison.suppressed_baseline_findings),
+            "failing_findings": len(verification.failing_findings),
+        },
+        "failing_findings": [
+            _finding_payload(finding) for finding in verification.failing_findings
+        ],
+        "new_findings": [_finding_payload(finding) for finding in comparison.new_findings],
+        "resolved_findings": [
+            _finding_payload(finding) for finding in comparison.resolved_findings
+        ],
+        "persisting_findings": [
+            _finding_payload(finding) for finding in comparison.persisting_findings
+        ],
+    }

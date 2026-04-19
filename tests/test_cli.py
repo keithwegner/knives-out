@@ -905,6 +905,78 @@ def test_verify_command_fails_without_baseline_when_qualifying_findings_exist(
     assert "Server failure" in result.stdout
 
 
+def test_verify_command_writes_json_report_before_failed_exit(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    out_path = tmp_path / "verification.json"
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_server",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                path="/pets",
+                tags=["pets"],
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+
+    result = runner.invoke(app, ["verify", str(results_path), "--out", str(out_path)])
+
+    assert result.exit_code == 1
+    assert "Wrote verification JSON" in result.stdout
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["passed"] is False
+    assert payload["baseline_used"] is False
+    assert payload["policy"] == {"min_severity": "high", "min_confidence": "medium"}
+    assert payload["counts"]["current_findings"] == 1
+    assert payload["counts"]["failing_findings"] == 1
+    assert payload["failing_findings"][0]["attack_id"] == "atk_server"
+    assert payload["failing_findings"][0]["protocol"] == "rest"
+    assert payload["suppressions"] == {"path": None, "rule_count": 0}
+
+
+def test_verify_command_writes_json_report_for_passing_run(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    out_path = tmp_path / "verification.json"
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_medium",
+                operation_id="createPet",
+                kind="wrong_type_param",
+                name="Medium mismatch",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=200,
+                flagged=True,
+                issue="response_schema_mismatch",
+                severity="medium",
+                confidence="high",
+            )
+        ),
+    )
+
+    result = runner.invoke(app, ["verify", str(results_path), "--out", str(out_path)])
+
+    assert result.exit_code == 0
+    assert "Verification passed." in result.stdout
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["passed"] is True
+    assert payload["counts"]["current_findings"] == 1
+    assert payload["counts"]["failing_findings"] == 0
+    assert payload["failing_findings"] == []
+
+
 def test_verify_command_passes_with_baseline_when_findings_only_persist(tmp_path: Path) -> None:
     current_path = tmp_path / "current.json"
     baseline_path = tmp_path / "baseline.json"

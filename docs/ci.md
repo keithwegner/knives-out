@@ -64,6 +64,7 @@ That default behavior is intentional for review-first workflows:
 - `results.json` stays available for automation
 - `report.md` stays available for humans
 - `report.html` can present a linked artifact index for faster triage
+- `verification.json` can capture the gate decision and failing findings
 - `results.sarif` can feed code scanning and pipeline-native review systems
 - `artifacts/` keeps one request/response record per attack for debugging
 
@@ -106,6 +107,25 @@ The tool does not fetch that baseline for you. Your workflow is responsible for 
 `previous-results.json` in the workspace before this step.
 When you use a baseline, `verify` also prints a compact summary for persisting findings whose
 status, severity, confidence, or schema outcome changed between runs.
+
+## Optional: JSON verification reports
+
+Use this when you want a durable policy artifact even if the verification step fails the job:
+
+```yaml
+- name: Verify and write policy report
+  run: |
+    knives-out verify results.json \
+      --baseline previous-results.json \
+      --min-severity high \
+      --min-confidence medium \
+      --out verification.json
+```
+
+`verification.json` includes the threshold policy, pass/fail state, baseline status, finding
+counts, failing findings, and baseline delta details. The command writes the file before preserving
+the normal `verify` exit code, so CI can upload it with the other artifacts from an `if: always()`
+step.
 
 ## Optional: SARIF export for code scanning
 

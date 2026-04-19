@@ -24,6 +24,8 @@ def test_readme_includes_ci_guidance() -> None:
     assert "KNIVES_OUT_BASE_URL" in readme
     assert "`knives-out run` currently exits with status `0`" in readme
     assert "knives-out verify results.json" in readme
+    assert "--out verification.json" in readme
+    assert "verification.json" in readme
     assert "knives-out export results.json --format sarif --out results.sarif" in readme
     assert "status, severity, confidence, or schema outcome drifted" in readme
     assert "knives-out promote results.json" in readme
@@ -134,9 +136,11 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "report.md" in ci_doc
     assert "report.html" in ci_doc
     assert "results.sarif" in ci_doc
+    assert "verification.json" in ci_doc
     assert "artifacts/" in ci_doc
     assert "Simple gating with no baseline" in ci_doc
     assert "Baseline-aware gating" in ci_doc
+    assert "Optional: JSON verification reports" in ci_doc
     assert "Optional: checked-in suppressions" in ci_doc
     assert "Optional: multi-profile authorization runs" in ci_doc
     assert "built-in auth config" in ci_doc

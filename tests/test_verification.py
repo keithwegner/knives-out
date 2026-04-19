@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from knives_out.models import AttackResult, AttackResults
 from knives_out.suppressions import SuppressionRule
-from knives_out.verification import compare_attack_results, evaluate_verification
+from knives_out.verification import (
+    compare_attack_results,
+    evaluate_verification,
+    verification_report_payload,
+)
 
 
 def _results(*results: AttackResult) -> AttackResults:
@@ -87,6 +91,50 @@ def test_compare_attack_results_exposes_persisting_deltas() -> None:
         finding.delta_summary
         == "severity medium -> high; confidence low -> high; status 401 -> 500"
     )
+
+
+def test_verification_report_payload_includes_counts_and_delta_details() -> None:
+    current = _results(
+        _finding("atk_new", issue="server_error", severity="high", confidence="high"),
+        _finding("atk_shared", issue="server_error", severity="critical", confidence="medium"),
+    )
+    baseline = _results(
+        _finding("atk_shared", issue="server_error", severity="high", confidence="high"),
+        _finding("atk_resolved", issue="server_error", severity="high", confidence="high"),
+    )
+    current.results[1].status_code = 500
+    baseline.results[0].status_code = 403
+
+    verification = evaluate_verification(
+        current,
+        baseline=baseline,
+        min_severity="high",
+        min_confidence="medium",
+    )
+
+    payload = verification_report_payload(verification)
+
+    assert payload["passed"] is False
+    assert payload["baseline_used"] is True
+    assert payload["policy"] == {"min_severity": "high", "min_confidence": "medium"}
+    assert payload["counts"] == {
+        "current_findings": 2,
+        "baseline_findings": 2,
+        "new_findings": 1,
+        "resolved_findings": 1,
+        "persisting_findings": 1,
+        "persisting_findings_with_deltas": 1,
+        "suppressed_current_findings": 0,
+        "suppressed_baseline_findings": 0,
+        "failing_findings": 1,
+    }
+    assert payload["failing_findings"][0]["attack_id"] == "atk_new"
+    assert payload["persisting_findings"][0]["change"] == "persisting"
+    assert payload["persisting_findings"][0]["delta_changes"] == [
+        {"field": "severity", "baseline": "high", "current": "critical"},
+        {"field": "confidence", "baseline": "high", "current": "medium"},
+        {"field": "status", "baseline": "403", "current": "500"},
+    ]
 
 
 def test_compare_attack_results_ignores_non_flagged_results() -> None:

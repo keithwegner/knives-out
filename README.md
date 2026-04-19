@@ -484,8 +484,10 @@ also produces a linked `report.html` with an artifact index and detailed result 
 
 For built-in gating, use `knives-out verify` after `run`. It can fail on qualifying findings in the
 current run, or only on new qualifying findings when you also pass `--baseline previous-results.json`.
-With a baseline, both `verify` and baseline-aware `report` also summarize persisting findings whose
-status, severity, confidence, or schema outcome drifted between runs.
+Add `--out verification.json` when you want the gate to publish a structured JSON policy report even
+when verification exits non-zero. With a baseline, both `verify` and baseline-aware `report` also
+summarize persisting findings whose status, severity, confidence, or schema outcome drifted between
+runs.
 When you want a compact machine-readable artifact for dashboards, annotations, or follow-on
 automation, `knives-out summary results.json --out summary.json` emits the same counts and top
 findings as structured JSON.
@@ -734,11 +736,14 @@ To fail only on new high-signal regressions, compare against a prior results fil
 knives-out verify results.json \
   --baseline previous-results.json \
   --min-severity high \
-  --min-confidence medium
+  --min-confidence medium \
+  --out verification.json
 ```
 
 `verify` also auto-loads `.knives-out-ignore.yml` when present, so known accepted findings do not
-fail CI. Use `--suppressions path/to.yml` when you want a different file.
+fail CI. Use `--suppressions path/to.yml` when you want a different file. `--out` writes a JSON
+policy report with thresholds, pass/fail state, finding counts, failing findings, and baseline delta
+details before preserving the normal exit code.
 
 ### `promote`
 
