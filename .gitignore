@@ -4,7 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-.venv/
+.venv*/
 venv/
 node_modules/
 .knives-out-api/

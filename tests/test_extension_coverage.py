@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
+import knives_out.extensions as extensions_module
+from knives_out.api_models import EditionKind, LicenseState
 from knives_out.attack_packs import (
     _attack_pack_from_module,
     _coerce_attack_pack,
@@ -26,6 +29,15 @@ from knives_out.auth_plugins import (
 )
 from knives_out.example_packs import generate_unexpected_header_attack
 from knives_out.example_workflow_packs import generate_listed_id_lookup_workflows
+from knives_out.extensions import (
+    ExtensionLoadResult,
+    LoadedExtension,
+    edition_status_for_extensions,
+    free_edition_status,
+    load_extensions,
+    register_api_extensions,
+    register_cli_extensions,
+)
 from knives_out.models import AttackCase, LoadedOperations, OperationSpec
 from knives_out.spec_loader import (
     is_graphql_schema_path,
@@ -45,6 +57,18 @@ from knives_out.workflow_packs import (
 class _PluginLike:
     def before_request(self, request, context) -> None:
         request.headers["Authorization"] = "Bearer plugin-like"
+
+
+class _FakeEntryPoint:
+    def __init__(self, name: str, loaded=None, error: Exception | None = None) -> None:
+        self.name = name
+        self._loaded = loaded
+        self._error = error
+
+    def load(self):
+        if self._error is not None:
+            raise self._error
+        return self._loaded
 
 
 def _operation() -> OperationSpec:
@@ -421,3 +445,154 @@ def test_runtime_context_build_url_handles_relative_and_absolute_urls() -> None:
 
     assert context.build_url("/pets") == "https://example.com/pets"
     assert context.build_url("https://other.example.com/pets") == "https://other.example.com/pets"
+
+
+def test_extension_entry_point_loader_supports_legacy_metadata_api(monkeypatch) -> None:
+    class _LegacyEntryPoints:
+        def get(self, group, default):
+            assert group == "knives_out.extensions"
+            return [_FakeEntryPoint("legacy")]
+
+    monkeypatch.setattr(extensions_module, "entry_points", lambda: _LegacyEntryPoints())
+
+    [entry_point] = extensions_module._iter_extension_entry_points()
+
+    assert entry_point.name == "legacy"
+
+
+def test_load_extensions_collects_entry_point_failures(monkeypatch) -> None:
+    class _NamedExtension:
+        name = "loaded-extension"
+
+    monkeypatch.setattr(
+        extensions_module,
+        "_iter_extension_entry_points",
+        lambda: [
+            _FakeEntryPoint("good", _NamedExtension),
+            _FakeEntryPoint("broken", error=RuntimeError("boom")),
+        ],
+    )
+
+    loaded = load_extensions()
+
+    assert [extension.name for extension in loaded.extensions] == ["loaded-extension"]
+    assert loaded.errors == ["broken: boom"]
+
+
+def test_edition_status_falls_back_for_extension_edge_cases() -> None:
+    errored_free = free_edition_status(extension_errors=["plugin failed"])
+    assert "extensions failed to load" in errored_free.message
+    assert errored_free.extension_errors == ["plugin failed"]
+
+    no_provider = edition_status_for_extensions([LoadedExtension("plain", object())])
+    assert no_provider.edition == EditionKind.free
+
+    class _RaisesStatus:
+        def edition_status(self):
+            raise RuntimeError("license unavailable")
+
+    raised = edition_status_for_extensions(
+        [LoadedExtension("raises", _RaisesStatus())],
+        extension_errors=["preload failed"],
+    )
+    assert raised.edition == EditionKind.free
+    assert raised.extension_errors == ["preload failed", "raises: license unavailable"]
+
+    class _NoneStatus:
+        def edition_status(self):
+            return None
+
+    none_status = edition_status_for_extensions(
+        [LoadedExtension("none", _NoneStatus())],
+        extension_errors=["still free"],
+    )
+    assert none_status.extension_errors == ["still free"]
+
+    class _InvalidStatus:
+        def edition_status(self):
+            return {"edition": "enterprise"}
+
+    invalid = edition_status_for_extensions([LoadedExtension("invalid", _InvalidStatus())])
+    assert invalid.edition == EditionKind.free
+    assert invalid.extension_errors[0].startswith("invalid:")
+
+    class _ProStatus:
+        def edition_status(self):
+            return {
+                "edition": "pro",
+                "plan": "Team",
+                "license_state": "valid",
+                "enabled_capabilities": ["ci_reviewops"],
+                "locked_capabilities": [],
+            }
+
+    pro = edition_status_for_extensions(
+        [LoadedExtension("pro", _ProStatus())],
+        extension_errors=["optional plugin failed"],
+    )
+    assert pro.edition == EditionKind.pro
+    assert pro.license_state == LicenseState.valid
+    assert pro.extension_errors == ["optional plugin failed"]
+
+
+def test_register_extensions_collects_api_and_cli_registration_errors(monkeypatch) -> None:
+    class _NoApiRegister:
+        register_api = "not-callable"
+
+    class _BrokenApiRegister:
+        name = "broken-api"
+
+        def register_api(self, app):
+            raise RuntimeError("api failed")
+
+    monkeypatch.setattr(
+        extensions_module,
+        "load_extensions",
+        lambda: ExtensionLoadResult(
+            extensions=[
+                LoadedExtension("no-api", _NoApiRegister()),
+                LoadedExtension("broken-api", _BrokenApiRegister()),
+            ],
+            errors=["load warning"],
+        ),
+    )
+
+    app = SimpleNamespace(state=SimpleNamespace())
+    api_result = register_api_extensions(app)
+
+    assert app.state.knives_out_extensions == api_result.extensions
+    assert app.state.knives_out_extension_errors == ["load warning", "broken-api: api failed"]
+
+    class _NoCliRegister:
+        register_cli = "not-callable"
+
+    class _CliRegister:
+        name = "cli"
+
+        def register_cli(self, app):
+            app.registered = True
+
+    class _BrokenCliRegister:
+        name = "broken-cli"
+
+        def register_cli(self, app):
+            raise RuntimeError("cli failed")
+
+    monkeypatch.setattr(
+        extensions_module,
+        "load_extensions",
+        lambda: ExtensionLoadResult(
+            extensions=[
+                LoadedExtension("no-cli", _NoCliRegister()),
+                LoadedExtension("cli", _CliRegister()),
+                LoadedExtension("broken-cli", _BrokenCliRegister()),
+            ],
+            errors=[],
+        ),
+    )
+
+    cli_app = SimpleNamespace()
+    cli_result = register_cli_extensions(cli_app)
+
+    assert cli_app.registered is True
+    assert cli_result.errors == ["broken-cli: cli failed"]
