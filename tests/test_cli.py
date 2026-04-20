@@ -2590,3 +2590,131 @@ def test_bundle_command_includes_optional_review_inputs_and_artifacts(
         assert manifest["min_severity"] == "medium"
         assert manifest["min_confidence"] == "low"
         assert "accepted" in archive.read("review/suppressions.yml").decode("utf-8")
+
+
+def test_inspect_bundle_command_prints_review_bundle_summary(tmp_path: Path) -> None:
+    current_results_path = tmp_path / "results.json"
+    baseline_results_path = tmp_path / "baseline.json"
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "atk_secret.json").write_text('{"request":"demo"}', encoding="utf-8")
+    suppressions_path = tmp_path / ".knives-out-ignore.yml"
+    suppressions_path.write_text(
+        dedent(
+            """
+            suppressions:
+              - attack_id: atk_secret
+                reason: accepted
+                owner: api-team
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    _write_results(
+        current_results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_secret",
+                operation_id="getSecret",
+                kind="missing_auth",
+                name="Missing auth",
+                protocol="openapi",
+                method="GET",
+                path="/secret",
+                url="https://example.com/secret",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+    _write_results(baseline_results_path, _results_with_findings())
+    out_path = tmp_path / "review-bundle.zip"
+    bundle_result = runner.invoke(
+        app,
+        [
+            "bundle",
+            str(current_results_path),
+            "--baseline",
+            str(baseline_results_path),
+            "--suppressions",
+            str(suppressions_path),
+            "--artifact-dir",
+            str(artifact_dir),
+            "--name",
+            "Bundle demo",
+            "--min-severity",
+            "medium",
+            "--min-confidence",
+            "low",
+            "--out",
+            str(out_path),
+        ],
+    )
+    assert bundle_result.exit_code == 0
+
+    result = runner.invoke(app, ["inspect-bundle", str(out_path)])
+
+    assert result.exit_code == 0
+    assert "Review bundle" in result.stdout
+    assert "Bundle demo" in result.stdout
+    assert "Base URL" in result.stdout
+    assert "Current results" in result.stdout
+    assert "Baseline results" in result.stdout
+    assert "Review defaults" in result.stdout
+    assert "severity >= medium" in result.stdout
+    assert "confidence >= low" in result.stdout
+    assert "atk_secret.json" in result.stdout
+
+
+def test_inspect_bundle_command_prints_json_summary(tmp_path: Path) -> None:
+    results_path = tmp_path / "results.json"
+    out_path = tmp_path / "review-bundle.zip"
+    _write_results(
+        results_path,
+        _results_with_findings(
+            AttackResult(
+                attack_id="atk_secret",
+                operation_id="getSecret",
+                kind="missing_auth",
+                name="Missing auth",
+                protocol="openapi",
+                method="GET",
+                path="/secret",
+                url="https://example.com/secret",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            )
+        ),
+    )
+    bundle_result = runner.invoke(
+        app,
+        ["bundle", str(results_path), "--name", "Bundle demo", "--out", str(out_path)],
+    )
+    assert bundle_result.exit_code == 0
+
+    result = runner.invoke(app, ["inspect-bundle", str(out_path), "--format", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["manifest"]["name"] == "Bundle demo"
+    assert payload["manifest"]["bundle_kind"] == "review"
+    assert payload["current_result_count"] == 1
+    assert payload["artifact_count"] == 0
+    assert payload["artifact_names"] == []
+    assert "baseline_result_count" not in payload
+
+
+def test_inspect_bundle_command_rejects_invalid_archives(tmp_path: Path) -> None:
+    bundle_path = tmp_path / "review-bundle.zip"
+    bundle_path.write_bytes(b"not a zip")
+
+    result = runner.invoke(app, ["inspect-bundle", str(bundle_path)])
+
+    assert result.exit_code == 2
+    assert "Review bundle must be a zip archive." in result.stderr
