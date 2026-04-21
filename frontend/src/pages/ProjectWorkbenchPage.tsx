@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { getApiBaseUrl, needsConfiguredApiBase, persistApiBaseUrl } from "../apiConfig";
 import ApiConnectionPanel from "../components/ApiConnectionPanel";
 import CodeEditor from "../components/CodeEditor";
@@ -578,6 +578,7 @@ export default function ProjectWorkbenchPage() {
   const { projectId } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [draft, setDraft] = useState<ProjectRecord | null>(null);
   const [apiBaseUrl, setApiBaseUrl] = useState(() => getApiBaseUrl());
   const [hasPendingSave, setHasPendingSave] = useState(false);
@@ -613,6 +614,8 @@ export default function ProjectWorkbenchPage() {
   const syncedJobIdRef = useRef<string | null>(null);
   const deferredReviewFilter = useDeferredValue(reviewFilter.trim().toLowerCase());
   const requiresApiBase = needsConfiguredApiBase(apiBaseUrl);
+  const deepLinkedReviewTask = searchParams.get("review");
+  const deepLinkedFindingId = searchParams.get("finding")?.trim() || null;
 
   const projectQuery = useQuery({
     queryKey: ["project", projectId, apiBaseUrl],
@@ -810,8 +813,7 @@ export default function ProjectWorkbenchPage() {
     if (currentFindingIds.has(selectedEvidenceAttackId)) {
       return;
     }
-    setSelectedEvidenceAttackId(null);
-    setSelectedDrawerArtifactName(null);
+    closeFindingEvidence();
     setEvidenceNotice("Evidence changed with the latest run. Reopen a finding from the refreshed comparison.");
   }, [draft?.artifacts.latest_verification, selectedEvidenceAttackId]);
 
@@ -859,6 +861,37 @@ export default function ProjectWorkbenchPage() {
       setReviewTab("overview");
     }
   }, [draft?.source_mode, reviewTab]);
+
+  useEffect(() => {
+    if (!draft || deepLinkedReviewTask !== "evidence") {
+      return;
+    }
+
+    if (draft.active_step !== "review") {
+      setDraft((current) => (current ? { ...current, active_step: "review" } : current));
+    }
+    setReviewTask("evidence");
+
+    if (!deepLinkedFindingId) {
+      return;
+    }
+
+    const currentFindingIds = new Set(
+      draft.artifacts.latest_verification?.current_findings.map((finding) => finding.attack_id) ?? [],
+    );
+    if (!currentFindingIds.has(deepLinkedFindingId)) {
+      setSelectedEvidenceAttackId(null);
+      setSelectedDrawerArtifactName(null);
+      setEvidenceNotice(
+        `Finding ${deepLinkedFindingId} is not available in the current compared run.`,
+      );
+      return;
+    }
+
+    setSelectedEvidenceAttackId(deepLinkedFindingId);
+    setSelectedDrawerArtifactName(null);
+    setEvidenceNotice(null);
+  }, [deepLinkedFindingId, deepLinkedReviewTask, draft]);
 
   if (!projectId) {
     return (
@@ -1205,6 +1238,23 @@ export default function ProjectWorkbenchPage() {
     setSelectedEvidenceAttackId(finding.attack_id);
     setSelectedDrawerArtifactName(null);
     setEvidenceNotice(null);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("finding");
+    if (nextParams.get("review") === "evidence") {
+      nextParams.delete("review");
+    }
+    setSearchParams(nextParams, { replace: true });
+  }
+
+  function closeFindingEvidence() {
+    setSelectedEvidenceAttackId(null);
+    setSelectedDrawerArtifactName(null);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("finding");
+    if (nextParams.get("review") === "evidence") {
+      nextParams.delete("review");
+    }
+    setSearchParams(nextParams, { replace: true });
   }
 
   function findingAction(label: string, finding: { attack_id: string }) {
@@ -2708,10 +2758,7 @@ export default function ProjectWorkbenchPage() {
                   </div>
                   <button
                     className="secondary-button"
-                    onClick={() => {
-                      setSelectedEvidenceAttackId(null);
-                      setSelectedDrawerArtifactName(null);
-                    }}
+                    onClick={closeFindingEvidence}
                     type="button"
                   >
                     Close evidence

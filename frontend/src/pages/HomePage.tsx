@@ -240,6 +240,9 @@ export default function HomePage() {
             >
               {importReviewBundleMutation.isPending ? "Importing…" : "Import review bundle"}
             </button>
+            <Link className="secondary-button" to="/reviewops">
+              CI ReviewOps
+            </Link>
           </div>
         </form>
       </section>

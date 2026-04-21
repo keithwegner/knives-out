@@ -505,7 +505,7 @@ function createEvidenceResponse(attackId: string) {
   };
 }
 
-function renderWorkbench() {
+function renderWorkbench(initialEntry = "/projects/project-1") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -514,7 +514,7 @@ function renderWorkbench() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/projects/project-1"]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/projects/:projectId" element={<ProjectWorkbenchPage />} />
         </Routes>
@@ -1037,6 +1037,16 @@ describe("ProjectWorkbenchPage", () => {
     expect((await screen.findAllByText("member-login")).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/https:\/\/example.com\/login/)).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/server exploded/)).length).toBeGreaterThan(0);
+  });
+
+  it("opens the evidence drawer from ReviewOps deep links", async () => {
+    renderWorkbench("/projects/project-1?review=evidence&finding=atk-login");
+
+    expect(await screen.findByRole("heading", { name: "Workbench demo" })).toBeInTheDocument();
+    expect(await screen.findByText("Current-run evidence")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow terminal artifact")).toBeInTheDocument();
+    expect((await screen.findAllByText("Login failure")).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Close evidence" })).toBeInTheDocument();
   });
 
   it("keeps resolved findings summary-only and reuses the artifact viewer in the artifacts tab", async () => {
