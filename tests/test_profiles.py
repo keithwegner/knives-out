@@ -33,6 +33,22 @@ def test_load_auth_profiles_reads_named_profiles(tmp_path: Path) -> None:
     assert profiles_file.profiles[1].headers["Authorization"] == "Bearer admin"
 
 
+def test_load_auth_profiles_rejects_top_level_sequences(tmp_path: Path) -> None:
+    profile_path = tmp_path / "profiles.yml"
+    profile_path.write_text("- name: user\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="top-level mapping"):
+        load_auth_profiles(profile_path)
+
+
+def test_load_auth_profiles_reports_schema_errors(tmp_path: Path) -> None:
+    profile_path = tmp_path / "profiles.yml"
+    profile_path.write_text("profiles:\n  - {}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Field required"):
+        load_auth_profiles(profile_path)
+
+
 def test_select_auth_profiles_filters_named_profiles(tmp_path: Path) -> None:
     profile_path = tmp_path / "profiles.yml"
     profile_path.write_text(
