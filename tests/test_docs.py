@@ -29,6 +29,8 @@ def test_readme_includes_ci_guidance() -> None:
     assert (
         "knives-out bundle results.json --artifact-dir artifacts --out review-bundle.zip" in readme
     )
+    assert "knives-out inspect-bundle review-bundle.zip" in readme
+    assert "knives-out inspect-bundle review-bundle.zip --format json" in readme
     assert "Import review bundle" in readme
     assert "review-only project" in readme
     assert "status, severity, confidence, or schema outcome drifted" in readme
@@ -219,6 +221,8 @@ def test_ci_doc_describes_artifacts_and_optional_gating() -> None:
     assert "GITHUB_STEP_SUMMARY" in ci_doc
     assert "knives-out export results.json --format sarif --out results.sarif" in ci_doc
     assert "knives-out bundle results.json" in ci_doc
+    assert "knives-out inspect-bundle review-bundle.zip" in ci_doc
+    assert "knives-out inspect-bundle review-bundle.zip --format json" in ci_doc
     assert "github/codeql-action/upload-sarif@v4" in ci_doc
     assert "Generate attacks with built-in workflows" in ci_doc
     assert "--tag orders" in ci_doc

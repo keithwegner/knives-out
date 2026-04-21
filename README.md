@@ -38,6 +38,7 @@ It helps developers break their APIs on purpose before someone else does.
   - [`run`](#run)
   - [`report`](#report)
   - [`bundle`](#bundle)
+  - [`inspect-bundle`](#inspect-bundle)
   - [`export`](#export)
   - [`verify`](#verify)
   - [`promote`](#promote)
@@ -531,7 +532,8 @@ metadata when you also pass `--baseline previous-results.json`.
 When you want to move the exact review inputs into the local workbench, `knives-out bundle
 results.json --artifact-dir artifacts --out review-bundle.zip` packages the current results plus
 optional baseline JSON, suppressions, and artifacts into one zip that the home page can import as
-its own review-only project.
+its own review-only project. `knives-out inspect-bundle review-bundle.zip` validates that zip and
+prints the manifest, included evidence counts, and review defaults before import.
 When you want stateful coverage, generate with `--auto-workflows` first, then add
 `--workflow-pack-module examples/workflow_packs/listed_pet_lookup.py` or your own custom pack as
 you move from generic coverage to app-specific journeys. For protected APIs, keep simple static
@@ -773,6 +775,24 @@ The bundle zip always carries `manifest.json` plus `current/results.json`, and i
 `baseline/results.json`, `review/suppressions.yml`, and `artifacts/**` when you supply those
 inputs. Use **Import review bundle** on the home page to create a new review-only project in the
 workbench.
+
+### `inspect-bundle`
+
+Validates a portable review bundle zip and prints the import-ready manifest details.
+
+```bash
+knives-out inspect-bundle review-bundle.zip
+```
+
+Use JSON output when CI needs to gate or annotate the bundle handoff:
+
+```bash
+knives-out inspect-bundle review-bundle.zip --format json
+```
+
+The command reuses the same bundle validation as workbench import, including manifest version,
+required `current/results.json`, optional baseline and suppressions expectations, artifact path
+safety, and artifact counts.
 
 ### `export`
 

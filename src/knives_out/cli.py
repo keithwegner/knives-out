@@ -21,6 +21,7 @@ from knives_out.extensions import (
 from knives_out.models import AttackResults, PreflightWarning
 from knives_out.promotion import PromotionError
 from knives_out.reporting import render_markdown_summary
+from knives_out.review_bundles import ReviewBundleInspection, inspect_review_bundle
 from knives_out.services import (
     DEFAULT_SUPPRESSIONS_PATH,
     SuppressionRule,
@@ -216,6 +217,55 @@ def _print_persisting_delta_findings(findings: list[ComparedFinding]) -> None:
     console.print(table)
     for finding in delta_findings:
         console.print(f"- {finding.result.name}: {finding.delta_summary}")
+
+
+def _yes_no(value: bool) -> str:
+    return "yes" if value else "no"
+
+
+def _print_review_bundle_inspection(inspection: ReviewBundleInspection) -> None:
+    manifest = inspection.manifest
+    table = Table(title="Review bundle")
+    table.add_column("Field")
+    table.add_column("Value", overflow="fold")
+    table.add_row("Name", manifest.name)
+    table.add_row("Base URL", manifest.base_url)
+    table.add_row("Created at", manifest.created_at.isoformat())
+    table.add_row("Executed at", manifest.executed_at.isoformat())
+    table.add_row("Current results", str(inspection.current_result_count))
+    table.add_row(
+        "Baseline results",
+        str(inspection.baseline_result_count)
+        if inspection.baseline_result_count is not None
+        else "none",
+    )
+    table.add_row(
+        "Suppressions",
+        f"yes ({inspection.suppressions_bytes} bytes)"
+        if inspection.suppressions_bytes is not None
+        else "no",
+    )
+    table.add_row("Artifacts", str(inspection.artifact_count))
+    table.add_row(
+        "Review defaults",
+        f"severity >= {manifest.min_severity}, confidence >= {manifest.min_confidence}",
+    )
+    table.add_row("Manifest baseline flag", _yes_no(manifest.includes_baseline))
+    table.add_row("Manifest suppressions flag", _yes_no(manifest.includes_suppressions))
+    table.add_row("Manifest artifacts flag", _yes_no(manifest.includes_artifacts))
+    console.print(table)
+
+    if not inspection.artifact_names:
+        return
+
+    artifacts_table = Table(title=f"Artifacts ({inspection.artifact_count})")
+    artifacts_table.add_column("Path", overflow="fold")
+    for artifact_name in inspection.artifact_names[:20]:
+        artifacts_table.add_row(artifact_name)
+    if inspection.artifact_count > 20:
+        artifacts_table.add_row(f"... {inspection.artifact_count - 20} more")
+    console.print("")
+    console.print(artifacts_table)
 
 
 @app.command()
@@ -725,6 +775,30 @@ def bundle(
     out.write_bytes(bundle_result.content)
     _print_suppression_summary(bundle_result.suppressions_path, bundle_result.suppressions)
     console.print(f"Wrote review bundle to [bold]{out}[/bold].")
+
+
+@app.command()
+def inspect_bundle(
+    bundle: Path,
+    format: Annotated[
+        InspectFormatOption,
+        typer.Option(help="Output format for review bundle inspection."),
+    ] = InspectFormatOption.text,
+) -> None:
+    """Validate and summarize a portable review bundle zip."""
+    try:
+        inspection = inspect_review_bundle(bundle.read_bytes())
+    except OSError as exc:
+        message = exc.strerror or str(exc)
+        raise typer.BadParameter(f"Could not read review bundle '{bundle}': {message}") from exc
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if format == InspectFormatOption.json:
+        typer.echo(json.dumps(inspection.model_dump(mode="json", exclude_none=True), indent=2))
+        return
+
+    _print_review_bundle_inspection(inspection)
 
 
 @app.command()

@@ -207,6 +207,7 @@ zip bundle after the run finishes:
     knives-out bundle results.json \
       --artifact-dir artifacts \
       --out review-bundle.zip
+    knives-out inspect-bundle review-bundle.zip
     # Optional review context:
     # knives-out bundle results.json \
     #   --baseline previous-results.json \
@@ -228,6 +229,8 @@ The resulting zip has a fixed layout:
 Import that file from the workbench home page with **Import review bundle**. v1 imports are
 review-only on purpose: they materialize one completed `import` job plus project review state so
 the existing review tabs, suppressions editor, run history, and artifact inspection keep working.
+Use `knives-out inspect-bundle review-bundle.zip --format json` when a CI job needs a
+machine-readable validation step before publishing the zip as an artifact.
 
 ## Optional: stateful workflow coverage
 

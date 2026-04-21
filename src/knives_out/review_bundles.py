@@ -43,6 +43,15 @@ class ReviewBundle:
     artifacts: dict[str, bytes]
 
 
+class ReviewBundleInspection(BaseModel):
+    manifest: ReviewBundleManifest
+    current_result_count: int
+    baseline_result_count: int | None = None
+    suppressions_bytes: int | None = None
+    artifact_count: int = 0
+    artifact_names: list[str] = Field(default_factory=list)
+
+
 def _default_name(name: str | None) -> str:
     return name.strip() if name and name.strip() else "Imported review"
 
@@ -197,6 +206,24 @@ def load_review_bundle(raw: bytes) -> ReviewBundle:
         baseline_results=baseline_results,
         suppressions_yaml=suppressions_yaml,
         artifacts=artifacts,
+    )
+
+
+def inspect_review_bundle(raw: bytes) -> ReviewBundleInspection:
+    bundle = load_review_bundle(raw)
+    return ReviewBundleInspection(
+        manifest=bundle.manifest,
+        current_result_count=len(bundle.current_results.results),
+        baseline_result_count=(
+            len(bundle.baseline_results.results) if bundle.baseline_results is not None else None
+        ),
+        suppressions_bytes=(
+            len(bundle.suppressions_yaml.encode("utf-8"))
+            if bundle.suppressions_yaml is not None
+            else None
+        ),
+        artifact_count=len(bundle.artifacts),
+        artifact_names=sorted(bundle.artifacts),
     )
 
 
