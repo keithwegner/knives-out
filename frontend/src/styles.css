@@ -617,6 +617,113 @@ pre {
   font-size: 1.05rem;
 }
 
+.reviewops-hero {
+  margin-bottom: 22px;
+}
+
+.reviewops-snapshot {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-self: end;
+}
+
+.reviewops-snapshot div {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid rgba(13, 108, 99, 0.18);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.reviewops-snapshot span,
+.reviewops-delta-list,
+.reviewops-evidence-links span {
+  color: var(--muted);
+}
+
+.reviewops-snapshot span {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.reviewops-snapshot strong {
+  font-size: 2rem;
+}
+
+.reviewops-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.reviewops-layout .summary-card strong {
+  font-size: 1rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.reviewops-repository-list {
+  display: grid;
+  gap: 10px;
+}
+
+.reviewops-repository-button {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 14px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.64);
+  cursor: pointer;
+}
+
+.reviewops-repository-button span,
+.reviewops-repository-button small {
+  color: var(--muted);
+}
+
+.reviewops-repository-button-active {
+  border-color: rgba(0, 127, 109, 0.42);
+  background: rgba(0, 127, 109, 0.1);
+  color: var(--accent-strong);
+}
+
+.reviewops-delta-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.reviewops-evidence-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.reviewops-evidence-links a {
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.reviewops-change-new {
+  color: var(--danger);
+}
+
+.reviewops-change-persisting {
+  color: var(--warning);
+}
+
+.reviewops-change-resolved,
+.reviewops-change-current {
+  color: var(--accent-strong);
+}
+
 .advanced-panel {
   margin: 18px 0;
   padding: 14px;
@@ -890,6 +997,8 @@ pre {
   .field-grid-3,
   .field-grid-2,
   .source-choice-grid,
+  .reviewops-layout,
+  .reviewops-snapshot,
   .artifact-viewer,
   .report-grid,
   .compare-banner {
