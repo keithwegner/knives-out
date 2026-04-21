@@ -1126,6 +1126,107 @@ def test_project_update_persists_review_baseline_selection(tmp_path) -> None:
     assert payload["review_draft"]["min_confidence"] == "low"
 
 
+def test_project_snapshot_export_import_round_trips_project_state_jobs_and_artifacts(
+    tmp_path,
+) -> None:
+    app = create_app(data_dir=tmp_path)
+    client = TestClient(app)
+    job_store = app.state.job_store
+    project_store = app.state.project_store
+    create_response = client.post(
+        "/v1/projects",
+        json={
+            "name": "Snapshot demo",
+            "source_mode": "openapi",
+            "active_step": "review",
+            "source": {"name": "demo.yaml", "content": OPENAPI_SPEC},
+            "run_draft": {"base_url": "https://api.example"},
+            "artifacts": {"generated_suite": _attack_suite().model_dump(mode="json")},
+        },
+    )
+    assert create_response.status_code == 200
+    project_id = create_response.json()["id"]
+    completed_at = datetime(2026, 4, 13, 12, 0, tzinfo=UTC)
+    record = _stored_job(
+        job_store,
+        status=ApiJobStatus.completed,
+        created_at=completed_at - timedelta(minutes=1),
+        completed_at=completed_at,
+        base_url="https://api.example",
+        project_id=project_id,
+        with_result=True,
+        with_artifact=True,
+    )
+    project = project_store.load_project(project_id)
+    project_store.update_project(
+        project.model_copy(
+            update={
+                "review_draft": project.review_draft.model_copy(
+                    update={"baseline_job_id": record.id}
+                ),
+                "artifacts": project.artifacts.model_copy(update={"last_run_job_id": record.id}),
+            }
+        )
+    )
+
+    export_response = client.get(f"/v1/projects/{project_id}/snapshot")
+
+    assert export_response.status_code == 200
+    assert export_response.headers["content-type"] == "application/zip"
+    assert (
+        export_response.headers["content-disposition"]
+        == f'attachment; filename="knives-out-project-{project_id}.zip"'
+    )
+
+    import_response = client.post(
+        "/v1/projects/import-snapshot",
+        files={"snapshot": ("snapshot.zip", export_response.content, "application/zip")},
+    )
+
+    assert import_response.status_code == 200
+    imported = import_response.json()
+    assert imported["id"] != project_id
+    assert imported["name"] == "Snapshot demo"
+    assert imported["source"]["name"] == "demo.yaml"
+    assert imported["source"]["content"] == OPENAPI_SPEC
+    assert imported["run_draft"]["base_url"] == "https://api.example"
+    assert imported["artifacts"]["generated_suite"]["attacks"][0]["id"] == "atk_api"
+    imported_job_id = imported["artifacts"]["last_run_job_id"]
+    assert imported_job_id != record.id
+    assert imported["review_draft"]["baseline_job_id"] == imported_job_id
+
+    jobs_response = client.get(f"/v1/projects/{imported['id']}/jobs")
+    assert jobs_response.status_code == 200
+    jobs_payload = jobs_response.json()
+    assert [job["id"] for job in jobs_payload["jobs"]] == [imported_job_id]
+    assert jobs_payload["jobs"][0]["status"] == "completed"
+    assert jobs_payload["jobs"][0]["result_available"] is True
+    assert jobs_payload["jobs"][0]["artifact_names"] == ["atk_api.json"]
+
+    result_response = client.get(f"/v1/jobs/{imported_job_id}/result")
+    assert result_response.status_code == 200
+    assert result_response.json()["results"][0]["attack_id"] == "atk_api"
+
+    artifact_response = client.get(f"/v1/jobs/{imported_job_id}/artifacts/atk_api.json")
+    assert artifact_response.status_code == 200
+    assert artifact_response.json()["attack"]["id"] == "atk_api"
+
+
+def test_project_snapshot_endpoints_report_missing_project_and_invalid_upload(tmp_path) -> None:
+    client = TestClient(create_app(data_dir=tmp_path))
+
+    missing_response = client.get("/v1/projects/missing/snapshot")
+    assert missing_response.status_code == 404
+    assert missing_response.json()["detail"] == "Project not found."
+
+    invalid_response = client.post(
+        "/v1/projects/import-snapshot",
+        files={"snapshot": ("empty.zip", b"", "application/zip")},
+    )
+    assert invalid_response.status_code == 400
+    assert invalid_response.json()["detail"] == "Project snapshot is empty."
+
+
 def test_job_store_lists_nested_artifacts_and_rejects_path_traversal(tmp_path) -> None:
     store = JobStore(tmp_path)
     record = store.create_job(JobRecord(base_url="https://example.com", attack_count=1))

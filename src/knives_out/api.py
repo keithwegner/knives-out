@@ -12,7 +12,7 @@ from secrets import compare_digest
 from typing import Annotated
 
 import yaml
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 
@@ -70,6 +70,13 @@ from knives_out.api_models import (
 from knives_out.api_store import ActiveJobDeletionError, DeletedJob, JobNotFoundError, JobStore
 from knives_out.extensions import edition_status_for_extensions, register_api_extensions
 from knives_out.models import AttackResult, AttackResults, ResultsSummary
+from knives_out.project_snapshots import (
+    import_project_snapshot as import_project_snapshot_archive,
+)
+from knives_out.project_snapshots import (
+    load_project_snapshot,
+    render_project_snapshot,
+)
 from knives_out.project_store import ProjectNotFoundError, ProjectStore
 from knives_out.review_bundles import load_review_bundle, write_review_bundle_artifacts
 from knives_out.services import (
@@ -807,6 +814,37 @@ def create_app(
         return project_store.update_project(
             _project_with_review_refresh(project, review, review_draft=review_draft)
         )
+
+    @app.get("/v1/projects/{project_id}/snapshot")
+    def export_project_snapshot(project_id: str) -> Response:
+        project_store: ProjectStore = app.state.project_store
+        job_store: JobStore = app.state.job_store
+        try:
+            content = render_project_snapshot(project_store, job_store, project_id)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found.") from exc
+
+        return Response(
+            content=content,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="knives-out-project-{project_id}.zip"'
+                ),
+            },
+        )
+
+    @app.post("/v1/projects/import-snapshot", response_model=ProjectRecord)
+    async def import_project_snapshot(
+        snapshot: Annotated[UploadFile, File(description="Portable project snapshot zip.")],
+    ) -> ProjectRecord:
+        project_store: ProjectStore = app.state.project_store
+        job_store: JobStore = app.state.job_store
+        try:
+            loaded = load_project_snapshot(await snapshot.read())
+            return import_project_snapshot_archive(project_store, job_store, loaded)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/v1/projects/{project_id}/duplicate", response_model=ProjectRecord)
     def duplicate_project(

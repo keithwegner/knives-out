@@ -21,6 +21,7 @@ src/knives_out/
   api.py             # FastAPI entrypoint and route wiring
   api_models.py      # HTTP request/response models
   api_store.py       # Filesystem-backed API job/artifact persistence
+  project_snapshots.py  # Portable saved-project snapshot archives
   capture.py         # Reverse-proxy capture and NDJSON helpers
   learned_discovery.py  # Capture/HAR inference into learned models
   learned_loader.py  # Learned-model loading
