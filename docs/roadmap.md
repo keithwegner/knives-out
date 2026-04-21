@@ -49,6 +49,7 @@ The next portability step is to move beyond review-only handoff and allow rerunn
 snapshots:
 
 - export and import full saved-project snapshots instead of only review evidence
+- ship the first local API snapshot round trip with project/job ID remapping
 - preserve source documents, learned inputs, inspect/generate/run drafts, and reusable suites
 - keep imported snapshots runnable after they land in the workbench
 - support safe duplication and promotion on imported snapshots because the suite is present

@@ -337,6 +337,9 @@ When you need to hand CI evidence to the local review UX, export a portable revi
 CLI and import the zip on the home page. v1 imports are intentionally review-only: the workbench
 recomputes summary, verification, and reports from bundled `results.json`, optional baseline JSON,
 optional suppressions YAML, and optional request/response artifacts.
+For full local project moves, the API can also export and import project snapshots that include
+the saved source, drafts, cached generated suite, project-scoped job history, stored results, and
+artifacts.
 
 ## Local API
 
@@ -404,6 +407,8 @@ The web workbench also uses project resources for saved drafts and project-scope
 - `PATCH /v1/projects/{id}`
 - `DELETE /v1/projects/{id}`
 - `POST /v1/projects/import-review-bundle`
+- `POST /v1/projects/import-snapshot`
+- `GET /v1/projects/{id}/snapshot`
 - `GET /v1/projects/{id}/jobs`
 - `POST /v1/projects/{id}/review`
 - `DELETE /v1/projects/{id}/jobs/{job_id}`
@@ -413,6 +418,10 @@ The web workbench also uses project resources for saved drafts and project-scope
 workbench uses. It always reviews the latest completed run with stored results in that project as
 the current run, accepts an optional `baseline_job_id` from the same project, and only falls back
 to external baseline JSON when the review draft switches to external baseline mode.
+`GET /v1/projects/{id}/snapshot` returns a portable zip for the saved project and its
+project-scoped run history. `POST /v1/projects/import-snapshot` imports that archive as a new
+project and remaps project/job IDs so the snapshot can be restored into the same data directory or
+another local workbench without collisions.
 
 The API accepts uploaded source content and JSON artifacts in the request body. It does not expose
 arbitrary server-side file reads. FastAPI also publishes the schema at `/openapi.json` and the
