@@ -13,6 +13,7 @@ import ApiConnectionPanel from "../components/ApiConnectionPanel";
 import CodeEditor from "../components/CodeEditor";
 import {
   buildJobArtifactUrl,
+  buildProjectSnapshotUrl,
   createRun,
   deleteProjectJob,
   discoverModel,
@@ -1838,6 +1839,13 @@ export default function ProjectWorkbenchPage() {
           </p>
         </div>
         <div className="header-actions">
+          <a
+            className="secondary-button"
+            download={`knives-out-project-${draft.id}.zip`}
+            href={buildProjectSnapshotUrl(draft.id)}
+          >
+            Export snapshot
+          </a>
           {!isReviewBundleProject ? (
             <button
               className="secondary-button"

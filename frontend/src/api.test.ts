@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listProjects } from "./api";
+import { buildProjectSnapshotUrl, importProjectSnapshot, listProjects } from "./api";
 
 describe("api", () => {
   beforeEach(() => {
@@ -30,5 +30,29 @@ describe("api", () => {
       expect(message).toContain("returned HTML instead of the JSON API");
       expect(message).not.toContain("<!DOCTYPE html>");
     }
+  });
+
+  it("builds project snapshot URLs", () => {
+    expect(buildProjectSnapshotUrl("project 1")).toBe("/v1/projects/project%201/snapshot");
+  });
+
+  it("posts project snapshot imports as multipart form data", async () => {
+    const submission: { body?: BodyInit | null } = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        submission.body = init?.body;
+        return Response.json({ id: "project-imported" });
+      }),
+    );
+
+    await importProjectSnapshot(new File(["zip"], "snapshot.zip", { type: "application/zip" }));
+
+    const submittedBody = submission.body as unknown;
+    expect(submittedBody).toBeInstanceOf(FormData);
+    if (!(submittedBody instanceof FormData)) {
+      throw new Error("Expected snapshot import body to be FormData.");
+    }
+    expect(submittedBody.get("snapshot")).toBeInstanceOf(File);
   });
 });

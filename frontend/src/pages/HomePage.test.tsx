@@ -99,6 +99,9 @@ describe("HomePage", () => {
     expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText(/2 saved runs/)).toBeInTheDocument();
     expect(screen.getByText("Open")).toBeInTheDocument();
+    const exportLink = screen.getByRole("link", { name: "Export snapshot" });
+    expect(exportLink).toHaveAttribute("download", "knives-out-project-project-1.zip");
+    expect(exportLink.getAttribute("href")).toContain("/v1/projects/project-1/snapshot");
   });
 
   it("creates a project with the selected source mode", async () => {
@@ -437,6 +440,107 @@ describe("HomePage", () => {
     });
 
     expect(await screen.findByText("Opened project-imported")).toBeInTheDocument();
+  });
+
+  it("imports a project snapshot and opens the imported project", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/healthz")) {
+          return Response.json({ status: "ok" });
+        }
+        if (url.endsWith("/v1/edition")) {
+          return Response.json({
+            edition: "free",
+            plan: "Free",
+            license_state: "missing",
+            enabled_capabilities: [],
+            locked_capabilities: ["ci_reviewops"],
+            customer: null,
+            expires_at: null,
+            grace_expires_at: null,
+            upgrade_url: "https://github.com/keithwegner/knives-out/blob/main/docs/pro.md",
+            message: "Running the MIT Free edition.",
+            extension_errors: [],
+          });
+        }
+        if (url.endsWith("/v1/projects") && method === "GET") {
+          return Response.json({ projects: [] });
+        }
+        if (url.endsWith("/v1/projects/import-snapshot") && method === "POST") {
+          expect(init?.body).toBeInstanceOf(FormData);
+          return Response.json({ id: "project-snapshot", name: "Imported snapshot" });
+        }
+        throw new Error(`Unhandled fetch for ${method} ${url}`);
+      }),
+    );
+
+    const { container } = renderHomePage();
+
+    await screen.findByText("No saved projects yet.");
+    const snapshotInput = container.querySelector('input[aria-label="Project snapshot zip"]');
+    if (!(snapshotInput instanceof HTMLInputElement)) {
+      throw new Error("Expected the project snapshot input to render.");
+    }
+    fireEvent.change(snapshotInput, {
+      target: {
+        files: [new File(["zip"], "project-snapshot.zip", { type: "application/zip" })],
+      },
+    });
+
+    expect(await screen.findByText("Opened project-snapshot")).toBeInTheDocument();
+  });
+
+  it("surfaces project snapshot import validation errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/healthz")) {
+          return Response.json({ status: "ok" });
+        }
+        if (url.endsWith("/v1/edition")) {
+          return Response.json({
+            edition: "free",
+            plan: "Free",
+            license_state: "missing",
+            enabled_capabilities: [],
+            locked_capabilities: ["ci_reviewops"],
+            customer: null,
+            expires_at: null,
+            grace_expires_at: null,
+            upgrade_url: "https://github.com/keithwegner/knives-out/blob/main/docs/pro.md",
+            message: "Running the MIT Free edition.",
+            extension_errors: [],
+          });
+        }
+        if (url.endsWith("/v1/projects") && method === "GET") {
+          return Response.json({ projects: [] });
+        }
+        if (url.endsWith("/v1/projects/import-snapshot") && method === "POST") {
+          return Response.json({ detail: "Project snapshot is empty." }, { status: 400 });
+        }
+        throw new Error(`Unhandled fetch for ${method} ${url}`);
+      }),
+    );
+
+    const { container } = renderHomePage();
+
+    await screen.findByText("No saved projects yet.");
+    const snapshotInput = container.querySelector('input[aria-label="Project snapshot zip"]');
+    if (!(snapshotInput instanceof HTMLInputElement)) {
+      throw new Error("Expected the project snapshot input to render.");
+    }
+    fireEvent.change(snapshotInput, {
+      target: {
+        files: [new File([], "empty.zip", { type: "application/zip" })],
+      },
+    });
+
+    expect(await screen.findByText("Project snapshot is empty.")).toBeInTheDocument();
   });
 
   it("saves a custom API endpoint", async () => {

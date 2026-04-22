@@ -266,10 +266,22 @@ pre {
 .primary-button,
 .secondary-button,
 .ghost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 44px;
   padding: 0 16px;
   cursor: pointer;
+  text-decoration: none;
   transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+  white-space: nowrap;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.ghost-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .primary-button {
@@ -370,6 +382,7 @@ pre {
 
 .project-card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 

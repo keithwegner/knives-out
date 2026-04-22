@@ -2,11 +2,13 @@ import { startTransition, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  buildProjectSnapshotUrl,
   createProject,
   deleteProject,
   duplicateProject,
   getEditionStatus,
   getHealthStatus,
+  importProjectSnapshot,
   importReviewBundle,
   listProjects,
 } from "../api";
@@ -40,6 +42,7 @@ export default function HomePage() {
     useState<ProjectSourceMode>("openapi");
   const [apiBaseUrl, setApiBaseUrl] = useState(() => getApiBaseUrl());
   const bundleInputRef = useRef<HTMLInputElement | null>(null);
+  const snapshotInputRef = useRef<HTMLInputElement | null>(null);
   const requiresApiBase = needsConfiguredApiBase(apiBaseUrl);
 
   const projectListQuery = useQuery({
@@ -97,6 +100,16 @@ export default function HomePage() {
     },
   });
 
+  const importProjectSnapshotMutation = useMutation({
+    mutationFn: importProjectSnapshot,
+    onSuccess: async (project) => {
+      await queryClient.invalidateQueries({ queryKey: ["projects"] });
+      startTransition(() => {
+        navigate(`/projects/${project.id}`);
+      });
+    },
+  });
+
   function applyApiBase(nextValue: string) {
     const normalized = persistApiBaseUrl(nextValue);
     setApiBaseUrl(normalized);
@@ -114,7 +127,9 @@ export default function HomePage() {
             ? duplicateProjectMutation.error.message
             : importReviewBundleMutation.error instanceof Error
               ? importReviewBundleMutation.error.message
-              : null;
+              : importProjectSnapshotMutation.error instanceof Error
+                ? importProjectSnapshotMutation.error.message
+                : null;
   const apiStatusTone = requiresApiBase
     ? "idle"
     : healthQuery.isLoading
@@ -196,6 +211,20 @@ export default function HomePage() {
             ref={bundleInputRef}
             type="file"
           />
+          <input
+            accept=".zip,application/zip"
+            aria-label="Project snapshot zip"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                importProjectSnapshotMutation.mutate(file);
+              }
+              event.target.value = "";
+            }}
+            ref={snapshotInputRef}
+            type="file"
+          />
           <div className="field">
             <span className="field-label">Source type</span>
             <div className="source-choice-grid" role="radiogroup" aria-label="New project source type">
@@ -221,7 +250,10 @@ export default function HomePage() {
               className="primary-button"
               type="submit"
               disabled={
-                createProjectMutation.isPending || importReviewBundleMutation.isPending || requiresApiBase
+                createProjectMutation.isPending ||
+                importReviewBundleMutation.isPending ||
+                importProjectSnapshotMutation.isPending ||
+                requiresApiBase
               }
             >
               {createProjectMutation.isPending
@@ -233,12 +265,28 @@ export default function HomePage() {
             <button
               className="secondary-button"
               disabled={
-                createProjectMutation.isPending || importReviewBundleMutation.isPending || requiresApiBase
+                createProjectMutation.isPending ||
+                importReviewBundleMutation.isPending ||
+                importProjectSnapshotMutation.isPending ||
+                requiresApiBase
               }
               onClick={() => bundleInputRef.current?.click()}
               type="button"
             >
               {importReviewBundleMutation.isPending ? "Importing…" : "Import review bundle"}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={
+                createProjectMutation.isPending ||
+                importReviewBundleMutation.isPending ||
+                importProjectSnapshotMutation.isPending ||
+                requiresApiBase
+              }
+              onClick={() => snapshotInputRef.current?.click()}
+              type="button"
+            >
+              {importProjectSnapshotMutation.isPending ? "Importing…" : "Import snapshot"}
             </button>
             <Link className="secondary-button" to="/reviewops">
               CI ReviewOps
@@ -290,7 +338,7 @@ export default function HomePage() {
         !projectListQuery.data?.projects.length ? (
           <div className="empty-state">
             <p>No saved projects yet.</p>
-            <p>Start with a spec-driven workbench or import a portable review bundle.</p>
+            <p>Start with a spec-driven workbench or import a portable project snapshot.</p>
           </div>
         ) : null}
 
@@ -333,6 +381,13 @@ export default function HomePage() {
                 <Link className="secondary-button" to={`/projects/${project.id}`}>
                   Open
                 </Link>
+                <a
+                  className="ghost-button"
+                  download={`knives-out-project-${project.id}.zip`}
+                  href={buildProjectSnapshotUrl(project.id)}
+                >
+                  Export snapshot
+                </a>
                 {project.source_mode !== "review_bundle" ? (
                   <button
                     className="ghost-button"
