@@ -62,6 +62,7 @@ review loops:
 - smoother baseline handoff across bundle generations
 - richer imported-run history and evidence metadata
 - easier bundle production and retrieval in GitHub Actions or other CI systems
+- offline validation commands for portable snapshot artifacts before import
 - smaller, higher-signal review summaries for long-lived regression programs
 
 The integration baseline now has two layers. `tests/test_integration_smoke.py` protects

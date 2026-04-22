@@ -39,6 +39,7 @@ It helps developers break their APIs on purpose before someone else does.
   - [`report`](#report)
   - [`bundle`](#bundle)
   - [`inspect-bundle`](#inspect-bundle)
+  - [`inspect-snapshot`](#inspect-snapshot)
   - [`export`](#export)
   - [`verify`](#verify)
   - [`promote`](#promote)
@@ -339,7 +340,8 @@ recomputes summary, verification, and reports from bundled `results.json`, optio
 optional suppressions YAML, and optional request/response artifacts.
 For full local project moves, the API can also export and import project snapshots that include
 the saved source, drafts, cached generated suite, project-scoped job history, stored results, and
-artifacts.
+artifacts. Use `knives-out inspect-snapshot project-snapshot.zip` to validate a snapshot before
+importing or sharing it.
 
 ## Local API
 
@@ -802,6 +804,23 @@ knives-out inspect-bundle review-bundle.zip --format json
 The command reuses the same bundle validation as workbench import, including manifest version,
 required `current/results.json`, optional baseline and suppressions expectations, artifact path
 safety, and artifact counts.
+
+### `inspect-snapshot`
+
+Validates a portable project snapshot zip and prints the import-ready manifest details.
+
+```bash
+knives-out inspect-snapshot project-snapshot.zip
+```
+
+Use JSON output when CI needs to gate or annotate a snapshot artifact:
+
+```bash
+knives-out inspect-snapshot project-snapshot.zip --format json
+```
+
+The command reuses the same snapshot validation as workbench import, including manifest version,
+project/job consistency, expected result and artifact counts, and artifact path safety.
 
 ### `export`
 

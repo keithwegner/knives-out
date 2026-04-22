@@ -19,6 +19,7 @@ from knives_out.extensions import (
     register_cli_extensions,
 )
 from knives_out.models import AttackResults, PreflightWarning
+from knives_out.project_snapshots import ProjectSnapshotInspection, inspect_project_snapshot
 from knives_out.promotion import PromotionError
 from knives_out.reporting import render_markdown_summary
 from knives_out.review_bundles import ReviewBundleInspection, inspect_review_bundle
@@ -266,6 +267,28 @@ def _print_review_bundle_inspection(inspection: ReviewBundleInspection) -> None:
         artifacts_table.add_row(f"... {inspection.artifact_count - 20} more")
     console.print("")
     console.print(artifacts_table)
+
+
+def _print_project_snapshot_inspection(inspection: ProjectSnapshotInspection) -> None:
+    manifest = inspection.manifest
+    table = Table(title="Project snapshot")
+    table.add_column("Field")
+    table.add_column("Value", overflow="fold")
+    table.add_row("Name", manifest.name)
+    table.add_row("Source mode", manifest.source_mode)
+    table.add_row("Created at", manifest.created_at.isoformat())
+    table.add_row("Original project", manifest.project_id)
+    table.add_row("Active step", inspection.active_step)
+    table.add_row("Source", inspection.source_name or "none")
+    table.add_row("Jobs", str(manifest.job_count))
+    table.add_row("Results", str(manifest.result_count))
+    table.add_row("Artifacts", str(manifest.artifact_count))
+    table.add_row(
+        "Job statuses",
+        ", ".join(f"{status}: {count}" for status, count in inspection.job_status_counts.items())
+        or "none",
+    )
+    console.print(table)
 
 
 @app.command()
@@ -799,6 +822,31 @@ def inspect_bundle(
         return
 
     _print_review_bundle_inspection(inspection)
+
+
+@app.command()
+def inspect_snapshot(
+    snapshot: Path,
+    format: Annotated[
+        InspectFormatOption,
+        typer.Option(help="Output format for project snapshot inspection."),
+    ] = InspectFormatOption.text,
+) -> None:
+    """Validate and summarize a portable project snapshot zip."""
+    try:
+        inspection = inspect_project_snapshot(snapshot.read_bytes())
+    except OSError as exc:
+        message = exc.strerror or str(exc)
+        error = f"Could not read project snapshot '{snapshot}': {message}"
+        raise typer.BadParameter(error) from exc
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if format == InspectFormatOption.json:
+        typer.echo(json.dumps(inspection.model_dump(mode="json", exclude_none=True), indent=2))
+        return
+
+    _print_project_snapshot_inspection(inspection)
 
 
 @app.command()
