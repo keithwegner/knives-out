@@ -838,6 +838,8 @@ def test_report_command_supports_html_and_artifact_links(tmp_path: Path) -> None
     )
 
     assert result.exit_code == 0
+    assert "Wrote report to" in result.stdout
+    assert "Rendering report" not in result.stdout
     report = report_path.read_text(encoding="utf-8")
     assert "<!DOCTYPE html>" in report
     assert "<h2>Artifact index</h2>" in report

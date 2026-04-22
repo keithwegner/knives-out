@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
@@ -84,6 +86,16 @@ class InspectFormatOption(StrEnum):
 
 
 CLI_EXTENSIONS = ExtensionLoadResult(extensions=[], errors=[])
+
+
+@contextmanager
+def _motion_status(message: str) -> Iterator[None]:
+    if console.is_interactive:
+        with console.status(message, spinner="dots"):
+            yield
+        return
+
+    yield
 
 
 def _warning_target(warning: PreflightWarning) -> str:
@@ -424,19 +436,20 @@ def inspect(
     ] = InspectFormatOption.text,
 ) -> None:
     """Show the operations discovered in an OpenAPI, GraphQL, or learned model."""
-    inspected = inspect_source_path(
-        spec,
-        graphql_endpoint=graphql_endpoint,
-        tag=tag,
-        exclude_tag=exclude_tag,
-        path=path,
-        exclude_path=exclude_path,
-    )
-    loaded = inspected.loaded
-    operations = inspected.operations
-    learned_workflow_count = (
-        len(loaded.learned_model.workflows) if loaded.learned_model is not None else 0
-    )
+    with _motion_status("Inspecting API surface..."):
+        inspected = inspect_source_path(
+            spec,
+            graphql_endpoint=graphql_endpoint,
+            tag=tag,
+            exclude_tag=exclude_tag,
+            path=path,
+            exclude_path=exclude_path,
+        )
+        loaded = inspected.loaded
+        operations = inspected.operations
+        learned_workflow_count = (
+            len(loaded.learned_model.workflows) if loaded.learned_model is not None else 0
+        )
 
     if format == InspectFormatOption.json:
         payload = _inspect_payload(
@@ -566,27 +579,28 @@ def generate(
 
     Filters are applied after attack generation and before the suite is written.
     """
-    generated = generate_suite_from_path(
-        spec,
-        graphql_endpoint=graphql_endpoint,
-        operation=operation,
-        exclude_operation=exclude_operation,
-        method=method,
-        exclude_method=exclude_method,
-        kind=kind,
-        exclude_kind=exclude_kind,
-        tag=tag,
-        exclude_tag=exclude_tag,
-        path=path,
-        exclude_path=exclude_path,
-        pack_names=pack,
-        pack_module_paths=pack_module,
-        auto_workflows=auto_workflows,
-        workflow_pack_names=workflow_pack,
-        workflow_pack_module_paths=workflow_pack_module,
-    )
-    loaded = generated.loaded
-    suite = generated.suite
+    with _motion_status("Generating attack suite..."):
+        generated = generate_suite_from_path(
+            spec,
+            graphql_endpoint=graphql_endpoint,
+            operation=operation,
+            exclude_operation=exclude_operation,
+            method=method,
+            exclude_method=exclude_method,
+            kind=kind,
+            exclude_kind=exclude_kind,
+            tag=tag,
+            exclude_tag=exclude_tag,
+            path=path,
+            exclude_path=exclude_path,
+            pack_names=pack,
+            pack_module_paths=pack_module,
+            auto_workflows=auto_workflows,
+            workflow_pack_names=workflow_pack,
+            workflow_pack_module_paths=workflow_pack_module,
+        )
+        loaded = generated.loaded
+        suite = generated.suite
     out.write_text(suite.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
     workflow_count = sum(1 for attack in suite.attacks if attack.type == "workflow")
     request_count = len(suite.attacks) - workflow_count
@@ -696,30 +710,31 @@ def run(
     Filters are applied to the loaded suite before any requests are executed.
     """
     try:
-        run_result = run_suite(
-            load_attack_suite_or_raise(attacks),
-            base_url=base_url,
-            default_headers=parse_key_value_map(header, separator=":"),
-            default_query=parse_key_value_map(query, separator="="),
-            timeout_seconds=timeout,
-            artifact_dir=artifact_dir,
-            auth_plugin_names=auth_plugin,
-            auth_plugin_module_paths=auth_plugin_module,
-            auth_config_path=auth_config,
-            auth_profile_names=auth_profile,
-            profile_file_path=profile_file,
-            profile_names=profile,
-            operation=operation,
-            exclude_operation=exclude_operation,
-            method=method,
-            exclude_method=exclude_method,
-            kind=kind,
-            exclude_kind=exclude_kind,
-            tag=tag,
-            exclude_tag=exclude_tag,
-            path=path,
-            exclude_path=exclude_path,
-        )
+        with _motion_status("Executing attacks..."):
+            run_result = run_suite(
+                load_attack_suite_or_raise(attacks),
+                base_url=base_url,
+                default_headers=parse_key_value_map(header, separator=":"),
+                default_query=parse_key_value_map(query, separator="="),
+                timeout_seconds=timeout,
+                artifact_dir=artifact_dir,
+                auth_plugin_names=auth_plugin,
+                auth_plugin_module_paths=auth_plugin_module,
+                auth_config_path=auth_config,
+                auth_profile_names=auth_profile,
+                profile_file_path=profile_file,
+                profile_names=profile,
+                operation=operation,
+                exclude_operation=exclude_operation,
+                method=method,
+                exclude_method=exclude_method,
+                kind=kind,
+                exclude_kind=exclude_kind,
+                tag=tag,
+                exclude_tag=exclude_tag,
+                path=path,
+                exclude_path=exclude_path,
+            )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     except PluginRuntimeError as exc:
@@ -920,13 +935,14 @@ def report(
 ) -> None:
     """Render a report from a results file."""
     try:
-        report_result = render_report_from_paths(
-            results,
-            baseline_path=baseline,
-            suppressions_path=suppressions,
-            format=format.value,
-            artifact_root=artifact_root,
-        )
+        with _motion_status("Rendering report..."):
+            report_result = render_report_from_paths(
+                results,
+                baseline_path=baseline,
+                suppressions_path=suppressions,
+                format=format.value,
+                artifact_root=artifact_root,
+            )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
