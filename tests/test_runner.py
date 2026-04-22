@@ -2649,6 +2649,74 @@ def test_render_html_report_links_workflow_step_artifacts_without_profiles(tmp_p
     assert "wf_lookup-step-01.json" in report
 
 
+def test_render_html_report_motion_uses_report_data_without_scripts() -> None:
+    results = AttackResults(
+        source="unit",
+        base_url="https://example.com",
+        auth_events=[
+            {
+                "profile": "admin",
+                "name": "service",
+                "strategy": "client_credentials",
+                "phase": "acquire",
+                "success": False,
+            },
+            {
+                "profile": "admin",
+                "name": "service",
+                "strategy": "client_credentials",
+                "phase": "refresh",
+                "success": True,
+            },
+        ],
+        results=[
+            AttackResult(
+                attack_id="atk_server_error",
+                operation_id="createPet",
+                kind="missing_request_body",
+                name="Server failure",
+                method="POST",
+                url="https://example.com/pets",
+                status_code=500,
+                flagged=True,
+                issue="server_error",
+                severity="high",
+                confidence="high",
+            ),
+            AttackResult(
+                attack_id="atk_success",
+                operation_id="listPets",
+                kind="missing_auth",
+                name="Unexpected success",
+                method="GET",
+                url="https://example.com/pets",
+                status_code=200,
+                flagged=True,
+                issue="unexpected_success",
+                severity="medium",
+                confidence="medium",
+            ),
+        ],
+    )
+
+    report = render_html_report(results)
+
+    assert '<section class="panel hero motion-panel" style="--entry-delay: 0ms;">' in report
+    assert '<div class="scan-layer" aria-hidden="true"></div>' in report
+    assert "class='summary-card accent' style='--entry-delay: 0ms; --risk-level: 100.0%;'" in report
+    assert (
+        "class='summary-card critical' style='--entry-delay: 85ms; --risk-level: 100.0%;'" in report
+    )
+    assert (
+        "class='summary-card warning' style='--entry-delay: 340ms; --risk-level: 50.0%;'" in report
+    )
+    assert "<span class='risk-meter' aria-hidden='true'><span></span></span>" in report
+    assert "class='badge critical'>server_error</span>" in report
+    assert "class='badge warning'>unexpected_success</span>" in report
+    assert "animation: none !important;" in report
+    assert "<script" not in report
+
+
 def test_render_html_report_shows_error_graphql_details_and_suppression_expiry() -> None:
     results = AttackResults(
         source="unit",
