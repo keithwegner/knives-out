@@ -701,6 +701,9 @@ describe("ProjectWorkbenchPage", () => {
     renderWorkbench();
 
     expect(await screen.findByRole("heading", { name: "Workbench demo" })).toBeInTheDocument();
+    const exportLink = screen.getByRole("link", { name: "Export snapshot" });
+    expect(exportLink).toHaveAttribute("download", "knives-out-project-project-1.zip");
+    expect(exportLink.getAttribute("href")).toContain("/v1/projects/project-1/snapshot");
     const stepRail = screen.getByRole("navigation", { name: "Workbench steps" });
     for (const stepName of ["Source", "Inspect", "Generate", "Run", "Review"]) {
       expect(

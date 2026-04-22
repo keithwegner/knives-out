@@ -174,6 +174,19 @@ export function importReviewBundle(bundle: File) {
   });
 }
 
+export function importProjectSnapshot(snapshot: File) {
+  const formData = new FormData();
+  formData.append("snapshot", snapshot);
+  return requestFormData<ProjectRecord>("/v1/projects/import-snapshot", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export function buildProjectSnapshotUrl(projectId: string) {
+  return buildApiUrl(`/v1/projects/${encodeURIComponent(projectId)}/snapshot`);
+}
+
 export function getProject(projectId: string) {
   return request<ProjectRecord>(`/v1/projects/${projectId}`);
 }
