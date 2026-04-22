@@ -679,7 +679,7 @@ def _artifact_links_html(result, *, artifact_root: Path | None) -> str:
     if not candidates:
         return "<span class='muted'>No linked artifact</span>"
     return "<br>".join(
-        f"<a href='{escape(path.as_posix(), quote=True)}'>{escape(label)}</a>"
+        f"<a class='artifact-link' href='{escape(path.as_posix(), quote=True)}'>{escape(label)}</a>"
         for label, path in candidates
     )
 
@@ -697,11 +697,25 @@ def _issue_badge_class(issue: str | None) -> str:
     return "neutral"
 
 
-def _summary_card_html(label: str, value: str) -> str:
+def _bounded_percent(value: float) -> float:
+    return max(0.0, min(100.0, value))
+
+
+def _summary_card_html(
+    label: str,
+    value: str,
+    *,
+    tone: str = "neutral",
+    progress: float = 0.0,
+    index: int = 0,
+) -> str:
+    safe_progress = _bounded_percent(progress)
     return (
-        "<div class='summary-card'>"
+        f"<div class='summary-card {escape(tone)}' "
+        f"style='--entry-delay: {index * 85}ms; --risk-level: {safe_progress:.1f}%;'>"
         f"<span class='label'>{escape(label)}</span>"
         f"<strong>{escape(value)}</strong>"
+        "<span class='risk-meter' aria-hidden='true'><span></span></span>"
         "</div>"
     )
 
@@ -773,7 +787,7 @@ def _persisting_delta_row_html(finding: ComparedFinding) -> str:
     )
 
 
-def _result_card_html(result, *, artifact_root: Path | None) -> str:
+def _result_card_html(result, *, artifact_root: Path | None, index: int = 0) -> str:
     status = str(result.status_code) if result.status_code is not None else "-"
     issue = result.issue or "ok"
     profile_rows = ""
@@ -868,7 +882,7 @@ def _result_card_html(result, *, artifact_root: Path | None) -> str:
     artifact_html = _artifact_links_html(result, artifact_root=artifact_root)
 
     return (
-        "<article class='result-card'>"
+        f"<article class='result-card' style='--entry-delay: {index * 55}ms;'>"
         f"<header><h3>{escape(result.name)}</h3>"
         f"<span class='badge {escape(_issue_badge_class(result.issue))}'>{escape(issue)}</span>"
         "</header>"
@@ -900,27 +914,79 @@ def render_html_report(
     protocol_counter = Counter(_protocol_label(result.protocol) for result in results.results)
     refresh_attempts = sum(1 for event in results.auth_events if event.phase == "refresh")
 
+    total_results = len(results.results)
+    active_findings = len(comparison.current_findings)
+    suppressed_findings = len(comparison.suppressed_current_findings)
+    auth_failures = sum(1 for event in results.auth_events if not event.success)
+    result_base = max(total_results, 1)
+    auth_base = max(len(results.auth_events), 1)
     summary_cards = [
-        ("Total results", str(len(results.results))),
-        ("Active flagged", str(len(comparison.current_findings))),
-        ("Suppressed", str(len(comparison.suppressed_current_findings))),
-        ("Auth failures", str(sum(1 for event in results.auth_events if not event.success))),
-        ("Refresh attempts", str(refresh_attempts)),
-        (
-            "Protocols",
-            ", ".join(f"{name}:{count}" for name, count in sorted(protocol_counter.items())),
-        ),
-        (
-            "Profiles",
-            str(len(results.profiles)) if results.profiles else "single",
-        ),
+        {
+            "label": "Total results",
+            "value": str(total_results),
+            "tone": "accent",
+            "progress": 100.0 if total_results else 0.0,
+        },
+        {
+            "label": "Active flagged",
+            "value": str(active_findings),
+            "tone": "critical" if active_findings else "neutral",
+            "progress": active_findings / result_base * 100,
+        },
+        {
+            "label": "Suppressed",
+            "value": str(suppressed_findings),
+            "tone": "warning" if suppressed_findings else "neutral",
+            "progress": suppressed_findings / result_base * 100,
+        },
+        {
+            "label": "Auth failures",
+            "value": str(auth_failures),
+            "tone": "critical" if auth_failures else "neutral",
+            "progress": auth_failures / auth_base * 100,
+        },
+        {
+            "label": "Refresh attempts",
+            "value": str(refresh_attempts),
+            "tone": "warning" if refresh_attempts else "neutral",
+            "progress": refresh_attempts / auth_base * 100,
+        },
+        {
+            "label": "Protocols",
+            "value": ", ".join(
+                f"{name}:{count}" for name, count in sorted(protocol_counter.items())
+            ),
+            "tone": "accent",
+            "progress": 100.0 if protocol_counter else 0.0,
+        },
+        {
+            "label": "Profiles",
+            "value": str(len(results.profiles)) if results.profiles else "single",
+            "tone": "accent" if results.profiles else "neutral",
+            "progress": min(len(results.profiles), 4) / 4 * 100 if results.profiles else 18,
+        },
     ]
     if baseline is not None:
         summary_cards.extend(
             [
-                ("New", str(len(comparison.new_findings))),
-                ("Resolved", str(len(comparison.resolved_findings))),
-                ("Persisting", str(len(comparison.persisting_findings))),
+                {
+                    "label": "New",
+                    "value": str(len(comparison.new_findings)),
+                    "tone": "critical" if comparison.new_findings else "neutral",
+                    "progress": len(comparison.new_findings) / result_base * 100,
+                },
+                {
+                    "label": "Resolved",
+                    "value": str(len(comparison.resolved_findings)),
+                    "tone": "accent" if comparison.resolved_findings else "neutral",
+                    "progress": len(comparison.resolved_findings) / result_base * 100,
+                },
+                {
+                    "label": "Persisting",
+                    "value": str(len(comparison.persisting_findings)),
+                    "tone": "warning" if comparison.persisting_findings else "neutral",
+                    "progress": len(comparison.persisting_findings) / result_base * 100,
+                },
             ]
         )
 
@@ -991,7 +1057,8 @@ def render_html_report(
             for path in artifact_index_paths
         )
         artifact_index = (
-            "<section class='panel'><h2>Artifact index</h2>"
+            "<section class='panel motion-panel' style='--entry-delay: 520ms;'>"
+            "<h2>Artifact index</h2>"
             f"<ul class='artifact-list'>{artifact_rows}</ul></section>"
         )
 
@@ -1002,17 +1069,48 @@ def render_html_report(
             "".join(_persisting_delta_row_html(finding) for finding in persisting_deltas)
             or "<tr><td colspan='5' class='muted'>No persisting deltas detected.</td></tr>"
         )
+        regression_cards = [
+            {
+                "label": "Baseline executed at",
+                "value": baseline.executed_at.isoformat(),
+                "tone": "neutral",
+                "progress": 100.0,
+            },
+            {
+                "label": "New findings",
+                "value": str(len(comparison.new_findings)),
+                "tone": "critical" if comparison.new_findings else "neutral",
+                "progress": len(comparison.new_findings) / result_base * 100,
+            },
+            {
+                "label": "Resolved findings",
+                "value": str(len(comparison.resolved_findings)),
+                "tone": "accent" if comparison.resolved_findings else "neutral",
+                "progress": len(comparison.resolved_findings) / result_base * 100,
+            },
+            {
+                "label": "Persisting findings",
+                "value": str(len(comparison.persisting_findings)),
+                "tone": "warning" if comparison.persisting_findings else "neutral",
+                "progress": len(comparison.persisting_findings) / result_base * 100,
+            },
+            {
+                "label": "Persisting with deltas",
+                "value": str(len(persisting_deltas)),
+                "tone": "warning" if persisting_deltas else "neutral",
+                "progress": len(persisting_deltas) / result_base * 100,
+            },
+        ]
         diff_panels = (
-            "<section class='panel'>"
+            "<section class='panel motion-panel' style='--entry-delay: 480ms;'>"
             "<h2>Regression summary</h2>"
             "<div class='summary-grid'>"
-            f"{_summary_card_html('Baseline executed at', baseline.executed_at.isoformat())}"
-            f"{_summary_card_html('New findings', str(len(comparison.new_findings)))}"
-            f"{_summary_card_html('Resolved findings', str(len(comparison.resolved_findings)))}"
-            f"{_summary_card_html('Persisting findings', str(len(comparison.persisting_findings)))}"
-            f"{_summary_card_html('Persisting with deltas', str(len(persisting_deltas)))}"
-            "</div></section>"
-            "<section class='panel'>"
+            + "".join(
+                _summary_card_html(**card, index=index)
+                for index, card in enumerate(regression_cards)
+            )
+            + "</div></section>"
+            "<section class='panel motion-panel' style='--entry-delay: 520ms;'>"
             "<h2>Persisting deltas</h2>"
             "<table>"
             "<thead><tr><th>Attack</th><th>Kind</th><th>Issue</th><th>Changes</th><th>URL</th></tr></thead>"
@@ -1021,7 +1119,11 @@ def render_html_report(
         )
 
     cards_html = "".join(
-        _result_card_html(result, artifact_root=artifact_root_path) for result in results.results
+        _result_card_html(result, artifact_root=artifact_root_path, index=index)
+        for index, result in enumerate(results.results)
+    )
+    summary_cards_html = "".join(
+        _summary_card_html(**card, index=index) for index, card in enumerate(summary_cards)
     )
 
     return f"""<!DOCTYPE html>
@@ -1032,23 +1134,30 @@ def render_html_report(
     <title>knives-out report</title>
     <style>
       :root {{
-        --bg: #f7f2e8;
-        --panel: rgba(255, 252, 247, 0.92);
-        --ink: #1d1a16;
-        --muted: #6b6359;
-        --border: rgba(69, 50, 28, 0.16);
+        --bg: #edf4f0;
+        --panel: rgba(255, 255, 250, 0.94);
+        --ink: #151a17;
+        --muted: #5a6660;
+        --border: rgba(22, 47, 38, 0.16);
         --accent: #0f766e;
         --warning: #b45309;
         --critical: #b42318;
-        --shadow: 0 20px 60px rgba(31, 24, 17, 0.08);
+        --track: rgba(22, 47, 38, 0.09);
+        --shadow: 0 22px 70px rgba(22, 47, 38, 0.12);
       }}
       * {{ box-sizing: border-box; }}
       body {{
         margin: 0;
         background:
-          radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 36%),
-          radial-gradient(circle at top right, rgba(180, 83, 9, 0.12), transparent 28%),
-          linear-gradient(180deg, #fbf6ee 0%, var(--bg) 100%);
+          linear-gradient(
+            125deg,
+            rgba(15, 118, 110, 0.1) 0%,
+            transparent 30%,
+            transparent 58%,
+            rgba(180, 35, 24, 0.07) 58%,
+            transparent 76%
+          ),
+          linear-gradient(180deg, #f8fbf8 0%, var(--bg) 54%, #f6f0e8 100%);
         color: var(--ink);
         font-family: Charter, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
         line-height: 1.55;
@@ -1067,17 +1176,75 @@ def render_html_report(
         font-family: "IBM Plex Mono", "SFMono-Regular", "Menlo", "Consolas", monospace;
       }}
       .hero {{
-        padding: 32px;
-        border-bottom: 1px solid var(--border);
+        position: relative;
+        min-height: 230px;
+        overflow: hidden;
+        display: grid;
+        align-items: end;
+        padding: 40px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 250, 0.96), rgba(237, 244, 240, 0.86)),
+          var(--panel);
       }}
       .hero p {{
         margin-top: 10px;
         color: var(--muted);
       }}
+      .hero code {{
+        padding: 0.08rem 0.28rem;
+        border-radius: 6px;
+        background: rgba(15, 118, 110, 0.08);
+      }}
+      .hero-content {{
+        position: relative;
+        z-index: 1;
+        max-width: 860px;
+      }}
+      .scan-layer {{
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        opacity: 0.8;
+      }}
+      .scan-layer::before {{
+        content: "";
+        position: absolute;
+        inset: -40px;
+        background:
+          repeating-linear-gradient(
+            90deg,
+            rgba(15, 118, 110, 0.1) 0 1px,
+            transparent 1px 34px
+          ),
+          repeating-linear-gradient(
+            0deg,
+            rgba(180, 35, 24, 0.07) 0 1px,
+            transparent 1px 34px
+          );
+        animation: grid-drift 26s linear infinite;
+      }}
+      .scan-layer::after {{
+        content: "";
+        position: absolute;
+        inset: -20% auto -20% -55%;
+        width: 48%;
+        background: linear-gradient(
+          100deg,
+          transparent 0%,
+          rgba(255, 255, 250, 0.18) 32%,
+          rgba(15, 118, 110, 0.34) 49%,
+          rgba(180, 35, 24, 0.16) 58%,
+          transparent 74%
+        );
+        filter: blur(1px);
+        transform: skewX(-14deg);
+        animation: scan-sweep 8s cubic-bezier(0.76, 0, 0.24, 1) infinite;
+      }}
       .panel, .result-card {{
         background: var(--panel);
         border: 1px solid var(--border);
-        border-radius: 24px;
+        border-radius: 8px;
         box-shadow: var(--shadow);
         backdrop-filter: blur(12px);
       }}
@@ -1085,18 +1252,85 @@ def render_html_report(
         padding: 28px;
         margin-top: 24px;
       }}
+      .motion-panel {{
+        animation: panel-rise 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        animation-delay: var(--entry-delay, 0ms);
+      }}
       .summary-grid {{
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
         gap: 14px;
       }}
       .summary-card {{
+        position: relative;
+        overflow: hidden;
         padding: 18px;
         background: rgba(255, 255, 255, 0.72);
-        border-radius: 18px;
+        border-radius: 8px;
         border: 1px solid var(--border);
+        animation: card-rise 640ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        animation-delay: var(--entry-delay, 0ms);
+        transition:
+          border-color 180ms ease,
+          box-shadow 180ms ease,
+          transform 180ms ease;
+      }}
+      .summary-card::before {{
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          110deg,
+          transparent 0%,
+          rgba(255, 255, 250, 0.2) 42%,
+          rgba(255, 255, 250, 0.62) 50%,
+          transparent 58%
+        );
+        transform: translateX(-120%);
+        animation: card-sheen 4.8s ease-in-out infinite;
+        animation-delay: calc(var(--entry-delay, 0ms) + 900ms);
+      }}
+      .summary-card:hover {{
+        border-color: rgba(15, 118, 110, 0.36);
+        box-shadow: 0 16px 42px rgba(22, 47, 38, 0.13);
+        transform: translateY(-2px);
+      }}
+      .summary-card strong {{
+        position: relative;
+        display: block;
+        font-size: 1.65rem;
+        line-height: 1.05;
+      }}
+      .risk-meter {{
+        position: relative;
+        display: block;
+        height: 4px;
+        margin-top: 16px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--track);
+      }}
+      .risk-meter span {{
+        display: block;
+        width: var(--risk-level);
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, rgba(15, 118, 110, 0.42), var(--accent));
+        transform-origin: left;
+        animation: risk-fill 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        animation-delay: calc(var(--entry-delay, 0ms) + 260ms);
+      }}
+      .summary-card.critical .risk-meter span {{
+        background: linear-gradient(90deg, rgba(180, 35, 24, 0.34), var(--critical));
+      }}
+      .summary-card.warning .risk-meter span {{
+        background: linear-gradient(90deg, rgba(180, 83, 9, 0.34), var(--warning));
+      }}
+      .summary-card.neutral .risk-meter span {{
+        background: linear-gradient(90deg, rgba(90, 102, 96, 0.22), rgba(90, 102, 96, 0.56));
       }}
       .label {{
+        position: relative;
         display: block;
         font-size: 0.75rem;
         letter-spacing: 0.08em;
@@ -1105,6 +1339,8 @@ def render_html_report(
         margin-bottom: 6px;
       }}
       .badge {{
+        position: relative;
+        overflow: hidden;
         display: inline-flex;
         align-items: center;
         padding: 0.28rem 0.7rem;
@@ -1113,14 +1349,38 @@ def render_html_report(
         font-weight: 600;
         letter-spacing: 0.04em;
         text-transform: uppercase;
+        transition: transform 180ms ease, box-shadow 180ms ease;
       }}
-      .badge.critical {{ background: rgba(180, 35, 24, 0.12); color: var(--critical); }}
-      .badge.warning {{ background: rgba(180, 83, 9, 0.12); color: var(--warning); }}
+      .badge::after {{
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          110deg,
+          transparent 12%,
+          rgba(255, 255, 250, 0.45),
+          transparent 58%
+        );
+        transform: translateX(-120%);
+        animation: badge-sheen 5.2s ease-in-out infinite;
+      }}
+      .badge:hover {{ transform: translateY(-1px); }}
+      .badge.critical {{
+        background: rgba(180, 35, 24, 0.12);
+        color: var(--critical);
+        animation: critical-pulse 3.6s ease-in-out infinite;
+      }}
+      .badge.warning {{
+        background: rgba(180, 83, 9, 0.12);
+        color: var(--warning);
+        animation: warning-glow 5.2s ease-in-out infinite;
+      }}
       .badge.neutral {{ background: rgba(15, 118, 110, 0.12); color: var(--accent); }}
       table {{
         width: 100%;
         border-collapse: collapse;
         font-size: 0.95rem;
+        animation: table-rise 680ms cubic-bezier(0.22, 1, 0.36, 1) both;
       }}
       th, td {{
         padding: 12px 10px;
@@ -1134,6 +1394,13 @@ def render_html_report(
         text-transform: uppercase;
         color: var(--muted);
       }}
+      tbody tr {{
+        transition: background 160ms ease, transform 160ms ease;
+      }}
+      tbody tr:hover {{
+        background: rgba(15, 118, 110, 0.055);
+        transform: translateX(2px);
+      }}
       .muted {{ color: var(--muted); }}
       .result-grid {{
         display: grid;
@@ -1142,6 +1409,17 @@ def render_html_report(
       }}
       .result-card {{
         padding: 24px;
+        animation: card-rise 680ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        animation-delay: var(--entry-delay, 0ms);
+        transition:
+          border-color 180ms ease,
+          box-shadow 180ms ease,
+          transform 180ms ease;
+      }}
+      .result-card:hover {{
+        border-color: rgba(15, 118, 110, 0.34);
+        box-shadow: 0 22px 64px rgba(22, 47, 38, 0.16);
+        transform: translateY(-2px);
       }}
       .result-card header {{
         display: flex;
@@ -1168,12 +1446,12 @@ def render_html_report(
         padding: 14px 16px;
         border-left: 4px solid var(--warning);
         background: rgba(180, 83, 9, 0.08);
-        border-radius: 12px;
+        border-radius: 8px;
       }}
       pre {{
         margin: 0;
         padding: 14px;
-        border-radius: 16px;
+        border-radius: 8px;
         background: #1f1a17;
         color: #f6ede1;
         overflow-x: auto;
@@ -1183,34 +1461,143 @@ def render_html_report(
         gap: 10px;
         padding-left: 20px;
       }}
-      a {{ color: var(--accent); text-decoration: none; }}
-      a:hover {{ text-decoration: underline; }}
+      .artifact-list li {{
+        animation: item-rise 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }}
+      a {{
+        color: var(--accent);
+        text-decoration: none;
+      }}
+      a.artifact-link,
+      .artifact-list a {{
+        position: relative;
+        display: inline-block;
+        font-weight: 700;
+        transition: color 160ms ease, transform 160ms ease;
+      }}
+      a.artifact-link::after,
+      .artifact-list a::after {{
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: -0.14rem;
+        height: 2px;
+        background: currentColor;
+        transform: scaleX(0);
+        transform-origin: left;
+        transition: transform 180ms ease;
+      }}
+      a.artifact-link:hover,
+      a.artifact-link:focus-visible,
+      .artifact-list a:hover,
+      .artifact-list a:focus-visible {{
+        color: #0b5f59;
+        transform: translateY(-1px);
+      }}
+      a.artifact-link:hover::after,
+      a.artifact-link:focus-visible::after,
+      .artifact-list a:hover::after,
+      .artifact-list a:focus-visible::after {{
+        transform: scaleX(1);
+      }}
+      a:focus-visible {{
+        outline: 2px solid rgba(15, 118, 110, 0.5);
+        outline-offset: 3px;
+      }}
+      @keyframes panel-rise {{
+        from {{ opacity: 0; transform: translateY(18px); }}
+        to {{ opacity: 1; transform: translateY(0); }}
+      }}
+      @keyframes card-rise {{
+        from {{ opacity: 0; transform: translateY(14px) scale(0.99); }}
+        to {{ opacity: 1; transform: translateY(0) scale(1); }}
+      }}
+      @keyframes table-rise {{
+        from {{ opacity: 0; transform: translateY(8px); }}
+        to {{ opacity: 1; transform: translateY(0); }}
+      }}
+      @keyframes item-rise {{
+        from {{ opacity: 0; transform: translateY(6px); }}
+        to {{ opacity: 1; transform: translateY(0); }}
+      }}
+      @keyframes risk-fill {{
+        from {{ transform: scaleX(0); }}
+        to {{ transform: scaleX(1); }}
+      }}
+      @keyframes card-sheen {{
+        0%, 45% {{ transform: translateX(-120%); }}
+        70%, 100% {{ transform: translateX(120%); }}
+      }}
+      @keyframes badge-sheen {{
+        0%, 62% {{ transform: translateX(-120%); }}
+        78%, 100% {{ transform: translateX(120%); }}
+      }}
+      @keyframes critical-pulse {{
+        0%, 100% {{ box-shadow: 0 0 0 rgba(180, 35, 24, 0); }}
+        48% {{ box-shadow: 0 0 0 4px rgba(180, 35, 24, 0.08); }}
+      }}
+      @keyframes warning-glow {{
+        0%, 100% {{ box-shadow: 0 0 0 rgba(180, 83, 9, 0); }}
+        50% {{ box-shadow: 0 0 18px rgba(180, 83, 9, 0.13); }}
+      }}
+      @keyframes grid-drift {{
+        from {{ transform: translate3d(0, 0, 0); }}
+        to {{ transform: translate3d(34px, 34px, 0); }}
+      }}
+      @keyframes scan-sweep {{
+        0%, 18% {{ transform: translateX(0) skewX(-14deg); opacity: 0; }}
+        32% {{ opacity: 0.85; }}
+        62% {{ opacity: 0.55; }}
+        82%, 100% {{ transform: translateX(330%) skewX(-14deg); opacity: 0; }}
+      }}
       @media (max-width: 720px) {{
         main {{ width: min(100vw - 20px, 100%); padding-top: 20px; }}
-        .hero, .panel, .result-card {{ border-radius: 20px; }}
+        .hero {{ min-height: 210px; padding: 28px; }}
         .result-card header {{ flex-direction: column; }}
+      }}
+      @media (prefers-reduced-motion: reduce) {{
+        *,
+        *::before,
+        *::after {{
+          animation: none !important;
+          transition: none !important;
+          scroll-behavior: auto !important;
+        }}
+        .motion-panel,
+        .summary-card,
+        .result-card,
+        .panel table,
+        .artifact-list li {{
+          opacity: 1 !important;
+          transform: none !important;
+        }}
+        .risk-meter span {{
+          transform: none !important;
+        }}
       }}
     </style>
   </head>
   <body>
     <main>
-      <section class="panel hero">
-        <h1>knives-out report</h1>
-        <p>
-          Source: <code>{escape(results.source)}</code><br>
-          Base URL: <code>{escape(results.base_url)}</code><br>
-          Executed at: <code>{escape(results.executed_at.isoformat())}</code>
-        </p>
-      </section>
-
-      <section class="panel">
-        <h2>Summary</h2>
-        <div class="summary-grid">
-          {"".join(_summary_card_html(label, value) for label, value in summary_cards)}
+      <section class="panel hero motion-panel" style="--entry-delay: 0ms;">
+        <div class="scan-layer" aria-hidden="true"></div>
+        <div class="hero-content">
+          <h1>knives-out report</h1>
+          <p>
+            Source: <code>{escape(results.source)}</code><br>
+            Base URL: <code>{escape(results.base_url)}</code><br>
+            Executed at: <code>{escape(results.executed_at.isoformat())}</code>
+          </p>
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel motion-panel" style="--entry-delay: 80ms;">
+        <h2>Summary</h2>
+        <div class="summary-grid">{summary_cards_html}</div>
+      </section>
+
+      <section class="panel motion-panel" style="--entry-delay: 160ms;">
         <h2>Outcome summary</h2>
         <table>
           <thead><tr><th>Outcome</th><th>Count</th></tr></thead>
@@ -1218,7 +1605,7 @@ def render_html_report(
         </table>
       </section>
 
-      <section class="panel">
+      <section class="panel motion-panel" style="--entry-delay: 240ms;">
         <h2>Flagged findings</h2>
         <div class="summary-grid">
           <div>
@@ -1244,7 +1631,7 @@ def render_html_report(
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel motion-panel" style="--entry-delay: 320ms;">
         <h2>Suppressed findings</h2>
         <table>
           <thead><tr><th>Attack</th><th>Issue</th><th>Reason</th><th>Owner</th><th>Expires</th></tr></thead>
@@ -1252,7 +1639,7 @@ def render_html_report(
         </table>
       </section>
 
-      <section class="panel">
+      <section class="panel motion-panel" style="--entry-delay: 400ms;">
         <h2>Auth summary</h2>
         <table>
           <thead>
@@ -1265,7 +1652,7 @@ def render_html_report(
         </table>
       </section>
 
-      <section class="panel">
+      <section class="panel motion-panel" style="--entry-delay: 480ms;">
         <h2>Auth diagnostics</h2>
         <table>
           <thead>
@@ -1281,7 +1668,7 @@ def render_html_report(
       {diff_panels}
       {artifact_index}
 
-      <section class="panel">
+      <section class="panel motion-panel" style="--entry-delay: 560ms;">
         <h2>Detailed results</h2>
         <div class="result-grid">{cards_html}</div>
       </section>

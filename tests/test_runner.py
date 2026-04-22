@@ -2605,6 +2605,12 @@ def test_render_html_report_shows_artifact_index_and_profile_outcomes(tmp_path: 
     assert "<h4>Profile outcomes</h4>" in report
     assert "anonymous (anonymous)" in report
     assert "anonymous step 1" in report
+    assert "scan-layer" in report
+    assert "risk-meter" in report
+    assert "artifact-link" in report
+    assert "@keyframes scan-sweep" in report
+    assert "@keyframes card-rise" in report
+    assert "@media (prefers-reduced-motion: reduce)" in report
 
 
 def test_render_html_report_links_workflow_step_artifacts_without_profiles(tmp_path: Path) -> None:
