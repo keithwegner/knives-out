@@ -232,6 +232,21 @@ the existing review tabs, suppressions editor, run history, and artifact inspect
 Use `knives-out inspect-bundle review-bundle.zip --format json` when a CI job needs a
 machine-readable validation step before publishing the zip as an artifact.
 
+## Optional: project snapshot validation
+
+Project snapshots are exported from the local API or workbench when a developer needs to move a
+rerunnable saved project, including source, drafts, generated suite, project-scoped job history,
+stored results, and artifacts. Before publishing or importing that archive, validate it with the
+same loader used by workbench import:
+
+```bash
+knives-out inspect-snapshot project-snapshot.zip
+knives-out inspect-snapshot project-snapshot.zip --format json
+```
+
+The JSON form exposes manifest counts and job status counts for CI gates that need to confirm the
+archive is complete before attaching it to a workflow run or handing it to another workbench.
+
 ## Optional: stateful workflow coverage
 
 Start simple with request-only generation:

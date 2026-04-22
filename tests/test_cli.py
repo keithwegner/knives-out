@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
 from zipfile import ZipFile
@@ -7,6 +8,15 @@ from zipfile import ZipFile
 from fastapi import FastAPI
 from typer.testing import CliRunner
 
+from knives_out.api_models import (
+    ApiJobStatus,
+    JobRecord,
+    ProjectRecord,
+    ProjectSourceMode,
+    ProjectStep,
+    SourcePayload,
+)
+from knives_out.api_store import JobStore
 from knives_out.auth_plugins import PluginRuntimeError
 from knives_out.cli import app
 from knives_out.models import (
@@ -18,6 +28,8 @@ from knives_out.models import (
     LoadedOperations,
     PreflightWarning,
 )
+from knives_out.project_snapshots import render_project_snapshot
+from knives_out.project_store import ProjectStore
 from knives_out.suppressions import load_suppressions
 
 runner = CliRunner()
@@ -57,6 +69,36 @@ def _results_with_findings(*results: AttackResult) -> AttackResults:
         base_url="https://example.com",
         results=list(results),
     )
+
+
+def _write_snapshot(path: Path, data_dir: Path) -> None:
+    project_store = ProjectStore(data_dir)
+    job_store = JobStore(data_dir)
+    project = project_store.create_project(
+        ProjectRecord(
+            id="project-1",
+            name="Snapshot demo",
+            source_mode=ProjectSourceMode.openapi,
+            active_step=ProjectStep.review,
+            source=SourcePayload(name="openapi.yaml", content="openapi: 3.0.3\n"),
+        )
+    )
+    job = job_store.create_job(
+        JobRecord(
+            id="job-1",
+            status=ApiJobStatus.completed,
+            created_at=datetime(2026, 4, 13, 11, 59, tzinfo=UTC),
+            started_at=datetime(2026, 4, 13, 11, 59, tzinfo=UTC),
+            completed_at=datetime(2026, 4, 13, 12, 0, tzinfo=UTC),
+            base_url="https://example.com",
+            attack_count=1,
+            project_id=project.id,
+        )
+    )
+    job_store.write_result(job.id, _results_with_findings())
+    artifact_path = job_store.artifact_dir(job.id) / "atk_api.json"
+    artifact_path.write_text('{"attack":{"id":"atk_api"}}', encoding="utf-8")
+    path.write_bytes(render_project_snapshot(project_store, job_store, project.id))
 
 
 def _normalized_output(output: str) -> str:
@@ -2718,3 +2760,51 @@ def test_inspect_bundle_command_rejects_invalid_archives(tmp_path: Path) -> None
 
     assert result.exit_code == 2
     assert "Review bundle must be a zip archive." in result.stderr
+
+
+def test_inspect_snapshot_command_prints_project_snapshot_summary(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "project-snapshot.zip"
+    _write_snapshot(snapshot_path, tmp_path / "api-data")
+
+    result = runner.invoke(app, ["inspect-snapshot", str(snapshot_path)])
+
+    assert result.exit_code == 0
+    assert "Project snapshot" in result.stdout
+    assert "Snapshot demo" in result.stdout
+    assert "Source mode" in result.stdout
+    assert "openapi" in result.stdout
+    assert "Original project" in result.stdout
+    assert "project-1" in result.stdout
+    assert "Active step" in result.stdout
+    assert "review" in result.stdout
+    assert "Job statuses" in result.stdout
+    assert "completed: 1" in result.stdout
+
+
+def test_inspect_snapshot_command_prints_json_summary(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "project-snapshot.zip"
+    _write_snapshot(snapshot_path, tmp_path / "api-data")
+
+    result = runner.invoke(app, ["inspect-snapshot", str(snapshot_path), "--format", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["manifest"]["name"] == "Snapshot demo"
+    assert payload["manifest"]["snapshot_kind"] == "project_snapshot"
+    assert payload["manifest"]["project_id"] == "project-1"
+    assert payload["manifest"]["job_count"] == 1
+    assert payload["manifest"]["result_count"] == 1
+    assert payload["manifest"]["artifact_count"] == 1
+    assert payload["active_step"] == "review"
+    assert payload["source_name"] == "openapi.yaml"
+    assert payload["job_status_counts"] == {"completed": 1}
+
+
+def test_inspect_snapshot_command_rejects_invalid_archives(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "project-snapshot.zip"
+    snapshot_path.write_bytes(b"not a zip")
+
+    result = runner.invoke(app, ["inspect-snapshot", str(snapshot_path)])
+
+    assert result.exit_code == 2
+    assert "Project snapshot must be a zip archive." in result.stderr

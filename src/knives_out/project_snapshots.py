@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
@@ -49,6 +49,13 @@ class ProjectSnapshot:
     manifest: ProjectSnapshotManifest
     project: ProjectRecord
     jobs: list[ProjectSnapshotJob]
+
+
+class ProjectSnapshotInspection(BaseModel):
+    manifest: ProjectSnapshotManifest
+    active_step: str
+    source_name: str | None = None
+    job_status_counts: dict[str, int] = Field(default_factory=dict)
 
 
 def _safe_member_name(name: str) -> str:
@@ -239,6 +246,18 @@ def load_project_snapshot(raw: bytes) -> ProjectSnapshot:
         )
 
     return ProjectSnapshot(manifest=manifest, project=project, jobs=jobs)
+
+
+def inspect_project_snapshot(raw: bytes) -> ProjectSnapshotInspection:
+    snapshot = load_project_snapshot(raw)
+    return ProjectSnapshotInspection(
+        manifest=snapshot.manifest,
+        active_step=snapshot.project.active_step.value,
+        source_name=snapshot.project.source.name if snapshot.project.source is not None else None,
+        job_status_counts=dict(
+            sorted(Counter(job.record.status.value for job in snapshot.jobs).items())
+        ),
+    )
 
 
 def _write_snapshot_artifacts(
